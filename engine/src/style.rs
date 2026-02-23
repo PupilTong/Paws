@@ -27,7 +27,14 @@ use stylo::values::specified::position::PositionTryFallbacksTryTactic;
 use stylo_traits::{CSSPixel, CssStringWriter, CssWriter, DevicePixel, ParsingMode, ToCss};
 use url::Url;
 
-use crate::dom::{Element, ElementHandle};
+use crate::dom::PawsElement;
+
+pub mod css_style_sheet;
+pub mod dom;
+pub mod sheet_cache;
+
+pub use css_style_sheet::CSSStyleSheet;
+pub use sheet_cache::StylesheetCache;
 
 #[derive(Debug, Default)]
 struct SimpleFontMetricsProvider;
@@ -82,7 +89,12 @@ fn build_device() -> Device {
     )
 }
 
-pub fn update_inline_style(lock: &SharedRwLock, element: &mut Element, name: &str, value: &str) {
+pub fn update_inline_style(
+    lock: &SharedRwLock,
+    element: &mut PawsElement,
+    name: &str,
+    value: &str,
+) {
     let url = Url::parse("about:blank").expect("valid url");
     let url_data = UrlExtraData::from(url);
 
@@ -90,15 +102,8 @@ pub fn update_inline_style(lock: &SharedRwLock, element: &mut Element, name: &st
     // Read pass
     let existing_css = if let Some(ref block) = element.style_attribute {
         let guard = lock.read();
-        let borrowed_block = block.read_with(&guard); // Try without explicit deref first? No, error said method not found.
-                                                      // Maybe block is &Arc. Arc derefs to T?
-                                                      // servo_arc::Arc derefs to T.
-                                                      // Check if I need to import trait?
-                                                      // use stylo::shared_lock::Locked;
-                                                      // read_with is on Locked.
-                                                      // I'll try explicit deref.
+        let borrowed_block = block.read_with(&guard);
         let mut s = String::new();
-        // PropertyDeclarationBlock::to_css takes &mut String (CssStringWriter)
         let _ = borrowed_block.to_css(&mut s);
         s
     } else {
@@ -107,17 +112,13 @@ pub fn update_inline_style(lock: &SharedRwLock, element: &mut Element, name: &st
 
     // Write pass
     let _guard = lock.write();
-    // Ensure separator to handle cases where to_css omits trailing semicolon or for safety
     let css = if existing_css.is_empty() {
         format!("{}: {}", name, value)
     } else {
         format!("{}; {}: {}", existing_css, name, value)
     };
 
-    // Use write_with to access mutable reference (requires write guard)
     let new_block = {
-        // Parse property into the new block
-        // Using parse_style_attribute which takes context, declarations, and input string.
         stylo::properties::parse_style_attribute(
             &css,
             &url_data,
@@ -126,94 +127,88 @@ pub fn update_inline_style(lock: &SharedRwLock, element: &mut Element, name: &st
             stylo::stylesheets::CssRuleType::Style,
         )
     };
-    // Update the Arc
     element.style_attribute = Some(Arc::new(lock.wrap(new_block)));
 }
 
-fn compute_style_for_handle(handle: ElementHandle) -> Arc<ComputedValues> {
-    // Access RuntimeState via TLS context (set by caller) to get the lock.
-    crate::dom::CONTEXT.with(|c| {
-        let state_opt = c.borrow();
-        let state = state_opt
-            .as_ref()
-            .expect("TLS not set for style computation");
-        let lock = &state.style_context.lock;
-        let style_context = &state.style_context;
-        let guard = lock.read();
-        let guards = StylesheetGuards::same(&guard);
+fn compute_style_for_node(
+    state: &crate::runtime::RuntimeState,
+    node: &PawsElement,
+) -> Arc<ComputedValues> {
+    let lock = &state.style_context.lock;
+    let style_context = &state.style_context;
+    let guard = lock.read();
+    let guards = StylesheetGuards::same(&guard);
 
-        // Cache conditions need to be tracked
-        // We use a temporary bloom filter and cache for this element (not efficient but simple)
-        let mut bloom_filter = selectors::bloom::BloomFilter::new();
-        let mut selector_caches = selectors::matching::SelectorCaches::default();
+    // Cache conditions need to be tracked
+    let mut bloom_filter = selectors::bloom::BloomFilter::new();
+    let mut selector_caches = selectors::matching::SelectorCaches::default();
 
-        let mut matching_context = MatchingContext::new(
-            MatchingMode::Normal,
-            Some(&mut bloom_filter),
-            &mut selector_caches,
-            QuirksMode::NoQuirks,
-            NeedsSelectorFlags::No,
-            MatchingForInvalidation::No,
+    let mut matching_context = MatchingContext::new(
+        MatchingMode::Normal,
+        Some(&mut bloom_filter),
+        &mut selector_caches,
+        QuirksMode::NoQuirks,
+        NeedsSelectorFlags::No,
+        MatchingForInvalidation::No,
+    );
+
+    let animations = Default::default();
+    let mut match_results = smallvec::SmallVec::new();
+
+    // push_applicable_declarations args using &PawsElement
+    style_context
+        .stylist
+        .push_applicable_declarations::<&PawsElement>(
+            node,
+            None,
+            <&PawsElement as TElement>::style_attribute(&node),
+            None,
+            animations,
+            RuleInclusion::All,
+            &mut match_results,
+            &mut matching_context,
         );
 
-        let animations = Default::default();
-        let mut match_results = smallvec::SmallVec::new();
+    println!("Match results before manual push: {}", match_results.len());
+    // Manual push of inline style (redundancy check for now)
+    let attribute = <&PawsElement as TElement>::style_attribute(&node);
+    if let Some(borrow) = attribute {
+        let block = borrow.clone_arc();
+        match_results.push(ApplicableDeclarationBlock::from_declarations(
+            block,
+            CascadeLevel::same_tree_author_normal(),
+            LayerOrder::style_attribute(),
+        ));
+    }
 
-        // push_applicable_declarations args
-        style_context
-            .stylist
-            .push_applicable_declarations::<ElementHandle>(
-                handle,
-                None,
-                <ElementHandle as TElement>::style_attribute(&handle),
-                None,
-                animations,
-                RuleInclusion::All,
-                &mut match_results,
-                &mut matching_context,
-            );
+    let rule_node = style_context.rule_tree.insert_ordered_rules_with_important(
+        match_results
+            .into_iter()
+            .map(|block| (block.source.clone(), block.cascade_priority)),
+        &guards,
+    );
 
-        println!("Match results before manual push: {}", match_results.len());
-        // Manual push of inline style (redundancy check for now)
-        let attribute = handle.style_attribute();
-        if let Some(borrow) = attribute {
-            let block = borrow.clone_arc();
-            match_results.push(ApplicableDeclarationBlock::from_declarations(
-                block,
-                CascadeLevel::same_tree_author_normal(),
-                LayerOrder::style_attribute(),
-            ));
-        }
+    let mut conditions = RuleCacheConditions::default();
 
-        let rule_node = style_context.rule_tree.insert_ordered_rules_with_important(
-            match_results
-                .into_iter()
-                .map(|block| (block.source.clone(), block.cascade_priority)),
-            &guards,
-        );
-
-        let mut conditions = RuleCacheConditions::default();
-
-        let computed_values = apply_declarations::<ElementHandle, _>(
-            &style_context.stylist,
-            None, // Pseudo
-            &rule_node,
-            &guards,
-            std::iter::empty(), // iter_declarations (using rule_node)
-            None,               // presentational_hints
-            None,               // parent_computed_values
-            FirstLineReparenting::No,
-            &PositionTryFallbacksTryTactic::default(),
-            CascadeMode::Unvisited {
-                visited_rules: None,
-            },
-            ComputedValueFlags::empty(),
-            None, // initial_computed_values
-            &mut conditions,
-            None, // important_declarations
-        );
-        computed_values
-    })
+    let computed_values = apply_declarations::<&PawsElement, _>(
+        &style_context.stylist,
+        None, // Pseudo
+        &rule_node,
+        &guards,
+        std::iter::empty(), // iter_declarations
+        None,               // presentational_hints
+        None,               // parent_computed_values
+        FirstLineReparenting::No,
+        &PositionTryFallbacksTryTactic::default(),
+        CascadeMode::Unvisited {
+            visited_rules: None,
+        },
+        ComputedValueFlags::empty(),
+        None, // initial_computed_values
+        &mut conditions,
+        None, // important_declarations
+    );
+    computed_values
 }
 
 fn serialize_computed_value(style: &ComputedValues, longhand: LonghandId) -> Option<String> {
@@ -234,14 +229,19 @@ fn serialize_computed_value(style: &ComputedValues, longhand: LonghandId) -> Opt
     Some(output)
 }
 
-pub fn computed_style(element: ElementHandle, property: &str) -> Option<String> {
+pub fn computed_style(
+    state: &crate::runtime::RuntimeState,
+    node_id: usize,
+    property: &str,
+) -> Option<String> {
     let url = Url::parse("about:blank").ok()?;
     let url_data = UrlExtraData::from(url);
     let parser_context = build_parser_context(&url_data);
     let property_id = PropertyId::parse(property, &parser_context).ok()?;
     let longhand = property_id.longhand_id()?;
 
-    let computed = compute_style_for_handle(element);
+    let node = state.doc.get_node(node_id)?;
+    let computed = compute_style_for_node(state, node);
     serialize_computed_value(&computed, longhand)
 }
 
@@ -267,32 +267,8 @@ impl StyleContext {
         }
     }
 
-    pub fn add_stylesheet(&mut self, css: &str) {
-        let url = Url::parse("about:blank").expect("valid url");
-        let url_data = UrlExtraData::from(url);
-        let _context = build_parser_context(&url_data);
-        // Stylesheet::from_str args:
-        // css, url_data, origin, media, shared_lock, stylesheet_loader, error_reporter, quirks_mode, allow_import_rules
-        // 9 arguments expected.
-
-        let stylesheet = stylo::stylesheets::Stylesheet::from_str(
-            css,
-            url_data,
-            stylo::stylesheets::Origin::Author,
-            Arc::new(self.lock.wrap(stylo::media_queries::MediaList::empty())),
-            self.lock.clone(),
-            None, // stylesheet_loader
-            None, // error_reporter
-            QuirksMode::NoQuirks,
-            stylo::stylesheets::AllowImportRules::Yes,
-        );
-
-        // DocumentStyleSheet might be a tuple struct or simple constructor
-        // If DocumentStyleSheet::new didn't work, try struct literal if public?
-        // Or From implementation.
-        // Usually: stylo::stylesheets::DocumentStyleSheet(Arc::new(stylesheet))
-        let document_stylesheet = stylo::stylesheets::DocumentStyleSheet(Arc::new(stylesheet));
-
+    pub fn add_stylesheet(&mut self, sheet: &CSSStyleSheet) {
+        let document_stylesheet = stylo::stylesheets::DocumentStyleSheet(sheet.sheet.clone());
         let guard = self.lock.read();
         self.stylist.append_stylesheet(document_stylesheet, &guard);
     }

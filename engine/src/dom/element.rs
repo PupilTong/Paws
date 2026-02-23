@@ -1,66 +1,143 @@
-use markup5ever::{LocalName, QualName};
+use atomic_refcell::AtomicRefCell;
+use bitflags::bitflags;
+use markup5ever::QualName;
+use selectors::matching::ElementSelectorFlags;
+use slab::Slab;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use style::data::ElementData as StyloElementData;
 use style::properties::PropertyDeclarationBlock;
 use style::servo_arc::Arc;
 use style::shared_lock::{Locked, SharedRwLock};
 use stylo_atoms::Atom;
+use stylo_dom::ElementState;
 
-#[derive(Debug, Clone)]
-pub struct ElementData {
-    /// The elements tag name, namespace and prefix
-    pub name: QualName,
+bitflags! {
+    #[derive(Clone, Copy, PartialEq, Eq, Default)]
+    pub struct NodeFlags: u32 {
+        const IS_IN_DOCUMENT = 0b00000100;
+    }
+}
 
-    /// The elements id attribute parsed as an atom (if it has one)
-    pub id: Option<Atom>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeType {
+    Document,
+    Element,
+    Text,
+    Comment,
+    ShadowRoot,
+}
 
-    /// The element's attributes
+pub struct PawsElement {
+    /// Unsafe pointer to the slab containing this node.
+    pub tree: *mut Slab<PawsElement>,
+
+    /// The ID of this node in the slab.
+    pub id: usize,
+
+    /// The ID of the parent node.
+    pub parent: Option<usize>,
+
+    /// The IDs of the child nodes.
+    pub children: Vec<usize>,
+
+    /// Node flags.
+    pub flags: NodeFlags,
+    pub node_type: NodeType,
+
+    // Element data
+    pub name: Option<QualName>,
+    pub id_attr: Option<Atom>,
     pub attrs: HashMap<Atom, String>,
-
-    /// The element's parsed style attribute (used by stylo)
-    pub style_attribute: Option<Arc<Locked<PropertyDeclarationBlock>>>,
-
-    /// Classes for fast lookup
     pub classes: HashSet<Atom>,
+    pub style_attribute: Option<Arc<Locked<PropertyDeclarationBlock>>>,
+    pub shadow_root_id: Option<usize>,
 
-    /// Heterogeneous data that depends on the element's type.
-    pub special_data: SpecialElementData,
+    // Text data
+    pub text_content: Option<String>,
+
+    /// Stylo integration data.
+    pub stylo_element_data: AtomicRefCell<Option<StyloElementData>>,
+
+    /// Selector flags for invalidation
+    pub selector_flags: AtomicRefCell<ElementSelectorFlags>,
+
+    pub guard: SharedRwLock,
+
+    /// Element state (hover, focus, etc.).
+    pub element_state: ElementState,
+
+    /// Dirty descendants flag for Stylo.
+    pub dirty_descendants: AtomicBool,
 }
 
-#[derive(Clone, Default, Debug)]
-pub enum SpecialElementData {
-    /// Parley text editor (text inputs)
-    TextInput,
-    /// No data
-    #[default]
-    None,
-}
-
-impl ElementData {
-    pub fn new(name: QualName, attrs: HashMap<Atom, String>) -> Self {
-        let id = attrs
-            .get(&Atom::from("id"))
-            .map(|val| Atom::from(val.as_str()));
-
-        let classes = if let Some(class_attr) = attrs.get(&Atom::from("class")) {
-            class_attr.split_whitespace().map(Atom::from).collect()
-        } else {
-            HashSet::new()
-        };
-
-        // Determine special data based on tag
-        let special_data = if name.local.as_ref() == "input" {
-            SpecialElementData::TextInput
-        } else {
-            SpecialElementData::None
-        };
-
-        ElementData {
-            name,
+impl PawsElement {
+    pub fn new(
+        tree: *mut Slab<PawsElement>,
+        id: usize,
+        guard: SharedRwLock,
+        node_type: NodeType,
+    ) -> Self {
+        Self {
+            tree,
             id,
-            attrs,
+            parent: None,
+            children: Vec::new(),
+            flags: NodeFlags::default(),
+            node_type,
+
+            name: None,
+            id_attr: None,
+            attrs: HashMap::new(),
+            classes: HashSet::new(),
             style_attribute: None,
-            classes,
-            special_data,
+            shadow_root_id: None,
+            text_content: None,
+
+            stylo_element_data: Default::default(),
+            selector_flags: AtomicRefCell::new(ElementSelectorFlags::empty()),
+            guard,
+            element_state: ElementState::empty(),
+            dirty_descendants: AtomicBool::new(true),
+        }
+    }
+
+    pub fn tree(&self) -> &Slab<PawsElement> {
+        unsafe { &*self.tree }
+    }
+
+    pub fn with(&self, id: usize) -> &PawsElement {
+        self.tree().get(id).expect("Node not found in slab")
+    }
+
+    pub fn is_element(&self) -> bool {
+        self.node_type == NodeType::Element
+    }
+
+    pub fn is_text_node(&self) -> bool {
+        self.node_type == NodeType::Text
+    }
+
+    pub fn set_dirty_descendants(&self) {
+        self.dirty_descendants.store(true, Ordering::Relaxed);
+    }
+
+    pub fn unset_dirty_descendants(&self) {
+        self.dirty_descendants.store(false, Ordering::Relaxed);
+    }
+
+    pub fn has_dirty_descendants(&self) -> bool {
+        self.dirty_descendants.load(Ordering::Relaxed)
+    }
+
+    pub fn mark_ancestors_dirty(&self) {
+        let mut current_id = self.parent;
+        while let Some(parent_id) = current_id {
+            let parent = self.with(parent_id);
+            if parent.dirty_descendants.swap(true, Ordering::Relaxed) {
+                break;
+            }
+            current_id = parent.parent;
         }
     }
 
@@ -69,7 +146,7 @@ impl ElementData {
         self.attrs.insert(atom_name.clone(), value.to_string());
 
         if name == "id" {
-            self.id = Some(Atom::from(value));
+            self.id_attr = Some(Atom::from(value));
         }
 
         if name == "class" {
@@ -82,5 +159,30 @@ impl ElementData {
 
     pub fn has_class(&self, name: &Atom) -> bool {
         self.classes.contains(name)
+    }
+}
+
+// Implement equality and hash based on ID (reference identity)
+impl PartialEq for PawsElement {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for PawsElement {}
+
+impl std::hash::Hash for PawsElement {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl std::fmt::Debug for PawsElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PawsElement")
+            .field("id", &self.id)
+            .field("type", &self.node_type)
+            .field("parent", &self.parent)
+            .field("children", &self.children)
+            .finish()
     }
 }

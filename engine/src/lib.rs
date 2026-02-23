@@ -37,10 +37,8 @@ pub fn hello_engine() -> String {
 
     // 3) Layout: build Taffy tree
     let mut taffy = TaffyTree::<()>::new();
-    let root_node = crate::dom::with_context(&state, || {
-        layout::build_layout_tree(&state, id as usize, &mut taffy)
-    })
-    .expect("build layout tree");
+    let root_node =
+        layout::build_layout_tree(&state, id as usize, &mut taffy).expect("build layout tree");
 
     taffy
         .compute_layout(root_node, Size::MAX_CONTENT)
@@ -48,11 +46,8 @@ pub fn hello_engine() -> String {
     let layout = taffy.layout(root_node).expect("get layout");
 
     // Compute style for verification string
-    let (display, height) = crate::dom::with_context(&state, || {
-        let d = style::computed_style(crate::dom::NodeHandle(id as usize), "display");
-        let h = style::computed_style(crate::dom::NodeHandle(id as usize), "height");
-        (d, h)
-    });
+    let display = style::computed_style(&state, id as usize, "display");
+    let height = style::computed_style(&state, id as usize, "height");
 
     format!(
         "wasm module ok\nlayout={{w:{}, h:{}}}\nstyle={{display:{}, height:{}}}",
@@ -110,12 +105,8 @@ mod tests {
         let id = run.call(&mut store, ()).expect("run wasm"); // Capture the returned ID
 
         let state = store.data();
-        // let id = state.last_element.expect("element created"); // Removed usage of last_element
-        // let element = state.elements.get(&id).expect("element exists");
-        let height = crate::dom::with_context(state, || {
-            crate::style::computed_style(crate::dom::NodeHandle(id as usize), "height")
-        })
-        .expect("computed height");
+        let height =
+            crate::style::computed_style(state, id as usize, "height").expect("computed height");
         assert_eq!(height, "100px");
     }
 
@@ -157,20 +148,21 @@ mod tests {
         let parent = 0;
         let child = 1;
 
-        if let Some(crate::dom::NodeData::Element(_)) = state.doc.get_node(parent).map(|n| &n.data)
-        {
-            let node = state.doc.get_node(parent).unwrap();
-            assert_eq!(node.children, vec![child]);
-        } else {
+        if let Some(parent_node) = state.doc.get_node(parent) {
+            if parent_node.is_element() {
+                assert_eq!(parent_node.children, vec![child]);
+            } else {
+                panic!("Parent not an element");
+            }
             panic!("Parent not found or not an element");
         }
 
-        if let Some(crate::dom::NodeData::Element(child_element)) =
-            state.doc.get_node(child).map(|n| &n.data)
-        {
-            let child_node = state.doc.get_node(child).unwrap();
-            assert_eq!(child_node.parent, Some(parent));
-        } else {
+        if let Some(child_node) = state.doc.get_node(child) {
+            if child_node.is_element() {
+                assert_eq!(child_node.parent, Some(parent));
+            } else {
+                panic!("Child not an element");
+            }
             panic!("Child not found or not an element");
         }
     }
@@ -248,12 +240,12 @@ mod tests {
 
         let state = store.data();
         let parent = 0;
-        if let Some(crate::dom::NodeData::Element(parent_element)) =
-            state.doc.get_node(parent).map(|n| &n.data)
-        {
-            let node = state.doc.get_node(parent).unwrap();
-            assert_eq!(node.children, vec![1, 2]);
-        } else {
+        if let Some(parent_node) = state.doc.get_node(parent) {
+            if parent_node.is_element() {
+                assert_eq!(parent_node.children, vec![1, 2]);
+            } else {
+                panic!("Parent not an element");
+            }
             panic!("Parent not found or not an element");
         }
     }
@@ -295,7 +287,7 @@ mod tests {
         let state = store.data();
         let parent_element_opt = state.doc.get_node(0);
         if let Some(node) = parent_element_opt {
-            if let crate::dom::NodeData::Element(_) = node.data {
+            if node.is_element() {
                 assert!(node.children.is_empty());
             } else {
                 panic!("Parent not element");
@@ -404,10 +396,8 @@ mod tests {
         let id = run.call(&mut store, ()).expect("run wasm");
 
         let state = store.data();
-        let color = crate::dom::with_context(state, || {
-            crate::style::computed_style(crate::dom::NodeHandle(id as usize), "color")
-        })
-        .expect("computed color");
+        let color =
+            crate::style::computed_style(state, id as usize, "color").expect("computed color");
 
         assert_eq!(color, "rgb(255, 0, 0)");
     }

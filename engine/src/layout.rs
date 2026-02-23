@@ -1,4 +1,4 @@
-use crate::dom::{Node, NodeHandle};
+use crate::dom::NodeType;
 use crate::runtime::RuntimeState;
 use crate::style::computed_style;
 use taffy::prelude::*;
@@ -23,22 +23,11 @@ fn build_subtree(
     taffy: &mut TaffyTree<()>,
 ) -> Option<NodeId> {
     let node = state.doc.get_node(node_id)?;
-    let handle = NodeHandle(node_id);
+    // node is &Node.
 
-    // Compute styles
-    // We only care about layout relevant styles here: display, width, height.
-    // In a real engine, we'd have a full ComputedValues object.
-    // Our computed_style returns String, which is inefficient.
-    // For now, we'll parse the strings or just default.
-    // Optimization: Access computed values directly if possible, or parse basic values.
-
-    // TODO: Improve style access. For now, using the string interface is slow but correct per current API.
-    // Actually, we can't easily parse "100px" back to Taffy Dimension without a parser.
-    // But for this task "mock text measurement" is required.
-
-    let display = computed_style(handle, "display").unwrap_or_else(|| "inline".to_string());
-    let width_str = computed_style(handle, "width").unwrap_or_else(|| "auto".to_string());
-    let height_str = computed_style(handle, "height").unwrap_or_else(|| "auto".to_string());
+    let display = computed_style(state, node_id, "display").unwrap_or_else(|| "inline".to_string());
+    let width_str = computed_style(state, node_id, "width").unwrap_or_else(|| "auto".to_string());
+    let height_str = computed_style(state, node_id, "height").unwrap_or_else(|| "auto".to_string());
 
     fn parse_dim(s: &str) -> Dimension {
         if s == "auto" {
@@ -69,8 +58,8 @@ fn build_subtree(
         ..Default::default()
     };
 
-    match &node.data {
-        crate::dom::NodeData::Element(_e) => {
+    match node.node_type {
+        NodeType::Element => {
             let mut children = Vec::new();
             for &child_id in &node.children {
                 if let Some(child_node) = build_subtree(state, child_id, taffy) {
@@ -83,14 +72,18 @@ fn build_subtree(
 
             taffy.new_with_children(style, &children).ok()
         }
-        crate::dom::NodeData::Text(t) => {
+        NodeType::Text => {
             // Measure text
             // Mock: font-size * char_count.
             // Assume default font-size 16px.
             let font_size = 16.0;
             // In real world, we'd check computed style "font-size".
 
-            let char_count = t.content.chars().count();
+            let char_count = node
+                .text_content
+                .as_ref()
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
             let width = char_count as f32 * font_size * 0.6; // approx width per char
             let height = font_size; // line height approx
 

@@ -1,94 +1,89 @@
+use markup5ever::QualName;
 use slab::Slab;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use style::shared_lock::SharedRwLock;
 
-use crate::dom::element::ElementData; // Assuming we need this
-use crate::dom::node::{Node, NodeData, NodeFlags};
-use crate::dom::text::TextNodeData;
-use markup5ever::QualName;
+use crate::dom::element::{NodeFlags, NodeType, PawsElement};
 
 pub struct Document {
-    /// ID of the document
-    pub id: usize,
-
     /// A slab-backed tree of nodes
-    pub nodes: Slab<Node>,
+    pub nodes: Box<Slab<PawsElement>>,
 
     /// Stylo shared lock
     pub guard: SharedRwLock,
 
     /// Root node ID
     pub root: usize,
+
+    /// Document stylesheets
+    pub stylesheets: Vec<crate::style::CSSStyleSheet>,
 }
 
 impl Document {
-    pub fn new() -> Self {
-        Self::new_with_lock(SharedRwLock::new())
-    }
-
-    pub fn new_with_lock(guard: SharedRwLock) -> Self {
-        static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
-        let id = ID_GENERATOR.fetch_add(1, Ordering::SeqCst);
-
-        let mut nodes = Slab::new();
-
-        // entry 0 is reserved or root? blitz uses 0 as root usually if inserted first.
-        let slab_ptr = &mut nodes as *mut Slab<Node>;
+    pub fn new(guard: SharedRwLock) -> Self {
+        let mut nodes = Box::new(Slab::new());
+        let slab_ptr = nodes.as_mut() as *mut Slab<PawsElement>;
 
         // Create root node (Document)
         let root_entry = nodes.vacant_entry();
         let root_id = root_entry.key();
 
-        root_entry.insert(Node::new(
+        root_entry.insert(PawsElement::new(
             slab_ptr,
             root_id,
             guard.clone(),
-            NodeData::Document,
+            NodeType::Document,
         ));
 
         // Set IS_IN_DOCUMENT flag for root
         nodes[root_id].flags.insert(NodeFlags::IS_IN_DOCUMENT);
 
         Document {
-            id,
             nodes,
             guard,
-            root: root_id, // Should be 0
+            root: root_id,
+            stylesheets: Vec::new(),
         }
     }
 
-    pub fn tree(&self) -> &Slab<Node> {
+    pub fn tree(&self) -> &Slab<PawsElement> {
         &self.nodes
     }
 
-    pub fn get_node(&self, id: usize) -> Option<&Node> {
+    pub fn get_node(&self, id: usize) -> Option<&PawsElement> {
         self.nodes.get(id)
     }
 
-    pub fn get_node_mut(&mut self, id: usize) -> Option<&mut Node> {
+    pub fn get_node_mut(&mut self, id: usize) -> Option<&mut PawsElement> {
         self.nodes.get_mut(id)
     }
 
-    pub fn create_node(&mut self, data: NodeData) -> usize {
-        let slab_ptr = &mut self.nodes as *mut Slab<Node>;
+    pub fn create_node(&mut self, node_type: NodeType) -> usize {
+        let slab_ptr = self.nodes.as_mut() as *mut Slab<PawsElement>;
         let guard = self.guard.clone();
 
         let entry = self.nodes.vacant_entry();
         let id = entry.key();
-        entry.insert(Node::new(slab_ptr, id, guard, data));
+        entry.insert(PawsElement::new(slab_ptr, id, guard, node_type));
 
         id
     }
 
     pub fn create_element(&mut self, name: QualName, attrs: HashMap<style::Atom, String>) -> usize {
-        let data = NodeData::Element(ElementData::new(name, attrs));
-        self.create_node(data)
+        let id = self.create_node(NodeType::Element);
+        let el = self.nodes.get_mut(id).unwrap();
+        el.name = Some(name);
+        for (k, v) in attrs {
+            el.set_attribute(k.as_ref(), &v);
+        }
+        id
     }
 
     pub fn create_text_node(&mut self, content: String) -> usize {
-        let data = NodeData::Text(TextNodeData::new(content));
-        self.create_node(data)
+        let id = self.create_node(NodeType::Text);
+        let el = self.nodes.get_mut(id).unwrap();
+        el.text_content = Some(content);
+        id
     }
 
     pub fn append_child(&mut self, parent_id: usize, child_id: usize) -> Result<(), &'static str> {
@@ -115,26 +110,28 @@ impl Document {
 
         // Check if child already has a parent
         let old_parent = self.nodes[child_id].parent;
-        if let Some(old_parent_id) = old_parent {
-            if old_parent_id == parent_id {
-                // Already child of this parent. Move to end?
-                // For now, just return Ok or Error. Standard DOM appends to end.
-                // We will remove from old position first.
-                self.detach_node(child_id);
-            } else {
-                return Err("Child already has a parent");
-            }
+        if old_parent.is_some() {
+            // For simplify, auto-detach
+            self.detach_node(child_id);
         }
 
         // 2. Mutation
         // Add to parent's children
+        let mut parent_in_doc = false;
         if let Some(parent) = self.nodes.get_mut(parent_id) {
             parent.children.push(child_id);
+            parent.set_dirty_descendants();
+            parent_in_doc = parent.flags.contains(NodeFlags::IS_IN_DOCUMENT);
         }
 
         // Set child's parent
         if let Some(child) = self.nodes.get_mut(child_id) {
             child.parent = Some(parent_id);
+            // Propagate flags
+            if parent_in_doc {
+                child.flags.insert(NodeFlags::IS_IN_DOCUMENT);
+                // todo recursive flags
+            }
         }
 
         Ok(())
@@ -146,10 +143,12 @@ impl Document {
             if let Some(parent) = self.nodes.get_mut(parent_id) {
                 if let Some(pos) = parent.children.iter().position(|&id| id == node_id) {
                     parent.children.remove(pos);
+                    parent.set_dirty_descendants();
                 }
             }
             if let Some(child) = self.nodes.get_mut(node_id) {
                 child.parent = None;
+                child.flags.remove(NodeFlags::IS_IN_DOCUMENT);
             }
         }
     }
@@ -159,20 +158,7 @@ impl Document {
             return Err("Invalid child id");
         }
         self.detach_node(id);
-        // We do NOT remove from slab here, as per 'remove' semantics (detach).
-        // Destruction is separate or handled by dropping.
+        self.nodes.remove(id);
         Ok(())
-    }
-
-    pub fn replace_child(
-        &mut self,
-        parent_id: usize,
-        new_child: usize,
-        old_child: usize,
-    ) -> Result<(), &'static str> {
-        // TODO: Implement replace logic
-        self.detach_node(old_child);
-        self.append_child(parent_id, new_child) // Simplified: put at end? No, replace means put at same position.
-                                                // Fixme: Implement insert_at or similar.
     }
 }

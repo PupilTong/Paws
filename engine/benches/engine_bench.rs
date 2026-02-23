@@ -25,12 +25,7 @@ fn bench_computed_style(c: &mut Criterion) {
     });
 
     c.bench_function("computed_style_height", |b| {
-        b.iter(|| {
-            computed_style(
-                black_box(engine::dom::NodeHandle(id as usize)),
-                black_box("height"),
-            )
-        })
+        b.iter(|| computed_style(&state, black_box(id as usize), black_box("height")))
     });
 }
 

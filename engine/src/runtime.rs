@@ -1,11 +1,10 @@
-use fnv::FnvHashMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::Result;
 use markup5ever::{LocalName, QualName};
 use style::shared_lock::SharedRwLock;
 
-use crate::dom::{Document, Node, NodeData}; // Node and NodeData might be needed
+use crate::dom::Document;
 use crate::style::StyleContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,13 +43,14 @@ pub struct RuntimeState {
     pub doc: Document,
     pub last_error: Option<HostError>,
     pub style_context: StyleContext,
+    pub stylesheet_cache: crate::style::StylesheetCache,
 }
 
 impl Default for RuntimeState {
     fn default() -> Self {
-        let mut context = StyleContext::default();
+        let context = StyleContext::default();
         let lock = context.lock.clone();
-        let doc = Document::new_with_lock(lock);
+        let doc = Document::new(lock.clone());
         // We need to ensure doc shares the lock with StyleContext?
         // Document creates its own lock. StyleContext creates its own.
         // We should pass the lock from Context to Doc or vice versa.
@@ -58,10 +58,13 @@ impl Default for RuntimeState {
         // But StyleContext::new() might not take a lock.
         // Let's assume for now we use Doc's lock for everything.
 
+        let stylesheet_cache = crate::style::StylesheetCache::new(lock.clone());
+
         Self {
             doc,
             last_error: None,
             style_context: context,
+            stylesheet_cache,
         }
     }
 }
@@ -93,17 +96,13 @@ impl RuntimeState {
             .get_node_mut(id as usize)
             .ok_or(HostErrorCode::InvalidChild)?;
 
-        if let Some(element) = node.data.as_element_mut() {
-            // We need to implement update_inline_style logic that works with ElementData.
-            // Accessing guard from doc.
-            let guard = &self.doc.guard;
-            // ElementData update logic...
-            // For now, let's just log or stub if complex.
-            // Actually, `crate::style::update_inline_style` expects `&mut Element`.
-            // We need to update `crate::style` too, or inline the logic here.
-            // Assuming we have helpers or can impl it.
-            // Check `element.rs` for `set_style_property`? We didn't impl it yet.
-            // We should implement `set_style_property` in `ElementData`.
+        if node.is_element() {
+            // Access lock from style_context
+            let lock = &self.style_context.lock;
+
+            // Update the inline style
+            crate::style::update_inline_style(lock, node, &name, &value);
+
             Ok(())
         } else {
             Err(HostErrorCode::InvalidChild)
@@ -111,7 +110,19 @@ impl RuntimeState {
     }
 
     pub fn add_stylesheet(&mut self, css: String) {
-        self.style_context.add_stylesheet(&css);
+        // 1. Get or parse stylesheet from cache
+        let sheet_arc = self.stylesheet_cache.get_or_parse(&css);
+        let sheet = crate::style::CSSStyleSheet::new(sheet_arc);
+
+        // 2. Add to Document (so it knows what sheets it has)
+        self.doc.stylesheets.push(sheet);
+
+        // 3. Add to StyleContext (so it applies to styling)
+        // Note: We need to pass the *latest* sheet added.
+        // In the future, we might rebuild the whole cascade from doc.stylesheets.
+        // For now, we append to stylist.
+        let added_sheet = self.doc.stylesheets.last().unwrap();
+        self.style_context.add_stylesheet(added_sheet);
     }
 
     pub fn set_attribute(
@@ -124,8 +135,8 @@ impl RuntimeState {
             .doc
             .get_node_mut(id as usize)
             .ok_or(HostErrorCode::InvalidChild)?;
-        if let Some(element) = node.data.as_element_mut() {
-            element.set_attribute(&name, &value);
+        if node.is_element() {
+            node.set_attribute(&name, &value);
             Ok(())
         } else {
             Err(HostErrorCode::InvalidChild)
@@ -179,17 +190,21 @@ impl RuntimeState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dom::NodeData;
-
+    #[test]
     #[test]
     fn test_create_element() {
         let mut state = RuntimeState::default();
         let id = state.create_element("div".to_string());
         let node = state.doc.get_node(id as usize).unwrap();
-        match &node.data {
-            NodeData::Element(e) => assert_eq!(e.name.local.as_ref(), "div"),
-            _ => panic!("Element not created correctly"),
-        }
+        assert!(node.is_element());
+        assert_eq!(node.name.as_ref().unwrap().local.as_ref(), "div");
+
+        // Verify style application
+        // We need to set TLS context for computed_style
+        let color =
+            crate::style::computed_style(&state, id as usize, "color").expect("computed color");
+
+        assert_eq!(color, "rgb(0, 0, 255)");
     }
 
     #[test]
@@ -197,10 +212,8 @@ mod tests {
         let mut state = RuntimeState::default();
         let id = state.create_text_node("hello".to_string());
         let node = state.doc.get_node(id as usize).unwrap();
-        match &node.data {
-            NodeData::Text(t) => assert_eq!(t.content, "hello"),
-            _ => panic!("Text node not created correctly"),
-        }
+        assert!(node.is_text_node());
+        assert_eq!(node.text_content.as_deref().unwrap(), "hello");
     }
 
     #[test]
@@ -259,7 +272,7 @@ mod tests {
         let mut state = RuntimeState::default();
         let parent = state.create_element("div".to_string());
         let child = state.create_element("span".to_string());
-        let text = state.create_text_node("text".to_string());
+        let _text = state.create_text_node("text".to_string());
         let destroyed = state.create_element("p".to_string());
         state.destroy_element(destroyed).unwrap();
 
