@@ -22,12 +22,13 @@ This repository supports LLM-based assistants. The working language is English.
 
 ## Repository Structure
 
-- `engine/`: core logic and integration demos.
+- `engine/`: core logic (DOM, Style, Layout). A pure Rust library with no host dependencies.
+- `wasm-bridge/`: integration layer threading `wasmtime` and `engine` together.
 - `view/`: UI/view layer (currently placeholder).
 
 ## Project Design Overview
 
-- Cross-platform framework with a pure WASM VM for UI logic.
+- Cross-platform framework with a pure WASM VM for UI logic (`wasm-bridge`).
 - Stylo provides web-standard CSS behavior and style computation.
 - Taffy provides box layout.
 - LynxJS native elements provide actual rendering.
