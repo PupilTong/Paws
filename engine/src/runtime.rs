@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use markup5ever::{LocalName, QualName};
-use style::shared_lock::SharedRwLock;
 
 use crate::dom::Document;
 use crate::style::StyleContext;
@@ -197,10 +196,8 @@ impl RuntimeState {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
     #[test]
     fn test_create_element() {
         let mut state = RuntimeState::default();

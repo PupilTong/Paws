@@ -1,0 +1,21 @@
+[package]
+name = "wasm-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+engine = { path = "../engine" }
+anyhow = "1"
+wasmtime = "18"
+taffy = "0.4"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "engine_bench"
+harness = false

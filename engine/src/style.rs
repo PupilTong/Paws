@@ -3,26 +3,23 @@ use selectors::matching::{
 };
 use std::borrow::Cow;
 use style as stylo;
-use stylo::applicable_declarations::ApplicableDeclarationBlock;
 use stylo::computed_value_flags::ComputedValueFlags;
 use stylo::dom::TElement;
 use stylo::font_metrics::FontMetrics;
 use stylo::media_queries::{Device, MediaType};
 use stylo::parser::ParserContext;
-use stylo::properties::cascade::{apply_declarations, CascadeMode, FirstLineReparenting};
+use stylo::properties::cascade::FirstLineReparenting;
 use stylo::properties::style_structs::Font;
 use stylo::properties::{ComputedValues, LonghandId, PropertyId};
 use stylo::queries::values::PrefersColorScheme;
 use stylo::rule_cache::RuleCacheConditions;
-use stylo::rule_tree::{CascadeLevel, RuleTree};
+use stylo::rule_tree::RuleTree;
 use stylo::servo_arc::Arc;
 use stylo::shared_lock::{SharedRwLock, StylesheetGuards};
-use stylo::stylesheets::layer_rule::LayerOrder;
 use stylo::stylesheets::{CssRuleType, Namespaces, Origin, UrlExtraData};
 use stylo::stylist::{RuleInclusion, Stylist};
 use stylo::values::computed::font::GenericFontFamily;
-use stylo::values::computed::CSSPixelLength;
-use stylo::values::specified::font::{QueryFontMetricsFlags, FONT_MEDIUM_PX};
+use stylo::values::specified::font::FONT_MEDIUM_PX;
 use stylo::values::specified::position::PositionTryFallbacksTryTactic;
 use stylo_traits::{CSSPixel, CssStringWriter, CssWriter, DevicePixel, ParsingMode, ToCss};
 use url::Url;
@@ -143,12 +140,12 @@ fn compute_style_for_node(
     let default_parent = ComputedValues::initial_values_with_font_override(Font::initial_values());
 
     // Cache conditions need to be tracked
-    let mut bloom_filter = selectors::bloom::BloomFilter::new();
+    let bloom_filter = selectors::bloom::BloomFilter::new();
     let mut selector_caches = selectors::matching::SelectorCaches::default();
 
     let mut matching_context = MatchingContext::new(
         MatchingMode::Normal,
-        Some(&mut bloom_filter),
+        Some(&bloom_filter),
         &mut selector_caches,
         QuirksMode::NoQuirks,
         NeedsSelectorFlags::No,
@@ -183,25 +180,21 @@ fn compute_style_for_node(
 
     let mut conditions = RuleCacheConditions::default();
 
-    let computed_values = apply_declarations::<&PawsElement, _>(
+    stylo::properties::cascade::cascade::<&PawsElement>(
         &style_context.stylist,
         None, // Pseudo
         &rule_node,
         &guards,
-        std::iter::empty(),    // iter_declarations
-        None,                  // presentational_hints
-        Some(&default_parent), // parent_computed_values
+        Some(&default_parent), // parent_style
+        None,                  // layout_parent_style
         FirstLineReparenting::No,
         &PositionTryFallbacksTryTactic::default(),
-        CascadeMode::Unvisited {
-            visited_rules: None,
-        },
+        None, // visited_rules
         ComputedValueFlags::empty(),
-        None, // initial_computed_values
+        None, // rule_cache
         &mut conditions,
-        None, // important_declarations
-    );
-    computed_values
+        None, // element
+    )
 }
 
 fn serialize_computed_value(style: &ComputedValues, longhand: LonghandId) -> Option<String> {

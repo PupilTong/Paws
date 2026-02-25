@@ -2,7 +2,8 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use taffy::prelude::*; // Use prelude for TaffyMaxContent etc.
 
-use engine::{build_linker, computed_style, hello_engine, layout, RuntimeState};
+use engine::{computed_style, layout, RuntimeState};
+use wasm_bridge::{build_linker, hello_engine};
 use wasmtime::{Engine as WasmEngine, Module, Store};
 
 fn bench_computed_style(c: &mut Criterion) {
@@ -30,7 +31,7 @@ fn bench_computed_style(c: &mut Criterion) {
 }
 
 fn bench_hello_engine(c: &mut Criterion) {
-    c.bench_function("hello_engine", |b| b.iter(|| hello_engine()));
+    c.bench_function("hello_engine", |b| b.iter(hello_engine));
 }
 
 fn bench_wasm_execution(c: &mut Criterion) {

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use wasmtime::{Caller, Engine as WasmEngine, Linker};
 
-use crate::runtime::{HostErrorCode, RuntimeState};
+use engine::{HostErrorCode, RuntimeState};
 
 pub fn read_cstr(caller: &mut Caller<'_, RuntimeState>, ptr: i32) -> Result<String> {
     let memory = caller
