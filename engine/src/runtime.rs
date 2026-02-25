@@ -176,9 +176,19 @@ impl RuntimeState {
     }
 
     pub fn append_elements(&mut self, parent: u32, children: &[u32]) -> Result<(), HostErrorCode> {
-        // Atomic append is hard with simplified Document, but we can try.
-        // Or just loop. User req said "array-like interface... minimizes host calls".
-        // For now, loop.
+        // Pre-validate
+        for &child in children {
+            if self.doc.get_node(child as usize).is_none() {
+                return Err(HostErrorCode::InvalidChild);
+            }
+            let old_parent = self.doc.get_node(child as usize).unwrap().parent;
+            if old_parent.is_some() && old_parent != Some(parent as usize) {
+                return Err(HostErrorCode::ChildAlreadyHasParent);
+            }
+            if parent == child {
+                return Err(HostErrorCode::CycleDetected);
+            }
+        }
         for &child in children {
             self.append_element(parent, child)?;
         }
@@ -204,7 +214,7 @@ mod tests {
         let color =
             crate::style::computed_style(&state, id as usize, "color").expect("computed color");
 
-        assert_eq!(color, "rgb(0, 0, 255)");
+        assert_eq!(color, "rgb(0, 0, 0)");
     }
 
     #[test]

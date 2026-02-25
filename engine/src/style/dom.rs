@@ -92,7 +92,7 @@ impl<'a> TNode for &'a PawsElement {
     }
 
     fn owner_doc(&self) -> Self::ConcreteDocument {
-        self.with(0) // Assume root is always doc and id 0?
+        self.with(0) // Assume root is always doc and id 0
     }
 
     fn is_in_document(&self) -> bool {
@@ -124,7 +124,8 @@ impl<'a> TNode for &'a PawsElement {
     }
 
     fn opaque(&self) -> OpaqueNode {
-        unsafe { std::mem::transmute(self as *const _ as usize) }
+        let ptr: *const PawsElement = *self;
+        unsafe { std::mem::transmute(ptr as usize) }
     }
 
     fn debug_id(self) -> usize {
@@ -217,10 +218,7 @@ impl<'a> TElement for &'a PawsElement {
     }
 
     fn is_html_document_body_element(&self) -> bool {
-        self.name
-            .as_ref()
-            .map(|n| n.local.as_ref() == "body")
-            .unwrap_or(false)
+        unreachable!("Paws does not support quirks mode");
     }
 
     fn synthesize_presentational_hints_for_legacy_attributes<V>(
@@ -399,7 +397,8 @@ impl<'a> selectors::Element for &'a PawsElement {
     type Impl = SelectorImpl;
 
     fn opaque(&self) -> selectors::OpaqueElement {
-        unsafe { std::mem::transmute(self as *const _ as usize) }
+        let ptr: *const PawsElement = *self;
+        unsafe { std::mem::transmute(ptr as usize) }
     }
 
     fn parent_element(&self) -> Option<Self> {
@@ -488,7 +487,7 @@ impl<'a> selectors::Element for &'a PawsElement {
 
     fn attr_matches(
         &self,
-        ns: &selectors::attr::NamespaceConstraint<&Namespace>,
+        _ns: &selectors::attr::NamespaceConstraint<&Namespace>,
         local_name: &LocalName,
         msg: &AttrSelectorOperation<&AtomString>,
     ) -> bool {

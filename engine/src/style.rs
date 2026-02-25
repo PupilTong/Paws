@@ -115,10 +115,12 @@ pub fn update_inline_style(
     let css = if existing_css.is_empty() {
         format!("{}: {}", name, value)
     } else {
-        format!("{}; {}: {}", existing_css, name, value)
+        let trimmed = existing_css.trim_end_matches(';');
+        format!("{}; {}: {}", trimmed, name, value)
     };
 
     let new_block = {
+        println!("Parsing style attribute CSS: {}", css);
         stylo::properties::parse_style_attribute(
             &css,
             &url_data,
@@ -138,6 +140,7 @@ fn compute_style_for_node(
     let style_context = &state.style_context;
     let guard = lock.read();
     let guards = StylesheetGuards::same(&guard);
+    let default_parent = ComputedValues::initial_values_with_font_override(Font::initial_values());
 
     // Cache conditions need to be tracked
     let mut bloom_filter = selectors::bloom::BloomFilter::new();
@@ -170,16 +173,6 @@ fn compute_style_for_node(
         );
 
     println!("Match results before manual push: {}", match_results.len());
-    // Manual push of inline style (redundancy check for now)
-    let attribute = <&PawsElement as TElement>::style_attribute(&node);
-    if let Some(borrow) = attribute {
-        let block = borrow.clone_arc();
-        match_results.push(ApplicableDeclarationBlock::from_declarations(
-            block,
-            CascadeLevel::same_tree_author_normal(),
-            LayerOrder::style_attribute(),
-        ));
-    }
 
     let rule_node = style_context.rule_tree.insert_ordered_rules_with_important(
         match_results
@@ -195,9 +188,9 @@ fn compute_style_for_node(
         None, // Pseudo
         &rule_node,
         &guards,
-        std::iter::empty(), // iter_declarations
-        None,               // presentational_hints
-        None,               // parent_computed_values
+        std::iter::empty(),    // iter_declarations
+        None,                  // presentational_hints
+        Some(&default_parent), // parent_computed_values
         FirstLineReparenting::No,
         &PositionTryFallbacksTryTactic::default(),
         CascadeMode::Unvisited {
@@ -271,6 +264,12 @@ impl StyleContext {
         let document_stylesheet = stylo::stylesheets::DocumentStyleSheet(sheet.sheet.clone());
         let guard = self.lock.read();
         self.stylist.append_stylesheet(document_stylesheet, &guard);
+        let guards = stylo::shared_lock::StylesheetGuards {
+            author: &guard,
+            ua_or_user: &guard,
+        };
+        self.stylist
+            .flush(&guards, None::<&crate::dom::PawsElement>, None);
     }
 }
 

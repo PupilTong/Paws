@@ -28,6 +28,21 @@ impl StylesheetCache {
     }
 
     pub fn load_cached(&self, key: &str, css: &str) -> Arc<Stylesheet> {
+        // 1. Try Read Lock
+        {
+            let cache = self.cache.read().unwrap();
+            if let Some(existing) = cache.get(key) {
+                let sheet = Stylesheet {
+                    contents: self.lock.wrap(existing.clone()),
+                    shared_lock: self.lock.clone(),
+                    media: Arc::new(self.lock.wrap(MediaList::empty())),
+                    disabled: AtomicBool::new(false),
+                };
+                return Arc::new(sheet);
+            }
+        }
+
+        // 2. Entry missing, take Write Lock
         let mut cache = self.cache.write().unwrap();
 
         let contents = if let Some(existing) = cache.get(key) {

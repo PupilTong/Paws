@@ -110,9 +110,10 @@ impl Document {
 
         // Check if child already has a parent
         let old_parent = self.nodes[child_id].parent;
-        if old_parent.is_some() {
-            // For simplify, auto-detach
+        if old_parent == Some(parent_id) {
             self.detach_node(child_id);
+        } else if old_parent.is_some() {
+            return Err("Child already has a parent");
         }
 
         // 2. Mutation

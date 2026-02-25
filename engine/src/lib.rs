@@ -29,6 +29,7 @@ pub fn hello_engine() -> String {
 
     // Create div
     let id = state.create_element("div".to_string());
+    state.append_element(0, id).expect("append to doc");
 
     // Set styles
     let _ = state.set_inline_style(id, "display".to_string(), "block".to_string());
@@ -66,6 +67,7 @@ mod tests {
     #[test]
     fn hello_engine_works() {
         let msg = hello_engine();
+        println!("HELLO ENGINE OUTPUT:\n{}", msg);
         assert!(msg.contains("wasm module ok"));
         assert!(msg.contains("layout={w:120"));
         assert!(msg.contains("style={display:block"));
@@ -78,6 +80,7 @@ mod tests {
 (module
   (import "env" "__CreateElement" (func $create (param i32) (result i32)))
   (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
+  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
   (memory (export "memory") 1)
   (data (i32.const 0) "div\00")
   (data (i32.const 16) "height\00")
@@ -85,6 +88,8 @@ mod tests {
   (func (export "run") (result i32)
     (local $id i32)
     (local.set $id (call $create (i32.const 0)))
+    (call $append (i32.const 0) (local.get $id))
+    (drop)
     (call $set_style (local.get $id) (i32.const 16) (i32.const 32))
     (drop)
     (local.get $id)
@@ -145,8 +150,8 @@ mod tests {
         assert_eq!(status, 0);
 
         let state = store.data();
-        let parent = 0;
-        let child = 1;
+        let parent = 1;
+        let child = 2;
 
         if let Some(parent_node) = state.doc.get_node(parent) {
             if parent_node.is_element() {
@@ -154,6 +159,7 @@ mod tests {
             } else {
                 panic!("Parent not an element");
             }
+        } else {
             panic!("Parent not found or not an element");
         }
 
@@ -163,6 +169,7 @@ mod tests {
             } else {
                 panic!("Child not an element");
             }
+        } else {
             panic!("Child not found or not an element");
         }
     }
@@ -239,13 +246,14 @@ mod tests {
         assert_eq!(status, 0);
 
         let state = store.data();
-        let parent = 0;
+        let parent = 1;
         if let Some(parent_node) = state.doc.get_node(parent) {
             if parent_node.is_element() {
-                assert_eq!(parent_node.children, vec![1, 2]);
+                assert_eq!(parent_node.children, vec![2, 3]);
             } else {
                 panic!("Parent not an element");
             }
+        } else {
             panic!("Parent not found or not an element");
         }
     }
@@ -285,7 +293,7 @@ mod tests {
         assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
 
         let state = store.data();
-        let parent_element_opt = state.doc.get_node(0);
+        let parent_element_opt = state.doc.get_node(1);
         if let Some(node) = parent_element_opt {
             if node.is_element() {
                 assert!(node.children.is_empty());
@@ -293,7 +301,7 @@ mod tests {
                 panic!("Parent not element");
             }
         } else {
-            panic!("Parent exists");
+            panic!("Parent not found");
         }
     }
 
@@ -333,8 +341,8 @@ mod tests {
         assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
 
         let state = store.data();
-        // Check that child (id 1) is removed from the map
-        assert!(state.doc.get_node(1).is_none());
+        // Check that child (id 2) is removed from the map
+        assert!(state.doc.get_node(2).is_none());
     }
 
     #[test]
@@ -371,12 +379,15 @@ mod tests {
 (module
     (import "env" "__CreateElement" (func $create (param i32) (result i32)))
     (import "env" "__AddStylesheet" (func $add_css (param i32) (result i32)))
+    (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
     (data (i32.const 16) "div { color: red; }\00")
     (func (export "run") (result i32)
         (local $id i32)
         (local.set $id (call $create (i32.const 0)))
+        (call $append (i32.const 0) (local.get $id))
+        (drop)
         (call $add_css (i32.const 16))
         (drop)
         (local.get $id)
