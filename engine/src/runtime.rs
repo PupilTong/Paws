@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::Result;
 use markup5ever::{LocalName, QualName};
 
@@ -45,11 +43,12 @@ pub struct RuntimeState {
     pub stylesheet_cache: crate::style::StylesheetCache,
 }
 
-impl Default for RuntimeState {
-    fn default() -> Self {
-        let context = StyleContext::default();
+impl RuntimeState {
+    pub fn new(url_str: String) -> Self {
+        let url = url::Url::parse(&url_str).expect("Valid Document URL");
+        let context = StyleContext::new(url.clone());
         let lock = context.lock.clone();
-        let doc = Document::new(lock.clone());
+        let doc = Document::new(lock.clone(), url);
         // We need to ensure doc shares the lock with StyleContext?
         // Document creates its own lock. StyleContext creates its own.
         // We should pass the lock from Context to Doc or vice versa.
@@ -66,12 +65,9 @@ impl Default for RuntimeState {
             stylesheet_cache,
         }
     }
-}
-
-impl RuntimeState {
     pub fn create_element(&mut self, tag: String) -> u32 {
         let name = QualName::new(None, markup5ever::ns!(html), LocalName::from(tag));
-        self.doc.create_element(name, HashMap::new()) as u32
+        self.doc.create_element(name) as u32
     }
 
     pub fn create_text_node(&mut self, data: String) -> u32 {
@@ -196,7 +192,7 @@ mod tests {
     use super::*;
     #[test]
     fn test_create_element() {
-        let mut state = RuntimeState::default();
+        let mut state = RuntimeState::new("https://example.com".to_string());
         let id = state.create_element("div".to_string());
         let node = state.doc.get_node(id as usize).unwrap();
         assert!(node.is_element());
@@ -218,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_create_text_node() {
-        let mut state = RuntimeState::default();
+        let mut state = RuntimeState::new("https://example.com".to_string());
         let id = state.create_text_node("hello".to_string());
         let node = state.doc.get_node(id as usize).unwrap();
         assert!(node.is_text_node());
@@ -227,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_destroy_element() {
-        let mut state = RuntimeState::default();
+        let mut state = RuntimeState::new("https://example.com".to_string());
         let id = state.create_element("div".to_string());
         assert!(state.destroy_element(id).is_ok());
         // Check if node is removed (simplified check, might still be allocated but detached/removed in real impl)
@@ -242,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_set_inline_style_errors() {
-        let mut state = RuntimeState::default();
+        let mut state = RuntimeState::new("https://example.com".to_string());
         let id = state.create_element("div".to_string());
         let destroyed_id = state.create_element("span".to_string());
         state.destroy_element(destroyed_id).unwrap();
@@ -263,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_append_element_success() {
-        let mut state = RuntimeState::default();
+        let mut state = RuntimeState::new("https://example.com".to_string());
         let parent = state.create_element("div".to_string());
         let child = state.create_element("span".to_string());
 
@@ -278,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_append_element_errors_and_recovery() {
-        let mut state = RuntimeState::default();
+        let mut state = RuntimeState::new("https://example.com".to_string());
         let parent = state.create_element("div".to_string());
         let child = state.create_element("span".to_string());
         let _text = state.create_text_node("text".to_string());

@@ -5,7 +5,7 @@ use wasm_bridge::{build_linker, hello_engine};
 use wasmtime::{Engine as WasmEngine, Module, Store};
 
 fn bench_computed_style(c: &mut Criterion) {
-    let mut state = RuntimeState::default();
+    let mut state = RuntimeState::new("https://example.com".to_string());
     let id = state.create_element("div".to_string()); // returns u32
     state
         .set_inline_style(id, "height".to_string(), "100px".to_string())
@@ -29,7 +29,7 @@ fn bench_computed_style(c: &mut Criterion) {
                 .doc
                 .get_node(black_box(id as usize))
                 .unwrap()
-                .get_computed_style_by_key(&state, black_box("height"))
+                .get_computed_style_by_key(&state.style_context, black_box("height"))
         })
     });
 }
@@ -59,7 +59,10 @@ fn bench_wasm_execution(c: &mut Criterion) {
     let engine = WasmEngine::default();
     let module = Module::new(&engine, wat).expect("compile wasm module");
     let linker = build_linker(&engine);
-    let mut store = Store::new(&engine, RuntimeState::default());
+    let mut store = Store::new(
+        &engine,
+        RuntimeState::new("https://example.com".to_string()),
+    );
     let instance = linker
         .instantiate(&mut store, &module)
         .expect("instantiate wasm module");

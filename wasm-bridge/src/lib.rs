@@ -18,7 +18,7 @@ pub fn hello_engine() -> String {
     let _store = Store::new(&wasm_engine, ());
 
     // 2) DOM & Style: create element and styles
-    let mut state = RuntimeState::default();
+    let mut state = RuntimeState::new("https://example.com".to_string());
 
     // Create div
     let id = state.create_element("div".to_string());
@@ -98,7 +98,10 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        let mut store = Store::new(&engine, RuntimeState::default());
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -144,7 +147,10 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        let mut store = Store::new(&engine, RuntimeState::default());
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -198,7 +204,10 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        let mut store = Store::new(&engine, RuntimeState::default());
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -240,7 +249,10 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        let mut store = Store::new(&engine, RuntimeState::default());
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -287,7 +299,10 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        let mut store = Store::new(&engine, RuntimeState::default());
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -333,7 +348,10 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        let mut store = Store::new(&engine, RuntimeState::default());
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -366,7 +384,10 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        let mut store = Store::new(&engine, RuntimeState::default());
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -402,7 +423,10 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        let mut store = Store::new(&engine, RuntimeState::default());
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)

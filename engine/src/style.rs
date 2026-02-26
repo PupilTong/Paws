@@ -227,14 +227,13 @@ pub struct StyleContext {
 }
 
 impl StyleContext {
-    pub fn new() -> Self {
+    pub fn new(url: url::Url) -> Self {
         let lock = SharedRwLock::new();
         let device = build_device();
         let stylist = Stylist::new(device, QuirksMode::NoQuirks);
         let rule_tree = RuleTree::new();
 
         // Initialize URL singletons
-        let url = Url::parse("about:blank").expect("Valid URL");
         let url_data = UrlExtraData::from(url.clone());
 
         Self {
@@ -256,11 +255,5 @@ impl StyleContext {
         };
         self.stylist
             .flush(&guards, None::<&crate::dom::PawsElement>, None);
-    }
-}
-
-impl Default for StyleContext {
-    fn default() -> Self {
-        Self::new()
     }
 }

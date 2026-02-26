@@ -1,9 +1,7 @@
+use crate::dom::element::{NodeFlags, NodeType, PawsElement};
 use markup5ever::QualName;
 use slab::Slab;
-use std::collections::HashMap;
 use style::shared_lock::SharedRwLock;
-
-use crate::dom::element::{NodeFlags, NodeType, PawsElement};
 
 pub struct Document {
     /// A slab-backed tree of nodes
@@ -17,10 +15,13 @@ pub struct Document {
 
     /// Document stylesheets
     pub stylesheets: Vec<crate::style::CSSStyleSheet>,
+
+    /// Document URL
+    pub url: url::Url,
 }
 
 impl Document {
-    pub fn new(guard: SharedRwLock) -> Self {
+    pub fn new(guard: SharedRwLock, url: url::Url) -> Self {
         let mut nodes = Box::new(Slab::new());
         let slab_ptr = nodes.as_mut() as *mut Slab<PawsElement>;
 
@@ -43,6 +44,7 @@ impl Document {
             guard,
             root: root_id,
             stylesheets: Vec::new(),
+            url,
         }
     }
 
@@ -69,13 +71,10 @@ impl Document {
         id
     }
 
-    pub fn create_element(&mut self, name: QualName, attrs: HashMap<style::Atom, String>) -> usize {
+    pub fn create_element(&mut self, name: QualName) -> usize {
         let id = self.create_node(NodeType::Element);
         let el = self.nodes.get_mut(id).unwrap();
         el.name = Some(name);
-        for (k, v) in attrs {
-            el.set_attribute(k.as_ref(), &v);
-        }
         id
     }
 
@@ -176,12 +175,5 @@ impl Document {
                 }
             }
         }
-    }
-
-    pub fn layout(
-        &self,
-        style_context: &crate::style::StyleContext,
-    ) -> Option<crate::layout::LayoutBox> {
-        crate::layout::compute_layout(self, style_context, self.root)
     }
 }
