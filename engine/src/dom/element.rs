@@ -59,6 +59,9 @@ pub struct PawsElement {
     /// Stylo integration data.
     pub stylo_element_data: AtomicRefCell<Option<StyloElementData>>,
 
+    /// Cached computed styles from the latest layout/style resolution pass.
+    pub computed_values: Option<Arc<style::properties::ComputedValues>>,
+
     /// Selector flags for invalidation
     pub selector_flags: AtomicRefCell<ElementSelectorFlags>,
 
@@ -95,6 +98,7 @@ impl PawsElement {
             text_content: None,
 
             stylo_element_data: Default::default(),
+            computed_values: None,
             selector_flags: AtomicRefCell::new(ElementSelectorFlags::empty()),
             guard,
             element_state: ElementState::empty(),
@@ -116,6 +120,18 @@ impl PawsElement {
 
     pub fn is_text_node(&self) -> bool {
         self.node_type == NodeType::Text
+    }
+    pub fn get_computed_style_by_key(
+        &self,
+        state: &crate::style::StyleContext,
+        key: &str,
+    ) -> Option<String> {
+        let parser_context = crate::style::build_parser_context(&state.url_data);
+        let property_id = crate::style::PropertyId::parse(key, &parser_context).ok()?;
+        let longhand = property_id.longhand_id()?;
+
+        let computed = self.computed_values.as_ref()?;
+        crate::style::serialize_computed_value(computed, longhand)
     }
 
     pub fn set_dirty_descendants(&self) {

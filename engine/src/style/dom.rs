@@ -43,7 +43,7 @@ impl<'a> Iterator for ChildrenIterator<'a> {
 }
 
 // Implement NodeInfo for &PawsElement
-impl<'a> NodeInfo for &'a PawsElement {
+impl NodeInfo for &PawsElement {
     fn is_element(&self) -> bool {
         self.node_type == NodeType::Element
     }
@@ -393,7 +393,7 @@ impl<'a> TShadowRoot for &'a PawsElement {
 }
 
 // Implement selectors::Element for &PawsElement
-impl<'a> selectors::Element for &'a PawsElement {
+impl selectors::Element for &PawsElement {
     type Impl = SelectorImpl;
 
     fn opaque(&self) -> selectors::OpaqueElement {
@@ -582,7 +582,7 @@ impl<'a> selectors::Element for &'a PawsElement {
     }
 }
 
-impl<'a> AttributeProvider for &'a PawsElement {
+impl AttributeProvider for &PawsElement {
     fn get_attr(&self, name: &LocalName) -> Option<String> {
         let key = Atom::from(name.0.as_ref());
         self.attrs.get(&key).cloned()

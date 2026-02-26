@@ -4,8 +4,7 @@ pub mod wasm;
 
 pub use wasm::{build_linker, read_cstr};
 
-use engine::{computed_style, RuntimeState};
-use taffy::prelude::*;
+use engine::RuntimeState;
 use wasmtime::{Engine as WasmEngine, Module, Store};
 
 /// A tiny demo that wires wasm, layout, and style concepts together.
@@ -30,24 +29,29 @@ pub fn hello_engine() -> String {
     let _ = state.set_inline_style(id, "height".to_string(), "80px".to_string());
     let _ = state.set_inline_style(id, "width".to_string(), "120px".to_string());
 
-    // 3) Layout: build Taffy tree
-    let mut taffy = TaffyTree::<()>::new();
-    let root_node = engine::layout::build_layout_tree(&state, id as usize, &mut taffy)
-        .expect("build layout tree");
+    // Resolve styles first
+    state.doc.resolve_style(&state.style_context);
 
-    taffy
-        .compute_layout(root_node, Size::MAX_CONTENT)
-        .expect("compute layout");
-    let layout = taffy.layout(root_node).expect("get layout");
+    // 3) Layout: build Taffy tree
+    let layout = engine::layout::compute_layout(&state.doc, &state.style_context, id as usize)
+        .expect("get layout");
 
     // Compute style for verification string
-    let display = computed_style(&state, id as usize, "display");
-    let height = computed_style(&state, id as usize, "height");
+    let display = state
+        .doc
+        .get_node(id as usize)
+        .unwrap()
+        .get_computed_style_by_key(&state.style_context, "display");
+    let height = state
+        .doc
+        .get_node(id as usize)
+        .unwrap()
+        .get_computed_style_by_key(&state.style_context, "height");
 
     format!(
         "wasm module ok\nlayout={{w:{}, h:{}}}\nstyle={{display:{}, height:{}}}",
-        layout.size.width,
-        layout.size.height,
+        layout.width,
+        layout.height,
         display.as_deref().unwrap_or("none"),
         height.as_deref().unwrap_or("none")
     )
@@ -104,8 +108,16 @@ mod tests {
             .expect("get run function");
         let id = run.call(&mut store, ()).expect("run wasm"); // Capture the returned ID
 
-        let state = store.data();
-        let height = engine::computed_style(state, id as usize, "height").expect("computed height");
+        let state = store.data_mut();
+        // Resolve styles first
+        state.doc.resolve_style(&state.style_context);
+
+        let height = state
+            .doc
+            .get_node(id as usize)
+            .unwrap()
+            .get_computed_style_by_key(&state.style_context, "height")
+            .expect("computed height");
         assert_eq!(height, "100px");
     }
 
@@ -400,8 +412,16 @@ mod tests {
             .expect("get run function");
         let id = run.call(&mut store, ()).expect("run wasm");
 
-        let state = store.data();
-        let color = engine::computed_style(state, id as usize, "color").expect("computed color");
+        let state = store.data_mut();
+        // Resolve styles first
+        state.doc.resolve_style(&state.style_context);
+
+        let color = state
+            .doc
+            .get_node(id as usize)
+            .unwrap()
+            .get_computed_style_by_key(&state.style_context, "color")
+            .expect("computed color");
 
         assert_eq!(color, "rgb(255, 0, 0)");
     }

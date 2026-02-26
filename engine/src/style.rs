@@ -10,7 +10,7 @@ use stylo::media_queries::{Device, MediaType};
 use stylo::parser::ParserContext;
 use stylo::properties::cascade::FirstLineReparenting;
 use stylo::properties::style_structs::Font;
-use stylo::properties::{ComputedValues, LonghandId, PropertyId};
+pub use stylo::properties::{ComputedValues, LonghandId, PropertyId};
 use stylo::queries::values::PrefersColorScheme;
 use stylo::rule_cache::RuleCacheConditions;
 use stylo::rule_tree::RuleTree;
@@ -58,7 +58,7 @@ impl stylo::servo::media_queries::FontMetricsProvider for SimpleFontMetricsProvi
     }
 }
 
-fn build_parser_context<'a>(url_data: &'a UrlExtraData) -> ParserContext<'a> {
+pub(crate) fn build_parser_context<'a>(url_data: &'a UrlExtraData) -> ParserContext<'a> {
     ParserContext::new(
         Origin::Author,
         url_data,
@@ -87,13 +87,13 @@ fn build_device() -> Device {
 }
 
 pub fn update_inline_style(
-    lock: &SharedRwLock,
+    context: &StyleContext,
     element: &mut PawsElement,
     name: &str,
     value: &str,
 ) {
-    let url = Url::parse("about:blank").expect("valid url");
-    let url_data = UrlExtraData::from(url);
+    let lock = &context.lock;
+    let url_data = &context.url_data;
 
     // Serialize existing styles to preserve them (append behavior)
     // Read pass
@@ -120,7 +120,7 @@ pub fn update_inline_style(
         println!("Parsing style attribute CSS: {}", css);
         stylo::properties::parse_style_attribute(
             &css,
-            &url_data,
+            url_data,
             None,
             QuirksMode::NoQuirks,
             stylo::stylesheets::CssRuleType::Style,
@@ -129,12 +129,12 @@ pub fn update_inline_style(
     element.style_attribute = Some(Arc::new(lock.wrap(new_block)));
 }
 
-fn compute_style_for_node(
-    state: &crate::runtime::RuntimeState,
+pub(crate) fn compute_style_for_node(
+    _doc: &crate::dom::Document,
+    style_context: &StyleContext,
     node: &PawsElement,
 ) -> Arc<ComputedValues> {
-    let lock = &state.style_context.lock;
-    let style_context = &state.style_context;
+    let lock = &style_context.lock;
     let guard = lock.read();
     let guards = StylesheetGuards::same(&guard);
     let default_parent = ComputedValues::initial_values_with_font_override(Font::initial_values());
@@ -197,7 +197,10 @@ fn compute_style_for_node(
     )
 }
 
-fn serialize_computed_value(style: &ComputedValues, longhand: LonghandId) -> Option<String> {
+pub(crate) fn serialize_computed_value(
+    style: &ComputedValues,
+    longhand: LonghandId,
+) -> Option<String> {
     let mut output = CssStringWriter::new();
     {
         let mut writer = CssWriter::new(&mut output);
@@ -215,41 +218,31 @@ fn serialize_computed_value(style: &ComputedValues, longhand: LonghandId) -> Opt
     Some(output)
 }
 
-pub fn computed_style(
-    state: &crate::runtime::RuntimeState,
-    node_id: usize,
-    property: &str,
-) -> Option<String> {
-    let url = Url::parse("about:blank").ok()?;
-    let url_data = UrlExtraData::from(url);
-    let parser_context = build_parser_context(&url_data);
-    let property_id = PropertyId::parse(property, &parser_context).ok()?;
-    let longhand = property_id.longhand_id()?;
-
-    let node = state.doc.get_node(node_id)?;
-    let computed = compute_style_for_node(state, node);
-    serialize_computed_value(&computed, longhand)
-}
-
-// Public struct to hold persistent Stylo context
 pub struct StyleContext {
     pub stylist: Stylist,
     pub rule_tree: RuleTree,
     pub lock: SharedRwLock,
+    pub url: Url,
+    pub url_data: UrlExtraData,
 }
 
 impl StyleContext {
     pub fn new() -> Self {
         let lock = SharedRwLock::new();
-        // Stylist needs the lock?
-        // Stylist::new doesn't take lock, it takes device.
         let device = build_device();
         let stylist = Stylist::new(device, QuirksMode::NoQuirks);
         let rule_tree = RuleTree::new();
+
+        // Initialize URL singletons
+        let url = Url::parse("about:blank").expect("Valid URL");
+        let url_data = UrlExtraData::from(url.clone());
+
         Self {
             stylist,
             rule_tree,
             lock,
+            url,
+            url_data,
         }
     }
 

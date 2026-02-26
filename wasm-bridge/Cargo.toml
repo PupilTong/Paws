@@ -11,7 +11,7 @@ path = "src/lib.rs"
 engine = { path = "../engine" }
 anyhow = "1"
 wasmtime = "18"
-taffy = "0.4"
+
 
 [dev-dependencies]
 criterion = "0.5"

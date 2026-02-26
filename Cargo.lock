@@ -2233,7 +2233,6 @@ dependencies = [
  "anyhow",
  "criterion",
  "engine",
- "taffy",
  "wasmtime",
 ]
 

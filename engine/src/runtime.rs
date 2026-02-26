@@ -96,11 +96,7 @@ impl RuntimeState {
             .ok_or(HostErrorCode::InvalidChild)?;
 
         if node.is_element() {
-            // Access lock from style_context
-            let lock = &self.style_context.lock;
-
-            // Update the inline style
-            crate::style::update_inline_style(lock, node, &name, &value);
+            crate::style::update_inline_style(&self.style_context, node, &name, &value);
 
             Ok(())
         } else {
@@ -207,9 +203,15 @@ mod tests {
         assert_eq!(node.name.as_ref().unwrap().local.as_ref(), "div");
 
         // Verify style application
-        // We need to set TLS context for computed_style
-        let color =
-            crate::style::computed_style(&state, id as usize, "color").expect("computed color");
+        // We must first resolve styles for the node to populate its computed_styles
+        state.doc.resolve_style(&state.style_context);
+
+        let color = state
+            .doc
+            .get_node(id as usize)
+            .unwrap()
+            .get_computed_style_by_key(&state.style_context, "color")
+            .expect("computed color");
 
         assert_eq!(color, "rgb(0, 0, 0)");
     }

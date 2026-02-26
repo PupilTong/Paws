@@ -6,4 +6,3 @@ mod runtime;
 mod style;
 
 pub use runtime::{HostErrorCode, RuntimeState};
-pub use style::computed_style;

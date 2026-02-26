@@ -162,4 +162,26 @@ impl Document {
         self.nodes.remove(id);
         Ok(())
     }
+
+    pub fn resolve_style(&mut self, style_context: &crate::style::StyleContext) {
+        // Collect IDs to avoid borrowing issues while iterating
+        let ids: Vec<usize> = self.nodes.iter().map(|(id, _)| id).collect();
+        for id in ids {
+            if let Some(node) = self.nodes.get(id) {
+                if node.is_element() {
+                    let computed = crate::style::compute_style_for_node(self, style_context, node);
+                    if let Some(mut_node) = self.nodes.get_mut(id) {
+                        mut_node.computed_values = Some(computed);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn layout(
+        &self,
+        style_context: &crate::style::StyleContext,
+    ) -> Option<crate::layout::LayoutBox> {
+        crate::layout::compute_layout(self, style_context, self.root)
+    }
 }

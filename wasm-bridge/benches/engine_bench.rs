@@ -1,8 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use taffy::prelude::*; // Use prelude for TaffyMaxContent etc.
-
-use engine::{computed_style, layout, RuntimeState};
+use engine::RuntimeState;
 use wasm_bridge::{build_linker, hello_engine};
 use wasmtime::{Engine as WasmEngine, Module, Store};
 
@@ -17,16 +15,22 @@ fn bench_computed_style(c: &mut Criterion) {
 
     c.bench_function("layout_simple", |b| {
         b.iter(|| {
-            let mut taffy = TaffyTree::<()>::new();
-            let _root = layout::build_layout_tree(&state, id as usize, &mut taffy);
-            taffy
-                .compute_layout(NodeId::from(0u64), Size::MAX_CONTENT)
-                .ok(); // mock
+            engine::layout::compute_layout(
+                black_box(&state.doc),
+                black_box(&state.style_context),
+                black_box(id as usize),
+            );
         })
     });
 
     c.bench_function("computed_style_height", |b| {
-        b.iter(|| computed_style(&state, black_box(id as usize), black_box("height")))
+        b.iter(|| {
+            state
+                .doc
+                .get_node(black_box(id as usize))
+                .unwrap()
+                .get_computed_style_by_key(&state, black_box("height"))
+        })
     });
 }
 
