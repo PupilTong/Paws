@@ -24,7 +24,9 @@ This repository supports LLM-based assistants. The working language is English.
 
 - `engine/`: core logic (DOM, Style, Layout). A pure Rust library with no host dependencies.
 - `wasm-bridge/`: integration layer threading `wasmtime` and `engine` together.
-- `view/`: UI/view layer (currently placeholder).
+- `view/`: UI/view layer. Exposes the frontend APIs.
+- `view-macros/`: Contains the `css!` proc-macro for compile-time CSS evaluation.
+- `paws-style-ir/`: Zero-copy intermediate representations (`rkyv`) for styles shared between the macro and runtime.
 
 ## Project Design Overview
 

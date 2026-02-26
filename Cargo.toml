@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "engine",
     "wasm-bridge",
-    "view",
+    "view", "paws-style-ir", "view-macros",
 ]
 
 [workspace.package]

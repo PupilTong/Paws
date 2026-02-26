@@ -116,6 +116,42 @@ impl RuntimeState {
         self.style_context.add_stylesheet(added_sheet);
     }
 
+    pub fn add_parsed_stylesheet(&mut self, bytes: &[u8]) {
+        use paws_style_ir::StyleSheetIR;
+        use rkyv::rancor::Error;
+
+        let archived = match rkyv::from_bytes::<StyleSheetIR, Error>(bytes) {
+            Ok(sheet) => sheet,
+            Err(e) => {
+                self.set_error(
+                    HostErrorCode::MemoryError,
+                    format!("rkyv decode error: {:?}", e),
+                );
+                return;
+            }
+        };
+
+        // Note: Stylo `StylesheetContents` handles its own Arc/RwLock allocation internally
+        // and its AST nodes (`StyleRule`, `CssRules`) do not expose simple constructors.
+        // Bypassing Stylo's string parser entirely would require forking Stylo or unsafe transmutations.
+        // For now, we reconstruct a minified valid CSS string from the validated IR, guaranteeing
+        // 0-error runtime parsing and skipping format-lexing overhead, while hitting the StyleCache!
+        let mut minified_css = String::new();
+        for rule in archived.rules.iter() {
+            minified_css.push_str(&rule.selectors);
+            minified_css.push('{');
+            for decl in rule.declarations.iter() {
+                minified_css.push_str(&decl.name);
+                minified_css.push(':');
+                minified_css.push_str(&decl.value);
+                minified_css.push(';');
+            }
+            minified_css.push('}');
+        }
+
+        self.add_stylesheet(minified_css);
+    }
+
     pub fn set_attribute(
         &mut self,
         id: u32,

@@ -1,0 +1,17 @@
+[package]
+name = "view-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+paws-style-ir = { path = "../paws-style-ir" }
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+rkyv = { version = "0.8.9" }
+# We will need some css parsing logic, we can use `cssparser` or a custom lightweight one.
+cssparser = "0.36"

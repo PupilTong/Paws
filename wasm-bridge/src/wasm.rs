@@ -65,6 +65,26 @@ fn read_i32_slice(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> 
     Ok(values)
 }
 
+fn read_byte_vec(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> Result<Vec<u8>> {
+    if ptr < 0 || len < 0 {
+        return Err(anyhow!("pointer or length out of bounds"));
+    }
+    let memory = caller
+        .get_export("memory")
+        .and_then(|export| export.into_memory())
+        .ok_or_else(|| anyhow!("missing memory export"))?;
+    let data = memory.data(caller);
+    let start = ptr as usize;
+    let byte_len = len as usize;
+    let end = start
+        .checked_add(byte_len)
+        .ok_or_else(|| anyhow!("length overflow"))?;
+    if end > data.len() {
+        return Err(anyhow!("pointer out of bounds"));
+    }
+    Ok(data[start..end].to_vec())
+}
+
 pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
     let mut linker = Linker::new(engine);
     linker
@@ -250,6 +270,27 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
             },
         )
         .expect("link __AddStylesheet");
+
+    linker
+        .func_wrap(
+            "paws",
+            "paws_add_parsed_stylesheet",
+            |mut caller: Caller<'_, RuntimeState>, ptr: i32, len: i32| -> Result<()> {
+                let bytes = match read_byte_vec(&mut caller, ptr, len) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        let _ = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(());
+                    }
+                };
+                caller.data_mut().clear_error();
+                caller.data_mut().add_parsed_stylesheet(&bytes);
+                Ok(())
+            },
+        )
+        .expect("link paws_add_parsed_stylesheet");
 
     linker
 }

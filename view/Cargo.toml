@@ -6,3 +6,9 @@ license.workspace = true
 
 [lib]
 path = "src/lib.rs"
+[dependencies]
+view-macros = { path = "../view-macros" }
+
+[dev-dependencies]
+rkyv = { version = "0.8.9" }
+paws-style-ir = { path = "../paws-style-ir" }

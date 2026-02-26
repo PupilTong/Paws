@@ -27,3 +27,5 @@ smallvec = "1.15.1"
 slab = "0.4.11"
 bitflags = "2.10.0"
 markup5ever = "0.38.0"
+rkyv = { version = "0.8.9" }
+paws-style-ir = { path = "../paws-style-ir" }
