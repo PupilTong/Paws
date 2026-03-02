@@ -3,6 +3,32 @@ use markup5ever::QualName;
 use slab::Slab;
 use style::shared_lock::SharedRwLock;
 
+/// Errors that can occur during DOM tree operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomError {
+    /// The specified parent node ID does not exist in the tree.
+    InvalidParent,
+    /// The specified child node ID does not exist in the tree.
+    InvalidChild,
+    /// Appending would create a cycle in the tree (child is ancestor of parent).
+    CycleDetected,
+    /// The child node already has a different parent. Detach it first.
+    ChildAlreadyHasParent,
+}
+
+impl std::fmt::Display for DomError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DomError::InvalidParent => write!(f, "invalid parent id"),
+            DomError::InvalidChild => write!(f, "invalid child id"),
+            DomError::CycleDetected => write!(f, "append would create a cycle"),
+            DomError::ChildAlreadyHasParent => write!(f, "child already has a parent"),
+        }
+    }
+}
+
+impl std::error::Error for DomError {}
+
 pub struct Document {
     /// A slab-backed tree of nodes
     pub nodes: Box<Slab<PawsElement>>,
@@ -85,24 +111,24 @@ impl Document {
         id
     }
 
-    pub fn append_child(&mut self, parent_id: usize, child_id: usize) -> Result<(), &'static str> {
+    pub fn append_child(&mut self, parent_id: usize, child_id: usize) -> Result<(), DomError> {
         // 1. Transactional Pre-Checks
         if !self.nodes.contains(parent_id) {
-            return Err("Invalid parent id");
+            return Err(DomError::InvalidParent);
         }
         if !self.nodes.contains(child_id) {
-            return Err("Invalid child id");
+            return Err(DomError::InvalidChild);
         }
 
         if parent_id == child_id {
-            return Err("Cycle detected");
+            return Err(DomError::CycleDetected);
         }
 
         // Cycle check: walk up from parent to see if child is an ancestor
         let mut ancestor = Some(parent_id);
         while let Some(curr) = ancestor {
             if curr == child_id {
-                return Err("Cycle detected");
+                return Err(DomError::CycleDetected);
             }
             ancestor = self.nodes.get(curr).and_then(|n| n.parent);
         }
@@ -112,7 +138,7 @@ impl Document {
         if old_parent == Some(parent_id) {
             self.detach_node(child_id);
         } else if old_parent.is_some() {
-            return Err("Child already has a parent");
+            return Err(DomError::ChildAlreadyHasParent);
         }
 
         // 2. Mutation
@@ -127,14 +153,38 @@ impl Document {
         // Set child's parent
         if let Some(child) = self.nodes.get_mut(child_id) {
             child.parent = Some(parent_id);
-            // Propagate flags
-            if parent_in_doc {
-                child.flags.insert(NodeFlags::IS_IN_DOCUMENT);
-                // todo recursive flags
-            }
+        }
+
+        // Propagate IS_IN_DOCUMENT flag to child and all its descendants
+        if parent_in_doc {
+            self.propagate_in_document_flag(child_id);
         }
 
         Ok(())
+    }
+
+    /// Recursively sets the IS_IN_DOCUMENT flag on a node and all its descendants.
+    /// Uses iterative (stack-based) traversal to avoid stack overflow on deep trees.
+    fn propagate_in_document_flag(&mut self, node_id: usize) {
+        let mut stack = vec![node_id];
+        while let Some(id) = stack.pop() {
+            if let Some(node) = self.nodes.get_mut(id) {
+                node.flags.insert(NodeFlags::IS_IN_DOCUMENT);
+                stack.extend(node.children.iter().copied());
+            }
+        }
+    }
+
+    /// Recursively clears the IS_IN_DOCUMENT flag on a node and all its descendants.
+    /// Uses iterative (stack-based) traversal to avoid stack overflow on deep trees.
+    fn clear_in_document_flag(&mut self, node_id: usize) {
+        let mut stack = vec![node_id];
+        while let Some(id) = stack.pop() {
+            if let Some(node) = self.nodes.get_mut(id) {
+                node.flags.remove(NodeFlags::IS_IN_DOCUMENT);
+                stack.extend(node.children.iter().copied());
+            }
+        }
     }
 
     pub fn detach_node(&mut self, node_id: usize) {
@@ -148,14 +198,14 @@ impl Document {
             }
             if let Some(child) = self.nodes.get_mut(node_id) {
                 child.parent = None;
-                child.flags.remove(NodeFlags::IS_IN_DOCUMENT);
             }
+            self.clear_in_document_flag(node_id);
         }
     }
 
-    pub fn remove_node(&mut self, id: usize) -> Result<(), &'static str> {
+    pub fn remove_node(&mut self, id: usize) -> Result<(), DomError> {
         if !self.nodes.contains(id) {
-            return Err("Invalid child id");
+            return Err(DomError::InvalidChild);
         }
         self.detach_node(id);
         self.nodes.remove(id);

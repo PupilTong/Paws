@@ -4,11 +4,9 @@ use std::sync::RwLock;
 
 use style::context::QuirksMode;
 use style::media_queries::MediaList;
-// use style::parser::ParserContext; // Unused
 use style::servo_arc::Arc;
 use style::shared_lock::SharedRwLock;
 use style::stylesheets::{AllowImportRules, Origin, Stylesheet, StylesheetContents, UrlExtraData};
-// use style::values::UserString; // Unresolved import
 
 pub struct StylesheetCache {
     cache: RwLock<HashMap<String, Arc<StylesheetContents>>>,

@@ -4,7 +4,8 @@ This repository supports LLM-based assistants. The working language is English.
 
 ## Supported Agents
 
-- Google Antigravity
+- Google Antigravity (via `.agent/` workflows)
+- Claude (via `CLAUDE.md` at repo root)
 - GitHub Copilot
 
 ## General Guidelines
@@ -18,6 +19,8 @@ This repository supports LLM-based assistants. The working language is English.
 - Ensure error handling returns specific ErrorCodes where applicable (avoid string errors).
 - Ensure operations are transactional/atomic where possible (check preconditions before mutation).
 - For non-thread-safe non-cryptographic keys (like integers), use `FnvHashMap` instead of `HashMap`.
+- No `println!`/`eprintln!`/`dbg!` in production code.
+- All `unsafe` blocks must have a `// SAFETY:` comment explaining the invariant.
 - On every code change, assess whether agents.md needs an update and update it when needed.
 
 ## Repository Structure

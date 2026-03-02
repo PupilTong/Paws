@@ -2,6 +2,7 @@ use selectors::matching::{
     MatchingContext, MatchingForInvalidation, MatchingMode, NeedsSelectorFlags, QuirksMode,
 };
 use std::borrow::Cow;
+// The `stylo` crate publishes as `stylo` on crates.io but exposes `style` as its crate name.
 use style as stylo;
 use stylo::computed_value_flags::ComputedValueFlags;
 use stylo::dom::TElement;
@@ -117,7 +118,6 @@ pub fn update_inline_style(
     };
 
     let new_block = {
-        println!("Parsing style attribute CSS: {}", css);
         stylo::properties::parse_style_attribute(
             &css,
             url_data,
@@ -168,8 +168,6 @@ pub(crate) fn compute_style_for_node(
             &mut match_results,
             &mut matching_context,
         );
-
-    println!("Match results before manual push: {}", match_results.len());
 
     let rule_node = style_context.rule_tree.insert_ordered_rules_with_important(
         match_results

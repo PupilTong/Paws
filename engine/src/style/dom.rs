@@ -125,6 +125,9 @@ impl<'a> TNode for &'a PawsElement {
 
     fn opaque(&self) -> OpaqueNode {
         let ptr: *const PawsElement = *self;
+        // SAFETY: OpaqueNode is a newtype around usize, used as an opaque identity token
+        // by Stylo. We transmute a valid pointer-as-usize into OpaqueNode. The value is
+        // only used for identity comparison, never dereferenced back to a pointer by Stylo.
         unsafe { std::mem::transmute(ptr as usize) }
     }
 
@@ -370,6 +373,11 @@ impl<'a> TDocument for &'a PawsElement {
     }
 
     fn shared_lock(&self) -> &SharedRwLock {
+        // SAFETY: TDocument requires returning a reference with the lifetime of the document.
+        // Since `self` is `&'a PawsElement` and `guard` is a field of PawsElement, the
+        // reference is valid for 'a. The transmute extends the borrow lifetime to match
+        // the trait's required lifetime, which is sound because the PawsElement (and its
+        // guard) lives at least as long as the reference.
         unsafe { std::mem::transmute(&self.guard) }
     }
 }
@@ -398,6 +406,9 @@ impl selectors::Element for &PawsElement {
 
     fn opaque(&self) -> selectors::OpaqueElement {
         let ptr: *const PawsElement = *self;
+        // SAFETY: OpaqueElement is a newtype around usize used by the selectors crate as
+        // an opaque identity token. We transmute a valid pointer-as-usize. The value is
+        // only used for identity comparison within selector matching, never dereferenced.
         unsafe { std::mem::transmute(ptr as usize) }
     }
 

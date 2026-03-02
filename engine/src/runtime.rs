@@ -1,7 +1,7 @@
 use anyhow::Result;
 use markup5ever::{LocalName, QualName};
 
-use crate::dom::Document;
+use crate::dom::{Document, DomError};
 use crate::style::StyleContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,12 +49,8 @@ impl RuntimeState {
         let context = StyleContext::new(url.clone());
         let lock = context.lock.clone();
         let doc = Document::new(lock.clone(), url);
-        // We need to ensure doc shares the lock with StyleContext?
-        // Document creates its own lock. StyleContext creates its own.
-        // We should pass the lock from Context to Doc or vice versa.
-        // Let's create Document first, then Context using Doc's lock.
-        // But StyleContext::new() might not take a lock.
-        // Let's assume for now we use Doc's lock for everything.
+        // Document and StyleContext share the same SharedRwLock (cloned from StyleContext)
+        // to ensure consistent locking across style and DOM operations.
 
         let stylesheet_cache = crate::style::StylesheetCache::new(lock.clone());
 
@@ -75,9 +71,10 @@ impl RuntimeState {
     }
 
     pub fn destroy_element(&mut self, id: u32) -> Result<(), HostErrorCode> {
-        self.doc
-            .remove_node(id as usize)
-            .map_err(|_| HostErrorCode::InvalidChild)
+        self.doc.remove_node(id as usize).map_err(|e| match e {
+            DomError::InvalidChild => HostErrorCode::InvalidChild,
+            _ => HostErrorCode::InvalidChild,
+        })
     }
 
     pub fn set_inline_style(
@@ -183,23 +180,14 @@ impl RuntimeState {
     }
 
     pub fn append_element(&mut self, parent: u32, child: u32) -> Result<(), HostErrorCode> {
-        match self.doc.append_child(parent as usize, child as usize) {
-            Ok(_) => Ok(()),
-            Err(msg) => {
-                // Map msg to HostErrorCode
-                if msg == "Cycle detected" {
-                    Err(HostErrorCode::CycleDetected)
-                } else if msg == "Invalid parent id" {
-                    Err(HostErrorCode::InvalidParent)
-                } else if msg == "Invalid child id" {
-                    Err(HostErrorCode::InvalidChild)
-                } else if msg == "Child already has a parent" {
-                    Err(HostErrorCode::ChildAlreadyHasParent)
-                } else {
-                    Err(HostErrorCode::InvalidParent)
-                }
-            }
-        }
+        self.doc
+            .append_child(parent as usize, child as usize)
+            .map_err(|e| match e {
+                DomError::InvalidParent => HostErrorCode::InvalidParent,
+                DomError::InvalidChild => HostErrorCode::InvalidChild,
+                DomError::CycleDetected => HostErrorCode::CycleDetected,
+                DomError::ChildAlreadyHasParent => HostErrorCode::ChildAlreadyHasParent,
+            })
     }
 
     pub fn append_elements(&mut self, parent: u32, children: &[u32]) -> Result<(), HostErrorCode> {
@@ -334,14 +322,91 @@ mod tests {
         let c_node = state.doc.get_node(child as usize).unwrap();
         assert!(c_node.children.is_empty());
 
-        // 3. Child Already Has Parent - This is now INVALID unless we re-parent.
-        // My implementation returns "Child already has a parent" error for now if it is NOT the same parent.
+        // 3. Child Already Has Parent
         let parent2 = state.create_element("section".to_string());
         assert_eq!(
             state.append_element(parent2, child),
-            Err(HostErrorCode::ChildAlreadyHasParent) // Correct based on logic
+            Err(HostErrorCode::ChildAlreadyHasParent)
         );
         let c_node = state.doc.get_node(child as usize).unwrap();
         assert_eq!(c_node.parent, Some(parent as usize));
+    }
+
+    #[test]
+    fn test_recursive_in_document_flag() {
+        use crate::dom::NodeFlags;
+
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
+        let grandchild = state.create_element("em".to_string());
+
+        // Build subtree: parent -> child -> grandchild
+        state.append_element(parent, child).unwrap();
+        state.append_element(child, grandchild).unwrap();
+
+        // Attach parent to document root (id 0)
+        state.append_element(0, parent).unwrap();
+
+        // All three should have IS_IN_DOCUMENT
+        assert!(
+            state
+                .doc
+                .get_node(parent as usize)
+                .unwrap()
+                .flags
+                .contains(NodeFlags::IS_IN_DOCUMENT),
+            "parent should be in document"
+        );
+        assert!(
+            state
+                .doc
+                .get_node(child as usize)
+                .unwrap()
+                .flags
+                .contains(NodeFlags::IS_IN_DOCUMENT),
+            "child should be in document"
+        );
+        assert!(
+            state
+                .doc
+                .get_node(grandchild as usize)
+                .unwrap()
+                .flags
+                .contains(NodeFlags::IS_IN_DOCUMENT),
+            "grandchild should be in document"
+        );
+
+        // Detach parent from root
+        state.doc.detach_node(parent as usize);
+
+        // All three should no longer have IS_IN_DOCUMENT
+        assert!(
+            !state
+                .doc
+                .get_node(parent as usize)
+                .unwrap()
+                .flags
+                .contains(NodeFlags::IS_IN_DOCUMENT),
+            "parent should not be in document after detach"
+        );
+        assert!(
+            !state
+                .doc
+                .get_node(child as usize)
+                .unwrap()
+                .flags
+                .contains(NodeFlags::IS_IN_DOCUMENT),
+            "child should not be in document after detach"
+        );
+        assert!(
+            !state
+                .doc
+                .get_node(grandchild as usize)
+                .unwrap()
+                .flags
+                .contains(NodeFlags::IS_IN_DOCUMENT),
+            "grandchild should not be in document after detach"
+        );
     }
 }

@@ -29,8 +29,9 @@ pub enum NodeType {
 }
 
 pub struct PawsElement {
-    /// Unsafe pointer to the slab containing this node.
-    pub tree: *mut Slab<PawsElement>,
+    /// Raw pointer to the slab containing this node.
+    /// Only accessed via the safe `tree()` accessor or within the `engine` crate.
+    pub(crate) tree: *mut Slab<PawsElement>,
 
     /// The ID of this node in the slab.
     pub id: usize,
@@ -107,6 +108,10 @@ impl PawsElement {
     }
 
     pub fn tree(&self) -> &Slab<PawsElement> {
+        // SAFETY: The `tree` pointer is set during construction by Document, which owns
+        // the Box<Slab<PawsElement>> this pointer references. The Box ensures the slab
+        // is heap-allocated and never moved. We only produce a shared reference here,
+        // matching the shared access pattern (no mutable aliasing).
         unsafe { &*self.tree }
     }
 
