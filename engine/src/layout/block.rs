@@ -27,12 +27,6 @@ pub fn build_layout_tree(
     root_id: usize,
     taffy: &mut TaffyTree<()>,
 ) -> Option<NodeId> {
-    // 1. Traverse DOM
-    // 2. Create Taffy nodes
-    // 3. Compute styles (width/height/display) and convert to Taffy Style
-    // 4. Return Taffy NodeId
-
-    // Recursive helper
     build_subtree(doc, style_context, root_id, taffy)
 }
 
@@ -43,7 +37,6 @@ fn build_subtree(
     taffy: &mut TaffyTree<()>,
 ) -> Option<NodeId> {
     let node = doc.get_node(node_id)?;
-    // node is &Node.
 
     let display = node
         .get_computed_style_by_key(style_context, "display")
@@ -92,26 +85,17 @@ fn build_subtree(
                     children.push(child_node);
                 }
             }
-
-            // If explicit size not set, and has children, Taffy handles it.
-            // If it's a leaf element (no children), currently it collapses unless size set.
-
             taffy.new_with_children(style, &children).ok()
         }
         NodeType::Text => {
-            // Measure text
-            // Mock: font-size * char_count.
-            // Assume default font-size 16px.
             let font_size = 16.0;
-            // In real world, we'd check computed style "font-size".
-
             let char_count = node
                 .text_content
                 .as_ref()
                 .map(|s| s.chars().count())
                 .unwrap_or(0);
-            let width = char_count as f32 * font_size * 0.6; // approx width per char
-            let height = font_size; // line height approx
+            let width = char_count as f32 * font_size * 0.6;
+            let height = font_size;
 
             style.size.width = Dimension::Length(width);
             style.size.height = Dimension::Length(height);
