@@ -13,12 +13,14 @@ use stylo_atoms::Atom;
 use stylo_dom::ElementState;
 
 bitflags! {
+    /// Bitflags tracking node state within the DOM tree.
     #[derive(Clone, Copy, PartialEq, Eq, Default)]
     pub struct NodeFlags: u32 {
         const IS_IN_DOCUMENT = 0b00000100;
     }
 }
 
+/// The type of a DOM node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeType {
     Document,
@@ -28,6 +30,10 @@ pub enum NodeType {
     ShadowRoot,
 }
 
+/// A node in the Paws DOM tree, stored in a slab arena.
+///
+/// Integrates with Stylo for CSS style computation via
+/// [`AtomicRefCell`]-wrapped element data and selector flags.
 pub struct PawsElement {
     /// Raw pointer to the slab containing this node.
     /// Only accessed via the safe `tree()` accessor or within the `engine` crate.

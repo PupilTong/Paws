@@ -1,9 +1,11 @@
-use anyhow::Result;
 use markup5ever::{LocalName, QualName};
 
 use crate::dom::{Document, DomError};
 use crate::style::StyleContext;
 
+/// Error codes returned from host functions to WASM guests.
+///
+/// Uses `repr(i32)` for direct FFI compatibility with WASM's i32 return type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum HostErrorCode {
@@ -15,10 +17,12 @@ pub enum HostErrorCode {
 }
 
 impl HostErrorCode {
+    /// Returns the numeric error code for FFI.
     pub fn as_i32(self) -> i32 {
         self as i32
     }
 
+    /// Returns a human-readable description of this error code.
     pub fn message(self) -> &'static str {
         match self {
             HostErrorCode::InvalidParent => "invalid parent id",
@@ -30,12 +34,17 @@ impl HostErrorCode {
     }
 }
 
+/// Detailed error information stored in [`RuntimeState::last_error`].
 #[derive(Debug, Clone)]
 pub struct HostError {
     pub code: i32,
     pub message: String,
 }
 
+/// Top-level state container for the WASM host runtime.
+///
+/// Owns the [`Document`], [`StyleContext`], and stylesheet cache.
+/// All WASM-facing host functions operate through this struct.
 pub struct RuntimeState {
     pub doc: Document,
     pub last_error: Option<HostError>,
@@ -44,6 +53,7 @@ pub struct RuntimeState {
 }
 
 impl RuntimeState {
+    /// Creates a new runtime state with the given document URL.
     pub fn new(url_str: String) -> Self {
         let url = url::Url::parse(&url_str).expect("Valid Document URL");
         let context = StyleContext::new(url.clone());
@@ -61,22 +71,28 @@ impl RuntimeState {
             stylesheet_cache,
         }
     }
+    /// Creates a new HTML element with the given tag name. Returns the node ID.
     pub fn create_element(&mut self, tag: String) -> u32 {
         let name = QualName::new(None, markup5ever::ns!(html), LocalName::from(tag));
         self.doc.create_element(name) as u32
     }
 
+    /// Creates a new text node with the given content. Returns the node ID.
     pub fn create_text_node(&mut self, data: String) -> u32 {
         self.doc.create_text_node(data) as u32
     }
 
+    /// Removes an element and all its descendants from the DOM tree.
     pub fn destroy_element(&mut self, id: u32) -> Result<(), HostErrorCode> {
         self.doc.remove_node(id as usize).map_err(|e| match e {
+            DomError::InvalidParent => HostErrorCode::InvalidParent,
             DomError::InvalidChild => HostErrorCode::InvalidChild,
-            _ => HostErrorCode::InvalidChild,
+            DomError::CycleDetected => HostErrorCode::CycleDetected,
+            DomError::ChildAlreadyHasParent => HostErrorCode::ChildAlreadyHasParent,
         })
     }
 
+    /// Sets a single inline style property on an element.
     pub fn set_inline_style(
         &mut self,
         id: u32,
@@ -97,6 +113,7 @@ impl RuntimeState {
         }
     }
 
+    /// Parses and adds a CSS stylesheet to the document.
     pub fn add_stylesheet(&mut self, css: String) {
         // 1. Get or parse stylesheet from cache
         let sheet_arc = self.stylesheet_cache.get_or_parse(&css);
@@ -113,6 +130,7 @@ impl RuntimeState {
         self.style_context.add_stylesheet(added_sheet);
     }
 
+    /// Adds a pre-parsed stylesheet from rkyv-encoded IR bytes.
     pub fn add_parsed_stylesheet(&mut self, bytes: &[u8]) {
         use paws_style_ir::StyleSheetIR;
         use rkyv::rancor::Error;
@@ -149,6 +167,7 @@ impl RuntimeState {
         self.add_stylesheet(minified_css);
     }
 
+    /// Sets a DOM attribute on an element (e.g. `id`, `class`).
     pub fn set_attribute(
         &mut self,
         id: u32,
@@ -167,10 +186,12 @@ impl RuntimeState {
         }
     }
 
+    /// Clears the last stored error.
     pub fn clear_error(&mut self) {
         self.last_error = None;
     }
 
+    /// Stores an error and returns its numeric code.
     pub fn set_error(&mut self, code: HostErrorCode, message: impl Into<String>) -> i32 {
         self.last_error = Some(HostError {
             code: code.as_i32(),
@@ -179,6 +200,7 @@ impl RuntimeState {
         code.as_i32()
     }
 
+    /// Appends a child node to a parent node in the DOM tree.
     pub fn append_element(&mut self, parent: u32, child: u32) -> Result<(), HostErrorCode> {
         self.doc
             .append_child(parent as usize, child as usize)
@@ -190,8 +212,17 @@ impl RuntimeState {
             })
     }
 
+    /// Batch-appends multiple children to a parent with transactional pre-validation.
     pub fn append_elements(&mut self, parent: u32, children: &[u32]) -> Result<(), HostErrorCode> {
-        // Pre-validate
+        // Pre-validate: check for duplicates
+        let mut seen = fnv::FnvHashSet::default();
+        for &child in children {
+            if !seen.insert(child) {
+                return Err(HostErrorCode::InvalidChild);
+            }
+        }
+
+        // Pre-validate: check each child
         for &child in children {
             if self.doc.get_node(child as usize).is_none() {
                 return Err(HostErrorCode::InvalidChild);
@@ -222,8 +253,10 @@ mod tests {
         assert!(node.is_element());
         assert_eq!(node.name.as_ref().unwrap().local.as_ref(), "div");
 
+        // Attach to document root so resolve_style traverses it
+        state.append_element(0, id).unwrap();
+
         // Verify style application
-        // We must first resolve styles for the node to populate its computed_styles
         state.doc.resolve_style(&state.style_context);
 
         let color = state
@@ -408,5 +441,65 @@ mod tests {
                 .contains(NodeFlags::IS_IN_DOCUMENT),
             "grandchild should not be in document after detach"
         );
+    }
+
+    #[test]
+    fn test_remove_node_recursive_cleanup() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
+        let grandchild = state.create_element("em".to_string());
+
+        state.append_element(parent, child).unwrap();
+        state.append_element(child, grandchild).unwrap();
+
+        // Remove parent — child and grandchild should also be freed
+        state.destroy_element(parent).unwrap();
+
+        assert!(state.doc.get_node(parent as usize).is_none());
+        assert!(state.doc.get_node(child as usize).is_none());
+        assert!(state.doc.get_node(grandchild as usize).is_none());
+    }
+
+    #[test]
+    fn test_style_inheritance() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
+
+        state.append_element(0, parent).unwrap();
+        state.append_element(parent, child).unwrap();
+
+        // Set color on parent
+        state
+            .set_inline_style(parent, "color".to_string(), "red".to_string())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+
+        // Child should inherit color from parent
+        let child_color = state
+            .doc
+            .get_node(child as usize)
+            .unwrap()
+            .get_computed_style_by_key(&state.style_context, "color")
+            .expect("child should have computed color");
+
+        assert_eq!(child_color, "rgb(255, 0, 0)");
+    }
+
+    #[test]
+    fn test_append_elements_rejects_duplicates() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
+
+        assert_eq!(
+            state.append_elements(parent, &[child, child]),
+            Err(HostErrorCode::InvalidChild)
+        );
+        // Parent should have no children since the operation was rejected
+        let p = state.doc.get_node(parent as usize).unwrap();
+        assert!(p.children.is_empty());
     }
 }

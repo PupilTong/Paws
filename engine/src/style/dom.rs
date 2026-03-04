@@ -221,7 +221,7 @@ impl<'a> TElement for &'a PawsElement {
     }
 
     fn is_html_document_body_element(&self) -> bool {
-        unreachable!("Paws does not support quirks mode");
+        false
     }
 
     fn synthesize_presentational_hints_for_legacy_attributes<V>(

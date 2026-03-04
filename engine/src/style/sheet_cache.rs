@@ -8,6 +8,9 @@ use style::servo_arc::Arc;
 use style::shared_lock::SharedRwLock;
 use style::stylesheets::{AllowImportRules, Origin, Stylesheet, StylesheetContents, UrlExtraData};
 
+/// Thread-safe cache that deduplicates parsed stylesheets by CSS text.
+///
+/// Uses double-checked locking: read lock for cache hits, write lock only on miss.
 pub struct StylesheetCache {
     cache: RwLock<HashMap<String, Arc<StylesheetContents>>>,
     lock: SharedRwLock,

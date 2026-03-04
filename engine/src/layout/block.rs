@@ -1,18 +1,22 @@
 use crate::dom::NodeType;
+use crate::layout::text::TextMeasurer;
 use taffy::prelude::*;
 
+/// The result of a layout computation, containing the final dimensions.
 pub struct LayoutBox {
     pub width: f32,
     pub height: f32,
 }
 
+/// Computes the layout for a subtree rooted at `id`, returning its dimensions.
 pub fn compute_layout(
     doc: &crate::dom::Document,
     style_context: &crate::style::StyleContext,
     id: usize,
+    text_measurer: &dyn TextMeasurer,
 ) -> Option<LayoutBox> {
     let mut taffy = TaffyTree::<()>::new();
-    let root_node = build_layout_tree(doc, style_context, id, &mut taffy)?;
+    let root_node = build_layout_tree(doc, style_context, id, &mut taffy, text_measurer)?;
     taffy.compute_layout(root_node, Size::MAX_CONTENT).ok()?;
     let layout = taffy.layout(root_node).ok()?;
     Some(LayoutBox {
@@ -21,13 +25,15 @@ pub fn compute_layout(
     })
 }
 
+/// Builds a Taffy layout tree from the DOM subtree rooted at `root_id`.
 pub fn build_layout_tree(
     doc: &crate::dom::Document,
     style_context: &crate::style::StyleContext,
     root_id: usize,
     taffy: &mut TaffyTree<()>,
+    text_measurer: &dyn TextMeasurer,
 ) -> Option<NodeId> {
-    build_subtree(doc, style_context, root_id, taffy)
+    build_subtree(doc, style_context, root_id, taffy, text_measurer)
 }
 
 fn build_subtree(
@@ -35,6 +41,7 @@ fn build_subtree(
     style_context: &crate::style::StyleContext,
     node_id: usize,
     taffy: &mut TaffyTree<()>,
+    text_measurer: &dyn TextMeasurer,
 ) -> Option<NodeId> {
     let node = doc.get_node(node_id)?;
 
@@ -81,21 +88,21 @@ fn build_subtree(
         NodeType::Element => {
             let mut children = Vec::new();
             for &child_id in &node.children {
-                if let Some(child_node) = build_subtree(doc, style_context, child_id, taffy) {
+                if let Some(child_node) =
+                    build_subtree(doc, style_context, child_id, taffy, text_measurer)
+                {
                     children.push(child_node);
                 }
             }
             taffy.new_with_children(style, &children).ok()
         }
         NodeType::Text => {
-            let font_size = 16.0;
-            let char_count = node
-                .text_content
-                .as_ref()
-                .map(|s| s.chars().count())
-                .unwrap_or(0);
-            let width = char_count as f32 * font_size * 0.6;
-            let height = font_size;
+            let font_size = node
+                .get_computed_style_by_key(style_context, "font-size")
+                .and_then(|s| s.trim_end_matches("px").parse::<f32>().ok())
+                .unwrap_or(16.0);
+            let text = node.text_content.as_deref().unwrap_or("");
+            let (width, height) = text_measurer.measure_text(text, font_size, None);
 
             style.size.width = Dimension::Length(width);
             style.size.height = Dimension::Length(height);

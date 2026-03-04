@@ -29,6 +29,10 @@ impl std::fmt::Display for DomError {
 
 impl std::error::Error for DomError {}
 
+/// The document tree, backed by a [`Slab`] arena for cache-friendly access.
+///
+/// Owns all DOM nodes and manages tree mutations (append, detach, remove)
+/// with cycle detection and IS_IN_DOCUMENT flag propagation.
 pub struct Document {
     /// A slab-backed tree of nodes
     pub nodes: Box<Slab<PawsElement>>,
@@ -135,13 +139,15 @@ impl Document {
 
         // Check if child already has a parent
         let old_parent = self.nodes[child_id].parent;
-        if old_parent == Some(parent_id) {
-            self.detach_node(child_id);
-        } else if old_parent.is_some() {
+        let needs_detach = old_parent == Some(parent_id);
+        if !needs_detach && old_parent.is_some() {
             return Err(DomError::ChildAlreadyHasParent);
         }
 
-        // 2. Mutation
+        // 2. Mutation — all validation is complete above
+        if needs_detach {
+            self.detach_node(child_id);
+        }
         // Add to parent's children
         let mut parent_in_doc = false;
         if let Some(parent) = self.nodes.get_mut(parent_id) {
@@ -208,19 +214,66 @@ impl Document {
             return Err(DomError::InvalidChild);
         }
         self.detach_node(id);
-        self.nodes.remove(id);
+
+        // Recursively collect all descendants (including `id` itself) and remove them.
+        // Uses iterative DFS to avoid stack overflow on deep trees.
+        let mut to_remove = Vec::new();
+        let mut stack = vec![id];
+        while let Some(current) = stack.pop() {
+            to_remove.push(current);
+            if let Some(node) = self.nodes.get(current) {
+                stack.extend(node.children.iter().copied());
+            }
+        }
+        for node_id in to_remove {
+            if self.nodes.contains(node_id) {
+                self.nodes.remove(node_id);
+            }
+        }
         Ok(())
     }
 
+    /// Resolves CSS styles for all element nodes in the document tree.
+    ///
+    /// Uses BFS traversal from the root to ensure parents are styled before
+    /// children, which is required for CSS inheritance to work correctly.
     pub fn resolve_style(&mut self, style_context: &crate::style::StyleContext) {
-        // Collect IDs to avoid borrowing issues while iterating
-        let ids: Vec<usize> = self.nodes.iter().map(|(id, _)| id).collect();
-        for id in ids {
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(self.root);
+
+        while let Some(id) = queue.pop_front() {
             if let Some(node) = self.nodes.get(id) {
                 if node.is_element() {
-                    let computed = crate::style::compute_style_for_node(self, style_context, node);
+                    let parent_style = node
+                        .parent
+                        .and_then(|pid| self.nodes.get(pid))
+                        .and_then(|p| p.computed_values.as_ref())
+                        .cloned();
+                    let computed = crate::style::compute_style_for_node(
+                        self,
+                        style_context,
+                        node,
+                        parent_style.as_deref(),
+                    );
+                    // Re-borrow to enqueue children before mutable borrow
+                    let children: Vec<usize> = self
+                        .nodes
+                        .get(id)
+                        .map_or(Vec::new(), |n| n.children.clone());
+                    for &child_id in &children {
+                        queue.push_back(child_id);
+                    }
                     if let Some(mut_node) = self.nodes.get_mut(id) {
                         mut_node.computed_values = Some(computed);
+                    }
+                } else {
+                    // Non-element nodes: still enqueue children for traversal
+                    let children: Vec<usize> = self
+                        .nodes
+                        .get(id)
+                        .map_or(Vec::new(), |n| n.children.clone());
+                    for &child_id in &children {
+                        queue.push_back(child_id);
                     }
                 }
             }

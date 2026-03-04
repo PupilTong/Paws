@@ -8,7 +8,6 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1"
 taffy = "0.4"
 # Note: Stylo is a complex crate from Mozilla; this is a light-weight usage surface.
 # The crate name is `style` in Gecko; here we use `stylo` when available on crates.io.

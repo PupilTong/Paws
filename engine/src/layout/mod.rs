@@ -25,3 +25,4 @@ pub mod block;
 pub mod text;
 
 pub use block::{compute_layout, LayoutBox};
+pub use text::{MockTextMeasurer, TextMeasurer};
