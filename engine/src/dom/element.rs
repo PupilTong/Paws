@@ -15,14 +15,14 @@ use stylo_dom::ElementState;
 bitflags! {
     /// Bitflags tracking node state within the DOM tree.
     #[derive(Clone, Copy, PartialEq, Eq, Default)]
-    pub struct NodeFlags: u32 {
+    pub(crate) struct NodeFlags: u32 {
         const IS_IN_DOCUMENT = 0b00000100;
     }
 }
 
 /// The type of a DOM node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NodeType {
+pub(crate) enum NodeType {
     Document,
     Element,
     Text,
@@ -49,40 +49,40 @@ pub struct PawsElement {
     pub children: Vec<usize>,
 
     /// Node flags.
-    pub flags: NodeFlags,
-    pub node_type: NodeType,
+    pub(crate) flags: NodeFlags,
+    pub(crate) node_type: NodeType,
 
     // Element data
-    pub name: Option<QualName>,
-    pub id_attr: Option<Atom>,
-    pub attrs: HashMap<Atom, String>,
-    pub classes: HashSet<Atom>,
-    pub style_attribute: Option<Arc<Locked<PropertyDeclarationBlock>>>,
-    pub shadow_root_id: Option<usize>,
+    pub(crate) name: Option<QualName>,
+    pub(crate) id_attr: Option<Atom>,
+    pub(crate) attrs: HashMap<Atom, String>,
+    pub(crate) classes: HashSet<Atom>,
+    pub(crate) style_attribute: Option<Arc<Locked<PropertyDeclarationBlock>>>,
+    pub(crate) shadow_root_id: Option<usize>,
 
     // Text data
-    pub text_content: Option<String>,
+    pub(crate) text_content: Option<String>,
 
     /// Stylo integration data.
-    pub stylo_element_data: AtomicRefCell<Option<StyloElementData>>,
+    pub(crate) stylo_element_data: AtomicRefCell<Option<StyloElementData>>,
 
     /// Cached computed styles from the latest layout/style resolution pass.
-    pub computed_values: Option<Arc<style::properties::ComputedValues>>,
+    pub(crate) computed_values: Option<Arc<style::properties::ComputedValues>>,
 
     /// Selector flags for invalidation
-    pub selector_flags: AtomicRefCell<ElementSelectorFlags>,
+    pub(crate) selector_flags: AtomicRefCell<ElementSelectorFlags>,
 
-    pub guard: SharedRwLock,
+    pub(crate) guard: SharedRwLock,
 
     /// Element state (hover, focus, etc.).
-    pub element_state: ElementState,
+    pub(crate) element_state: ElementState,
 
     /// Dirty descendants flag for Stylo.
-    pub dirty_descendants: AtomicBool,
+    pub(crate) dirty_descendants: AtomicBool,
 }
 
 impl PawsElement {
-    pub fn new(
+    pub(crate) fn new(
         tree: *mut Slab<PawsElement>,
         id: usize,
         guard: SharedRwLock,
@@ -113,7 +113,7 @@ impl PawsElement {
         }
     }
 
-    pub fn tree(&self) -> &Slab<PawsElement> {
+    pub(crate) fn tree(&self) -> &Slab<PawsElement> {
         // SAFETY: The `tree` pointer is set during construction by Document, which owns
         // the Box<Slab<PawsElement>> this pointer references. The Box ensures the slab
         // is heap-allocated and never moved. We only produce a shared reference here,
@@ -121,7 +121,7 @@ impl PawsElement {
         unsafe { &*self.tree }
     }
 
-    pub fn with(&self, id: usize) -> &PawsElement {
+    pub(crate) fn with(&self, id: usize) -> &PawsElement {
         self.tree().get(id).expect("Node not found in slab")
     }
 
@@ -145,19 +145,19 @@ impl PawsElement {
         crate::style::serialize_computed_value(computed, longhand)
     }
 
-    pub fn set_dirty_descendants(&self) {
+    pub(crate) fn set_dirty_descendants(&self) {
         self.dirty_descendants.store(true, Ordering::Relaxed);
     }
 
-    pub fn unset_dirty_descendants(&self) {
+    pub(crate) fn unset_dirty_descendants(&self) {
         self.dirty_descendants.store(false, Ordering::Relaxed);
     }
 
-    pub fn has_dirty_descendants(&self) -> bool {
+    pub(crate) fn has_dirty_descendants(&self) -> bool {
         self.dirty_descendants.load(Ordering::Relaxed)
     }
 
-    pub fn mark_ancestors_dirty(&self) {
+    pub(crate) fn mark_ancestors_dirty(&self) {
         let mut current_id = self.parent;
         while let Some(parent_id) = current_id {
             let parent = self.with(parent_id);
@@ -168,7 +168,7 @@ impl PawsElement {
         }
     }
 
-    pub fn set_attribute(&mut self, name: &str, value: &str) {
+    pub(crate) fn set_attribute(&mut self, name: &str, value: &str) {
         let atom_name = Atom::from(name);
         self.attrs.insert(atom_name.clone(), value.to_string());
 
@@ -184,7 +184,7 @@ impl PawsElement {
         }
     }
 
-    pub fn has_class(&self, name: &Atom) -> bool {
+    pub(crate) fn has_class(&self, name: &Atom) -> bool {
         self.classes.contains(name)
     }
 }

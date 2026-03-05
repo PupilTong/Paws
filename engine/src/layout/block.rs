@@ -27,7 +27,7 @@ pub fn compute_layout(
 }
 
 /// Builds a Taffy layout tree from the DOM subtree rooted at `root_id`.
-pub fn build_layout_tree(
+pub(crate) fn build_layout_tree(
     doc: &crate::dom::Document,
     root_id: usize,
     taffy: &mut TaffyTree<()>,

@@ -17,18 +17,18 @@ pub struct StylesheetCache {
 }
 
 impl StylesheetCache {
-    pub fn new(lock: SharedRwLock) -> Self {
+    pub(crate) fn new(lock: SharedRwLock) -> Self {
         Self {
             cache: RwLock::new(HashMap::new()),
             lock,
         }
     }
 
-    pub fn get_or_parse(&self, css: &str) -> Arc<Stylesheet> {
+    pub(crate) fn get_or_parse(&self, css: &str) -> Arc<Stylesheet> {
         self.load_cached(css, css)
     }
 
-    pub fn load_cached(&self, key: &str, css: &str) -> Arc<Stylesheet> {
+    pub(crate) fn load_cached(&self, key: &str, css: &str) -> Arc<Stylesheet> {
         // 1. Try Read Lock
         {
             let cache = self.cache.read().unwrap();

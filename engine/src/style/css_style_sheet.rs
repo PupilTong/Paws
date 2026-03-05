@@ -7,7 +7,7 @@ pub struct CSSStyleSheet {
 }
 
 impl CSSStyleSheet {
-    pub fn new(sheet: Arc<Stylesheet>) -> Self {
+    pub(crate) fn new(sheet: Arc<Stylesheet>) -> Self {
         Self { sheet }
     }
 }

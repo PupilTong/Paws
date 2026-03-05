@@ -27,14 +27,14 @@ use url::Url;
 
 use crate::dom::PawsElement;
 
-pub mod convert;
-pub mod css_style_sheet;
-pub mod dom;
-pub mod sheet_cache;
+pub(crate) mod convert;
+pub(crate) mod css_style_sheet;
+pub(crate) mod dom;
+pub(crate) mod sheet_cache;
 
-pub use convert::to_taffy_style;
-pub use css_style_sheet::CSSStyleSheet;
-pub use sheet_cache::StylesheetCache;
+pub(crate) use convert::to_taffy_style;
+pub(crate) use css_style_sheet::CSSStyleSheet;
+pub(crate) use sheet_cache::StylesheetCache;
 
 #[derive(Debug, Default)]
 struct SimpleFontMetricsProvider;
@@ -94,7 +94,7 @@ fn build_device() -> Device {
 /// Parses only the new property value (not the entire block) and merges it
 /// into the existing `PropertyDeclarationBlock`, avoiding the overhead of
 /// serializing and re-parsing the full style attribute.
-pub fn update_inline_style(
+pub(crate) fn update_inline_style(
     context: &StyleContext,
     element: &mut PawsElement,
     name: &str,
@@ -288,16 +288,16 @@ pub(crate) fn serialize_computed_value(
 
 /// Holds the Stylo styling engine state: the `Stylist`, rule tree, and shared lock.
 pub struct StyleContext {
-    pub stylist: Stylist,
-    pub rule_tree: RuleTree,
-    pub lock: SharedRwLock,
-    pub url: Url,
-    pub url_data: UrlExtraData,
+    pub(crate) stylist: Stylist,
+    pub(crate) rule_tree: RuleTree,
+    pub(crate) lock: SharedRwLock,
+    pub(crate) url: Url,
+    pub(crate) url_data: UrlExtraData,
 }
 
 impl StyleContext {
     /// Creates a new style context with default device settings (800x600 viewport).
-    pub fn new(url: url::Url) -> Self {
+    pub(crate) fn new(url: url::Url) -> Self {
         let lock = SharedRwLock::new();
         let device = build_device();
         let stylist = Stylist::new(device, QuirksMode::NoQuirks);
@@ -316,7 +316,7 @@ impl StyleContext {
     }
 
     /// Appends a stylesheet to the stylist and flushes the cascade.
-    pub fn add_stylesheet(&mut self, sheet: &CSSStyleSheet) {
+    pub(crate) fn add_stylesheet(&mut self, sheet: &CSSStyleSheet) {
         let document_stylesheet = stylo::stylesheets::DocumentStyleSheet(sheet.sheet.clone());
         let guard = self.lock.read();
         self.stylist.append_stylesheet(document_stylesheet, &guard);

@@ -22,9 +22,11 @@ DOM Module Architecture & Socratic Reasoning
    - **Improvement**: We enforce stricter bounds on DOM APIs, rejecting deprecated methods early, keeping the API surface minimal and robust.
 */
 
-pub mod api;
-pub mod document;
-pub mod element;
+pub(crate) mod api;
+pub(crate) mod document;
+pub(crate) mod element;
 
-pub use document::{Document, DomError};
-pub use element::{NodeFlags, NodeType, PawsElement};
+pub use document::Document;
+pub(crate) use document::DomError;
+pub use element::PawsElement;
+pub(crate) use element::{NodeFlags, NodeType};

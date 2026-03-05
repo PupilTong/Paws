@@ -38,7 +38,7 @@ impl HostErrorCode {
 #[derive(Debug, Clone)]
 pub struct HostError {
     pub code: i32,
-    pub message: String,
+    pub(crate) message: String,
 }
 
 /// Top-level state container for the WASM host runtime.
@@ -49,7 +49,7 @@ pub struct RuntimeState {
     pub doc: Document,
     pub last_error: Option<HostError>,
     pub style_context: StyleContext,
-    pub stylesheet_cache: crate::style::StylesheetCache,
+    pub(crate) stylesheet_cache: crate::style::StylesheetCache,
 }
 
 impl RuntimeState {

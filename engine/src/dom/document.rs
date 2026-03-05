@@ -5,7 +5,7 @@ use style::shared_lock::SharedRwLock;
 
 /// Errors that can occur during DOM tree operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DomError {
+pub(crate) enum DomError {
     /// The specified parent node ID does not exist in the tree.
     InvalidParent,
     /// The specified child node ID does not exist in the tree.
@@ -35,23 +35,23 @@ impl std::error::Error for DomError {}
 /// with cycle detection and IS_IN_DOCUMENT flag propagation.
 pub struct Document {
     /// A slab-backed tree of nodes
-    pub nodes: Box<Slab<PawsElement>>,
+    pub(crate) nodes: Box<Slab<PawsElement>>,
 
     /// Stylo shared lock
-    pub guard: SharedRwLock,
+    pub(crate) guard: SharedRwLock,
 
     /// Root node ID
-    pub root: usize,
+    pub(crate) root: usize,
 
     /// Document stylesheets
-    pub stylesheets: Vec<crate::style::CSSStyleSheet>,
+    pub(crate) stylesheets: Vec<crate::style::CSSStyleSheet>,
 
     /// Document URL
-    pub url: url::Url,
+    pub(crate) url: url::Url,
 }
 
 impl Document {
-    pub fn new(guard: SharedRwLock, url: url::Url) -> Self {
+    pub(crate) fn new(guard: SharedRwLock, url: url::Url) -> Self {
         let mut nodes = Box::new(Slab::new());
         let slab_ptr = nodes.as_mut() as *mut Slab<PawsElement>;
 
@@ -78,7 +78,7 @@ impl Document {
         }
     }
 
-    pub fn tree(&self) -> &Slab<PawsElement> {
+    pub(crate) fn tree(&self) -> &Slab<PawsElement> {
         &self.nodes
     }
 
@@ -86,11 +86,11 @@ impl Document {
         self.nodes.get(id)
     }
 
-    pub fn get_node_mut(&mut self, id: usize) -> Option<&mut PawsElement> {
+    pub(crate) fn get_node_mut(&mut self, id: usize) -> Option<&mut PawsElement> {
         self.nodes.get_mut(id)
     }
 
-    pub fn create_node(&mut self, node_type: NodeType) -> usize {
+    pub(crate) fn create_node(&mut self, node_type: NodeType) -> usize {
         let slab_ptr = self.nodes.as_mut() as *mut Slab<PawsElement>;
         let guard = self.guard.clone();
 
@@ -101,21 +101,21 @@ impl Document {
         id
     }
 
-    pub fn create_element(&mut self, name: QualName) -> usize {
+    pub(crate) fn create_element(&mut self, name: QualName) -> usize {
         let id = self.create_node(NodeType::Element);
         let el = self.nodes.get_mut(id).unwrap();
         el.name = Some(name);
         id
     }
 
-    pub fn create_text_node(&mut self, content: String) -> usize {
+    pub(crate) fn create_text_node(&mut self, content: String) -> usize {
         let id = self.create_node(NodeType::Text);
         let el = self.nodes.get_mut(id).unwrap();
         el.text_content = Some(content);
         id
     }
 
-    pub fn append_child(&mut self, parent_id: usize, child_id: usize) -> Result<(), DomError> {
+    pub(crate) fn append_child(&mut self, parent_id: usize, child_id: usize) -> Result<(), DomError> {
         // 1. Transactional Pre-Checks
         if !self.nodes.contains(parent_id) {
             return Err(DomError::InvalidParent);
@@ -193,7 +193,7 @@ impl Document {
         }
     }
 
-    pub fn detach_node(&mut self, node_id: usize) {
+    pub(crate) fn detach_node(&mut self, node_id: usize) {
         let parent_id = self.nodes.get(node_id).and_then(|n| n.parent);
         if let Some(parent_id) = parent_id {
             if let Some(parent) = self.nodes.get_mut(parent_id) {
@@ -209,7 +209,7 @@ impl Document {
         }
     }
 
-    pub fn remove_node(&mut self, id: usize) -> Result<(), DomError> {
+    pub(crate) fn remove_node(&mut self, id: usize) -> Result<(), DomError> {
         if !self.nodes.contains(id) {
             return Err(DomError::InvalidChild);
         }

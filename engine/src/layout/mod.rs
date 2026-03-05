@@ -21,8 +21,8 @@ Layout Module Architecture & Socratic Reasoning
    - **Improvement**: Clean split between `layout::block` (Taffy) and `layout::text` (OS integration).
 */
 
-pub mod block;
-pub mod text;
+pub(crate) mod block;
+pub(crate) mod text;
 
 pub use block::{compute_layout, LayoutBox};
 pub use text::{MockTextMeasurer, TextMeasurer};
