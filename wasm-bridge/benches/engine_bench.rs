@@ -18,7 +18,6 @@ fn bench_computed_style(c: &mut Criterion) {
             let text_measurer = engine::layout::MockTextMeasurer;
             engine::layout::compute_layout(
                 black_box(&state.doc),
-                black_box(&state.style_context),
                 black_box(id as usize),
                 &text_measurer,
             );

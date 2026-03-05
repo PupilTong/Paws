@@ -27,10 +27,12 @@ use url::Url;
 
 use crate::dom::PawsElement;
 
+pub mod convert;
 pub mod css_style_sheet;
 pub mod dom;
 pub mod sheet_cache;
 
+pub use convert::to_taffy_style;
 pub use css_style_sheet::CSSStyleSheet;
 pub use sheet_cache::StylesheetCache;
 

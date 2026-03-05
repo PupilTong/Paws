@@ -34,13 +34,8 @@ pub fn hello_engine() -> String {
 
     // 3) Layout: build Taffy tree
     let text_measurer = engine::layout::MockTextMeasurer;
-    let layout = engine::layout::compute_layout(
-        &state.doc,
-        &state.style_context,
-        id as usize,
-        &text_measurer,
-    )
-    .expect("get layout");
+    let layout = engine::layout::compute_layout(&state.doc, id as usize, &text_measurer)
+        .expect("get layout");
 
     // Compute style for verification string
     let display = state
