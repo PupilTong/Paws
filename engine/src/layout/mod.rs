@@ -24,5 +24,5 @@ Layout Module Architecture & Socratic Reasoning
 pub(crate) mod block;
 pub(crate) mod text;
 
-pub use block::{compute_layout, LayoutBox};
+pub use block::{LayoutBox, LayoutState};
 pub use text::{MockTextMeasurer, TextMeasurer};

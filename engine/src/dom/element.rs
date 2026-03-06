@@ -132,18 +132,6 @@ impl PawsElement {
     pub fn is_text_node(&self) -> bool {
         self.node_type == NodeType::Text
     }
-    pub fn get_computed_style_by_key(
-        &self,
-        state: &crate::style::StyleContext,
-        key: &str,
-    ) -> Option<String> {
-        let parser_context = crate::style::build_parser_context(&state.url_data);
-        let property_id = crate::style::PropertyId::parse(key, &parser_context).ok()?;
-        let longhand = property_id.longhand_id()?;
-
-        let computed = self.computed_values.as_ref()?;
-        crate::style::serialize_computed_value(computed, longhand)
-    }
 
     pub(crate) fn set_dirty_descendants(&self) {
         self.dirty_descendants.store(true, Ordering::Relaxed);

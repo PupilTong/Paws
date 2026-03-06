@@ -115,7 +115,11 @@ impl Document {
         id
     }
 
-    pub(crate) fn append_child(&mut self, parent_id: usize, child_id: usize) -> Result<(), DomError> {
+    pub(crate) fn append_child(
+        &mut self,
+        parent_id: usize,
+        child_id: usize,
+    ) -> Result<(), DomError> {
         // 1. Transactional Pre-Checks
         if !self.nodes.contains(parent_id) {
             return Err(DomError::InvalidParent);
@@ -169,28 +173,35 @@ impl Document {
         Ok(())
     }
 
-    /// Recursively sets the IS_IN_DOCUMENT flag on a node and all its descendants.
-    /// Uses iterative (stack-based) traversal to avoid stack overflow on deep trees.
-    fn propagate_in_document_flag(&mut self, node_id: usize) {
+    /// Recursively iterates over a node and its descendants in DFS order.
+    fn traverse_nodes_dfs_mut(&mut self, node_id: usize, mut f: impl FnMut(&mut PawsElement)) {
         let mut stack = vec![node_id];
         while let Some(id) = stack.pop() {
             if let Some(node) = self.nodes.get_mut(id) {
-                node.flags.insert(NodeFlags::IS_IN_DOCUMENT);
                 stack.extend(node.children.iter().copied());
+                f(node);
             }
         }
     }
 
-    /// Recursively clears the IS_IN_DOCUMENT flag on a node and all its descendants.
-    /// Uses iterative (stack-based) traversal to avoid stack overflow on deep trees.
-    fn clear_in_document_flag(&mut self, node_id: usize) {
+    fn traverse_nodes_dfs(&self, node_id: usize, mut f: impl FnMut(&PawsElement)) {
         let mut stack = vec![node_id];
         while let Some(id) = stack.pop() {
-            if let Some(node) = self.nodes.get_mut(id) {
-                node.flags.remove(NodeFlags::IS_IN_DOCUMENT);
+            if let Some(node) = self.nodes.get(id) {
                 stack.extend(node.children.iter().copied());
+                f(node);
             }
         }
+    }
+
+    /// Recursively sets the IS_IN_DOCUMENT flag on a node and all its descendants.
+    fn propagate_in_document_flag(&mut self, node_id: usize) {
+        self.traverse_nodes_dfs_mut(node_id, |node| node.flags.insert(NodeFlags::IS_IN_DOCUMENT));
+    }
+
+    /// Recursively clears the IS_IN_DOCUMENT flag on a node and all its descendants.
+    fn clear_in_document_flag(&mut self, node_id: usize) {
+        self.traverse_nodes_dfs_mut(node_id, |node| node.flags.remove(NodeFlags::IS_IN_DOCUMENT));
     }
 
     pub(crate) fn detach_node(&mut self, node_id: usize) {
@@ -216,15 +227,9 @@ impl Document {
         self.detach_node(id);
 
         // Recursively collect all descendants (including `id` itself) and remove them.
-        // Uses iterative DFS to avoid stack overflow on deep trees.
         let mut to_remove = Vec::new();
-        let mut stack = vec![id];
-        while let Some(current) = stack.pop() {
-            to_remove.push(current);
-            if let Some(node) = self.nodes.get(current) {
-                stack.extend(node.children.iter().copied());
-            }
-        }
+        self.traverse_nodes_dfs(id, |node| to_remove.push(node.id));
+
         for node_id in to_remove {
             if self.nodes.contains(node_id) {
                 self.nodes.remove(node_id);

@@ -21,8 +21,8 @@ This repository supports LLM-based assistants. The working language is English.
 - For non-thread-safe non-cryptographic keys (like integers), use `FnvHashMap` instead of `HashMap`.
 - No `println!`/`eprintln!`/`dbg!` in production code.
 - All `unsafe` blocks must have a `// SAFETY:` comment explaining the invariant.
+- Prefer to use `pub(crate)` or keep fields/methods private by default unless they explicitly need to be public.
 - On every code change, assess whether agents.md needs an update and update it when needed.
-
 ## Repository Structure
 
 - `engine/`: core logic (DOM, Style, Layout). A pure Rust library with no host dependencies.

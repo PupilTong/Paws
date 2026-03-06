@@ -10,20 +10,43 @@ pub struct LayoutBox {
     pub height: f32,
 }
 
-/// Computes the layout for a subtree rooted at `id`, returning its dimensions.
-pub fn compute_layout(
-    doc: &crate::dom::Document,
-    id: usize,
-    text_measurer: &dyn TextMeasurer,
-) -> Option<LayoutBox> {
-    let mut taffy = TaffyTree::<()>::new();
-    let root_node = build_layout_tree(doc, id, &mut taffy, text_measurer)?;
-    taffy.compute_layout(root_node, Size::MAX_CONTENT).ok()?;
-    let layout = taffy.layout(root_node).ok()?;
-    Some(LayoutBox {
-        width: layout.size.width,
-        height: layout.size.height,
-    })
+pub struct LayoutState {
+    pub taffy: TaffyTree<()>,
+    // Future incremental node map would go here
+}
+
+impl Default for LayoutState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LayoutState {
+    pub fn new() -> Self {
+        Self {
+            taffy: TaffyTree::new(),
+        }
+    }
+
+    /// Computes the layout for a subtree rooted at `id`, returning its dimensions.
+    /// Uses a persistent Taffy instance to reuse allocations.
+    pub fn compute_layout(
+        &mut self,
+        doc: &crate::dom::Document,
+        id: usize,
+        text_measurer: &dyn TextMeasurer,
+    ) -> Option<LayoutBox> {
+        self.taffy.clear();
+        let root_node = build_layout_tree(doc, id, &mut self.taffy, text_measurer)?;
+        self.taffy
+            .compute_layout(root_node, Size::MAX_CONTENT)
+            .ok()?;
+        let layout = self.taffy.layout(root_node).ok()?;
+        Some(LayoutBox {
+            width: layout.size.width,
+            height: layout.size.height,
+        })
+    }
 }
 
 /// Builds a Taffy layout tree from the DOM subtree rooted at `root_id`.

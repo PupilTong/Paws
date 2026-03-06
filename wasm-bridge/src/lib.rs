@@ -34,27 +34,14 @@ pub fn hello_engine() -> String {
 
     // 3) Layout: build Taffy tree
     let text_measurer = engine::layout::MockTextMeasurer;
-    let layout = engine::layout::compute_layout(&state.doc, id as usize, &text_measurer)
+    let mut layout_state = engine::layout::LayoutState::new();
+    let layout = layout_state
+        .compute_layout(&state.doc, id as usize, &text_measurer)
         .expect("get layout");
 
-    // Compute style for verification string
-    let display = state
-        .doc
-        .get_node(id as usize)
-        .unwrap()
-        .get_computed_style_by_key(&state.style_context, "display");
-    let height = state
-        .doc
-        .get_node(id as usize)
-        .unwrap()
-        .get_computed_style_by_key(&state.style_context, "height");
-
     format!(
-        "wasm module ok\nlayout={{w:{}, h:{}}}\nstyle={{display:{}, height:{}}}",
-        layout.width,
-        layout.height,
-        display.as_deref().unwrap_or("none"),
-        height.as_deref().unwrap_or("none")
+        "wasm module ok\nlayout={{w:{}, h:{}}}",
+        layout.width, layout.height
     )
 }
 
@@ -70,8 +57,7 @@ mod tests {
         println!("HELLO ENGINE OUTPUT:\n{}", msg);
         assert!(msg.contains("wasm module ok"));
         assert!(msg.contains("layout={w:120"));
-        assert!(msg.contains("style={display:block"));
-        assert!(msg.contains("height:80px"));
+        assert!(msg.contains("h:80}"));
     }
 
     #[test]
@@ -116,13 +102,11 @@ mod tests {
         // Resolve styles first
         state.doc.resolve_style(&state.style_context);
 
-        let height = state
-            .doc
-            .get_node(id as usize)
-            .unwrap()
-            .get_computed_style_by_key(&state.style_context, "height")
-            .expect("computed height");
-        assert_eq!(height, "100px");
+        let mut layout_state = engine::layout::LayoutState::new();
+        let layout = layout_state
+            .compute_layout(&state.doc, id as usize, &engine::layout::MockTextMeasurer)
+            .expect("layout");
+        assert_eq!(layout.height, 100.0);
     }
 
     #[test]
@@ -410,7 +394,7 @@ mod tests {
     (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
-    (data (i32.const 16) "div { color: red; }\00")
+    (data (i32.const 16) "div { height: 77px; }\00")
     (func (export "run") (result i32)
         (local $id i32)
         (local.set $id (call $create (i32.const 0)))
@@ -441,13 +425,10 @@ mod tests {
         // Resolve styles first
         state.doc.resolve_style(&state.style_context);
 
-        let color = state
-            .doc
-            .get_node(id as usize)
-            .unwrap()
-            .get_computed_style_by_key(&state.style_context, "color")
-            .expect("computed color");
-
-        assert_eq!(color, "rgb(255, 0, 0)");
+        let mut layout_state = engine::layout::LayoutState::new();
+        let layout = layout_state
+            .compute_layout(&state.doc, id as usize, &engine::layout::MockTextMeasurer)
+            .expect("layout");
+        assert_eq!(layout.height, 77.0);
     }
 }

@@ -11,26 +11,18 @@ fn bench_computed_style(c: &mut Criterion) {
         .set_inline_style(id, "height".to_string(), "100px".to_string())
         .expect("set style");
     // Verify node exists
-    assert!(state.doc.nodes.contains(id as usize));
+    assert!(state.doc.get_node(id as usize).is_some());
+
+    let mut layout_state = engine::layout::LayoutState::new();
+    let text_measurer = engine::layout::MockTextMeasurer;
 
     c.bench_function("layout_simple", |b| {
         b.iter(|| {
-            let text_measurer = engine::layout::MockTextMeasurer;
-            engine::layout::compute_layout(
+            layout_state.compute_layout(
                 black_box(&state.doc),
                 black_box(id as usize),
                 &text_measurer,
             );
-        })
-    });
-
-    c.bench_function("computed_style_height", |b| {
-        b.iter(|| {
-            state
-                .doc
-                .get_node(black_box(id as usize))
-                .unwrap()
-                .get_computed_style_by_key(&state.style_context, black_box("height"))
         })
     });
 }

@@ -22,7 +22,7 @@ use stylo::stylist::{RuleInclusion, Stylist};
 use stylo::values::computed::font::GenericFontFamily;
 use stylo::values::specified::font::FONT_MEDIUM_PX;
 use stylo::values::specified::position::PositionTryFallbacksTryTactic;
-use stylo_traits::{CSSPixel, CssStringWriter, CssWriter, DevicePixel, ParsingMode, ToCss};
+use stylo_traits::{CSSPixel, DevicePixel, ParsingMode};
 use url::Url;
 
 use crate::dom::PawsElement;
@@ -209,81 +209,6 @@ pub(crate) fn compute_style_for_node(
         &mut conditions,
         None, // element
     )
-}
-
-pub(crate) fn serialize_computed_value(
-    style: &ComputedValues,
-    longhand: LonghandId,
-) -> Option<String> {
-    let mut output = CssStringWriter::new();
-    {
-        let mut writer = CssWriter::new(&mut output);
-        match longhand {
-            // Box model - dimensions
-            LonghandId::Width => style.clone_width().to_css(&mut writer).ok()?,
-            LonghandId::Height => style.clone_height().to_css(&mut writer).ok()?,
-            LonghandId::Display => style.clone_display().to_css(&mut writer).ok()?,
-
-            // Margins
-            LonghandId::MarginTop => style.clone_margin_top().to_css(&mut writer).ok()?,
-            LonghandId::MarginRight => style.clone_margin_right().to_css(&mut writer).ok()?,
-            LonghandId::MarginBottom => style.clone_margin_bottom().to_css(&mut writer).ok()?,
-            LonghandId::MarginLeft => style.clone_margin_left().to_css(&mut writer).ok()?,
-
-            // Padding
-            LonghandId::PaddingTop => style.clone_padding_top().to_css(&mut writer).ok()?,
-            LonghandId::PaddingRight => style.clone_padding_right().to_css(&mut writer).ok()?,
-            LonghandId::PaddingBottom => style.clone_padding_bottom().to_css(&mut writer).ok()?,
-            LonghandId::PaddingLeft => style.clone_padding_left().to_css(&mut writer).ok()?,
-
-            // Border widths
-            LonghandId::BorderTopWidth => {
-                style.clone_border_top_width().to_css(&mut writer).ok()?
-            }
-            LonghandId::BorderRightWidth => {
-                style.clone_border_right_width().to_css(&mut writer).ok()?
-            }
-            LonghandId::BorderBottomWidth => {
-                style.clone_border_bottom_width().to_css(&mut writer).ok()?
-            }
-            LonghandId::BorderLeftWidth => {
-                style.clone_border_left_width().to_css(&mut writer).ok()?
-            }
-
-            // Positioning
-            LonghandId::Position => style.clone_position().to_css(&mut writer).ok()?,
-            LonghandId::Top => style.clone_top().to_css(&mut writer).ok()?,
-            LonghandId::Right => style.clone_right().to_css(&mut writer).ok()?,
-            LonghandId::Bottom => style.clone_bottom().to_css(&mut writer).ok()?,
-            LonghandId::Left => style.clone_left().to_css(&mut writer).ok()?,
-
-            // Flex
-            LonghandId::FlexDirection => style.clone_flex_direction().to_css(&mut writer).ok()?,
-            LonghandId::FlexGrow => style.clone_flex_grow().to_css(&mut writer).ok()?,
-            LonghandId::FlexShrink => style.clone_flex_shrink().to_css(&mut writer).ok()?,
-            LonghandId::FlexBasis => style.clone_flex_basis().to_css(&mut writer).ok()?,
-            LonghandId::AlignItems => style.clone_align_items().to_css(&mut writer).ok()?,
-            LonghandId::JustifyContent => style.clone_justify_content().to_css(&mut writer).ok()?,
-
-            // Typography (inherited)
-            LonghandId::FontSize => style.clone_font_size().to_css(&mut writer).ok()?,
-            LonghandId::FontWeight => style.clone_font_weight().to_css(&mut writer).ok()?,
-            LonghandId::LineHeight => style.clone_line_height().to_css(&mut writer).ok()?,
-
-            // Colors
-            LonghandId::Color => style.clone_color().to_css(&mut writer).ok()?,
-            LonghandId::BackgroundColor => {
-                style.clone_background_color().to_css(&mut writer).ok()?
-            }
-
-            // Overflow
-            LonghandId::OverflowX => style.clone_overflow_x().to_css(&mut writer).ok()?,
-            LonghandId::OverflowY => style.clone_overflow_y().to_css(&mut writer).ok()?,
-
-            _ => return None,
-        }
-    }
-    Some(output)
 }
 
 /// Holds the Stylo styling engine state: the `Stylist`, rule tree, and shared lock.

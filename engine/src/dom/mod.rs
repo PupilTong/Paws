@@ -22,7 +22,6 @@ DOM Module Architecture & Socratic Reasoning
    - **Improvement**: We enforce stricter bounds on DOM APIs, rejecting deprecated methods early, keeping the API surface minimal and robust.
 */
 
-pub(crate) mod api;
 pub(crate) mod document;
 pub(crate) mod element;
 
