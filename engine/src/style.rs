@@ -11,7 +11,7 @@ use stylo::media_queries::{Device, MediaType};
 use stylo::parser::ParserContext;
 use stylo::properties::cascade::FirstLineReparenting;
 use stylo::properties::style_structs::Font;
-pub use stylo::properties::{ComputedValues, LonghandId, PropertyId};
+pub use stylo::properties::{ComputedValues, PropertyId};
 use stylo::queries::values::PrefersColorScheme;
 use stylo::rule_cache::RuleCacheConditions;
 use stylo::rule_tree::RuleTree;
@@ -31,6 +31,7 @@ pub(crate) mod convert;
 pub(crate) mod css_style_sheet;
 pub(crate) mod dom;
 pub(crate) mod sheet_cache;
+pub mod typed_om;
 
 pub(crate) use convert::to_taffy_style;
 pub(crate) use css_style_sheet::CSSStyleSheet;

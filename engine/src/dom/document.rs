@@ -238,6 +238,37 @@ impl Document {
         Ok(())
     }
 
+    /// Returns a live handle to the computed style map for the given element.
+    ///
+    /// The returned [`StylePropertyMapReadOnly`] lazily triggers style
+    /// resolution when its read methods are called.
+    /// Returns `None` if the element does not exist or is not an element node.
+    pub fn computed_style_map(
+        &self,
+        element_id: usize,
+    ) -> Option<crate::style::typed_om::StylePropertyMapReadOnly> {
+        let node = self.get_node(element_id)?;
+        if !node.is_element() {
+            return None;
+        }
+        Some(crate::style::typed_om::StylePropertyMapReadOnly::new(
+            element_id,
+        ))
+    }
+
+    /// Ensures computed styles are up-to-date for the document tree.
+    ///
+    /// Checks the root's dirty-descendants flag and triggers a full style
+    /// resolution pass if any node is dirty. This is the lazy resolution
+    /// entry point used by [`StylePropertyMapReadOnly`] read operations.
+    pub(crate) fn ensure_styles_resolved(&mut self, style_context: &crate::style::StyleContext) {
+        if let Some(root) = self.nodes.get(self.root) {
+            if root.has_dirty_descendants() {
+                self.resolve_style(style_context);
+            }
+        }
+    }
+
     /// Resolves CSS styles for all element nodes in the document tree.
     ///
     /// Uses BFS traversal from the root to ensure parents are styled before
@@ -270,6 +301,7 @@ impl Document {
                     }
                     if let Some(mut_node) = self.nodes.get_mut(id) {
                         mut_node.computed_values = Some(computed);
+                        mut_node.unset_dirty_descendants();
                     }
                 } else {
                     // Non-element nodes: still enqueue children for traversal
@@ -279,6 +311,10 @@ impl Document {
                         .map_or(Vec::new(), |n| n.children.clone());
                     for &child_id in &children {
                         queue.push_back(child_id);
+                    }
+                    // Clear dirty flag on non-element nodes too
+                    if let Some(node) = self.nodes.get(id) {
+                        node.unset_dirty_descendants();
                     }
                 }
             }

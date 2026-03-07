@@ -107,6 +107,9 @@ impl RuntimeState {
         if node.is_element() {
             crate::style::update_inline_style(&self.style_context, node, &name, &value);
 
+            // Mark ancestors dirty so lazy style resolution picks up the change.
+            node.mark_ancestors_dirty();
+
             Ok(())
         } else {
             Err(HostErrorCode::InvalidChild)
@@ -198,6 +201,30 @@ impl RuntimeState {
             message: message.into(),
         });
         code.as_i32()
+    }
+
+    /// Returns a computed style map handle for an element.
+    ///
+    /// The handle lazily triggers style resolution when its read methods
+    /// are called. See [`StylePropertyMapReadOnly`] for the available API.
+    pub fn computed_style_map(
+        &self,
+        id: u32,
+    ) -> Result<crate::style::typed_om::StylePropertyMapReadOnly, HostErrorCode> {
+        self.doc
+            .computed_style_map(id as usize)
+            .ok_or(HostErrorCode::InvalidChild)
+    }
+
+    /// Reads a single computed style value for the given map handle.
+    ///
+    /// Triggers lazy style resolution if the tree is dirty.
+    pub fn get_computed_style_value(
+        &mut self,
+        map: &crate::style::typed_om::StylePropertyMapReadOnly,
+        property: &str,
+    ) -> Option<crate::style::typed_om::CSSStyleValue> {
+        map.get(property, &mut self.doc, &self.style_context)
     }
 
     /// Appends a child node to a parent node in the DOM tree.

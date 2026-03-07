@@ -6,3 +6,4 @@ mod runtime;
 mod style;
 
 pub use runtime::{HostErrorCode, RuntimeState};
+pub use style::typed_om::{CSSKeywordValue, CSSStyleValue, CSSUnitValue, StylePropertyMapReadOnly};
