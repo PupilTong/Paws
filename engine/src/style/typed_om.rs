@@ -73,6 +73,7 @@ pub struct StylePropertyMapReadOnly {
     element_id: usize,
 }
 
+// TODO: support custom properties( CSS variable )
 impl StylePropertyMapReadOnly {
     /// Creates a new live handle for the given element.
     pub(crate) fn new(element_id: usize) -> Self {
@@ -113,6 +114,8 @@ impl StylePropertyMapReadOnly {
     ///
     /// For most properties this returns a single-element Vec.
     /// Triggers style resolution if the tree is dirty.
+    /// TODO: support the real get_all, test it by using multiple background-image
+    /// See https://developer.mozilla.org/en-US/docs/Web/API/StylePropertyMapReadOnly/getAll
     pub fn get_all(
         &self,
         property: &str,
@@ -128,6 +131,17 @@ impl StylePropertyMapReadOnly {
     /// Returns whether the given property is present in the map.
     ///
     /// Returns `true` for any valid CSS longhand property name.
+    /// TODO: This implementation is not correct
+    /// This is supposed to follow the spec: (https://drafts.css-houdini.org/css-typed-om/#dom-stylepropertymapreadonly-has)
+    /// The has(property) method, when called on a StylePropertyMapReadOnly this, must perform the following steps:
+    /// If property is not a custom property name string, set property to property ASCII lowercased.
+    ///     If property is not a valid CSS property, throw a TypeError.
+    /// Let props be the value of this’s [[declarations]] internal slot.
+    /// If props[property] exists, return true. Otherwise, return false.
+    ///
+    /// here is a bad case(pseudo code):
+    /// <div style="--foo: 1;"></div>
+    /// div.computed_style_map().has("--foo") should return true
     pub fn has(&self, property: &str) -> bool {
         resolve_longhand(property).is_some()
     }
@@ -175,27 +189,28 @@ impl StylePropertyMapReadOnly {
 
 // ─── Value Conversion ────────────────────────────────────────────────
 
-/// Converts a Stylo [`TypedValue`] into our [`CSSStyleValue`].
-fn from_typed_value(tv: TypedValue) -> CSSStyleValue {
-    match tv {
-        TypedValue::Keyword(s) => CSSStyleValue::Keyword(CSSKeywordValue { value: s }),
-        TypedValue::Numeric(NumericValue::Unit { value, unit }) => {
-            CSSStyleValue::Unit(CSSUnitValue { value, unit })
-        }
-        TypedValue::Numeric(NumericValue::Sum { values }) => {
-            let units: Vec<CSSUnitValue> = values
-                .iter()
-                .filter_map(|v| match v {
-                    NumericValue::Unit { value, unit } => Some(CSSUnitValue {
-                        value: *value,
-                        unit: unit.clone(),
-                    }),
-                    // Nested sums are flattened — this shouldn't occur in practice
-                    // for computed values, but we skip them defensively.
-                    NumericValue::Sum { .. } => None,
-                })
-                .collect();
-            CSSStyleValue::Sum(units)
+impl From<TypedValue> for CSSStyleValue {
+    fn from(tv: TypedValue) -> Self {
+        match tv {
+            TypedValue::Keyword(s) => CSSStyleValue::Keyword(CSSKeywordValue { value: s }),
+            TypedValue::Numeric(NumericValue::Unit { value, unit }) => {
+                CSSStyleValue::Unit(CSSUnitValue { value, unit })
+            }
+            TypedValue::Numeric(NumericValue::Sum { values }) => {
+                let units: Vec<CSSUnitValue> = values
+                    .iter()
+                    .filter_map(|v| match v {
+                        NumericValue::Unit { value, unit } => Some(CSSUnitValue {
+                            value: *value,
+                            unit: unit.clone(),
+                        }),
+                        // Nested sums are flattened — this shouldn't occur in practice
+                        // for computed values, but we skip them defensively.
+                        NumericValue::Sum { .. } => None,
+                    })
+                    .collect();
+                CSSStyleValue::Sum(units)
+            }
         }
     }
 }
@@ -208,7 +223,7 @@ fn from_typed_value(tv: TypedValue) -> CSSStyleValue {
 fn extract_property(cv: &style::properties::ComputedValues, id: LonghandId) -> CSSStyleValue {
     // Primary: direct typed extraction
     if let Some(tv) = cv.computed_typed_value(id) {
-        return from_typed_value(tv);
+        return tv.into();
     }
 
     // Fallback: serialize to CSS string
@@ -273,7 +288,7 @@ mod tests {
     #[test]
     fn test_from_typed_value_keyword() {
         let tv = TypedValue::Keyword("block".to_string());
-        let result = from_typed_value(tv);
+        let result: CSSStyleValue = tv.into();
         assert_eq!(
             result,
             CSSStyleValue::Keyword(CSSKeywordValue {
@@ -288,7 +303,7 @@ mod tests {
             value: 16.0,
             unit: "px".to_string(),
         });
-        let result = from_typed_value(tv);
+        let result: CSSStyleValue = tv.into();
         assert_eq!(
             result,
             CSSStyleValue::Unit(CSSUnitValue {
@@ -313,7 +328,7 @@ mod tests {
                 },
             ],
         });
-        let result = from_typed_value(tv);
+        let result: CSSStyleValue = tv.into();
         assert_eq!(
             result,
             CSSStyleValue::Sum(vec![

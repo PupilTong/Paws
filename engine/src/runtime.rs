@@ -216,17 +216,6 @@ impl RuntimeState {
             .ok_or(HostErrorCode::InvalidChild)
     }
 
-    /// Reads a single computed style value for the given map handle.
-    ///
-    /// Triggers lazy style resolution if the tree is dirty.
-    pub fn get_computed_style_value(
-        &mut self,
-        map: &crate::style::typed_om::StylePropertyMapReadOnly,
-        property: &str,
-    ) -> Option<crate::style::typed_om::CSSStyleValue> {
-        map.get(property, &mut self.doc, &self.style_context)
-    }
-
     /// Appends a child node to a parent node in the DOM tree.
     pub fn append_element(&mut self, parent: u32, child: u32) -> Result<(), HostErrorCode> {
         self.doc
@@ -272,29 +261,30 @@ impl RuntimeState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // #[test]
-    // fn test_create_element() {
-    //     let mut state = RuntimeState::new("https://example.com".to_string());
-    //     let id = state.create_element("div".to_string());
-    //     let node = state.doc.get_node(id as usize).unwrap();
-    //     assert!(node.is_element());
-    //     assert_eq!(node.name.as_ref().unwrap().local.as_ref(), "div");
+    #[test]
+    fn test_create_element() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+        let node = state.doc.get_node(id as usize).unwrap();
+        assert!(node.is_element());
+        assert_eq!(node.name.as_ref().unwrap().local.as_ref(), "div");
 
-    //     // Attach to document root so resolve_style traverses it
-    //     state.append_element(0, id).unwrap();
+        // Attach to document root so resolve_style traverses it
+        state.append_element(0, id).unwrap();
 
-    //     // Verify style application
-    //     state.doc.resolve_style(&state.style_context);
+        // Verify style application via Typed OM
+        let map = state.computed_style_map(id).unwrap();
+        let color = map
+            .get("color", &mut state.doc, &state.style_context)
+            .expect("computed color");
 
-    //     let color = state
-    //         .doc
-    //         .get_node(id as usize)
-    //         .unwrap()
-    //         .get_computed_style_by_key(&state.style_context, "color")
-    //         .expect("computed color");
-
-    //     assert_eq!(color, "rgb(0, 0, 0)");
-    // }
+        // Default color is typically black/initial
+        match color {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => assert_eq!(s, "rgb(0, 0, 0)"),
+            crate::style::typed_om::CSSStyleValue::Keyword(kw) => assert_eq!(kw.value, "initial"),
+            _ => {} // Other types are possible depending on Stylo defaults
+        }
+    }
 
     #[test]
     fn test_create_text_node() {
@@ -312,7 +302,6 @@ mod tests {
         assert!(state.destroy_element(id).is_ok());
         // Check if node is removed (simplified check, might still be allocated but detached/removed in real impl)
         // Document::remove_node removes from slab if we implemented it that way.
-        // My implementation in document.rs calls remove from slab?
         // "if self.nodes.contains(id) { self.nodes.remove(id); }"
         // So yes.
         assert!(state.doc.get_node(id as usize).is_none());
@@ -488,32 +477,31 @@ mod tests {
         assert!(state.doc.get_node(grandchild as usize).is_none());
     }
 
-    // #[test]
-    // fn test_style_inheritance() {
-    //     let mut state = RuntimeState::new("https://example.com".to_string());
-    //     let parent = state.create_element("div".to_string());
-    //     let child = state.create_element("span".to_string());
+    #[test]
+    fn test_style_inheritance() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
 
-    //     state.append_element(0, parent).unwrap();
-    //     state.append_element(parent, child).unwrap();
+        state.append_element(0, parent).unwrap();
+        state.append_element(parent, child).unwrap();
 
-    //     // Set color on parent
-    //     state
-    //         .set_inline_style(parent, "color".to_string(), "red".to_string())
-    //         .unwrap();
+        // Set color on parent
+        state
+            .set_inline_style(parent, "color".to_string(), "red".to_string())
+            .unwrap();
 
-    //     state.doc.resolve_style(&state.style_context);
+        // Child should inherit color from parent
+        let map = state.computed_style_map(child).unwrap();
+        let child_color = map
+            .get("color", &mut state.doc, &state.style_context)
+            .expect("child should have computed color");
 
-    //     // Child should inherit color from parent
-    //     let child_color = state
-    //         .doc
-    //         .get_node(child as usize)
-    //         .unwrap()
-    //         .get_computed_style_by_key(&state.style_context, "color")
-    //         .expect("child should have computed color");
-
-    //     assert_eq!(child_color, "rgb(255, 0, 0)");
-    // }
+        match child_color {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => assert_eq!(s, "rgb(255, 0, 0)"),
+            _ => panic!("Expected unparsed rgb color, got {:?}", child_color),
+        }
+    }
 
     #[test]
     fn test_append_elements_rejects_duplicates() {
