@@ -26,6 +26,7 @@ pub(crate) enum NodeType {
     Document,
     Element,
     Text,
+    #[allow(dead_code)]
     Comment,
     ShadowRoot,
 }
@@ -172,6 +173,7 @@ impl PawsElement {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn has_class(&self, name: &Atom) -> bool {
         self.classes.contains(name)
     }

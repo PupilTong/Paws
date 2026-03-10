@@ -47,6 +47,7 @@ pub struct Document {
     pub(crate) stylesheets: Vec<crate::style::CSSStyleSheet>,
 
     /// Document URL
+    #[allow(dead_code)]
     pub(crate) url: url::Url,
 }
 
@@ -78,6 +79,7 @@ impl Document {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn tree(&self) -> &Slab<PawsElement> {
         &self.nodes
     }

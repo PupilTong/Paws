@@ -7,100 +7,11 @@ use syn::{parse_macro_input, LitStr};
 use rkyv::rancor::Error;
 use rkyv::to_bytes;
 
-use cssparser::{
-    AtRuleParser, DeclarationParser, Parser, ParserInput, ParserState, QualifiedRuleParser,
-    RuleBodyItemParser, RuleBodyParser, StyleSheetParser, ToCss,
-};
-use paws_style_ir::{PropertyDeclarationIR, StyleRuleIR, StyleSheetIR};
+use cssparser::{Parser, ParserInput, StyleSheetParser};
+use paws_style_ir::StyleSheetIR;
 
-struct StyleRuleParser;
-
-impl<'i> QualifiedRuleParser<'i> for StyleRuleParser {
-    type Prelude = String;
-    type QualifiedRule = StyleRuleIR;
-    type Error = ();
-
-    fn parse_prelude<'t>(
-        &mut self,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self::Prelude, cssparser::ParseError<'i, Self::Error>> {
-        let mut selectors = String::new();
-        while let Ok(token) = input.next() {
-            selectors.push_str(&token.to_css_string());
-        }
-        Ok(selectors.trim().to_string())
-    }
-
-    fn parse_block<'t>(
-        &mut self,
-        prelude: Self::Prelude,
-        _start: &ParserState,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self::QualifiedRule, cssparser::ParseError<'i, Self::Error>> {
-        let mut decl_parser = PropParser;
-        let iter = RuleBodyParser::new(input, &mut decl_parser);
-        let mut declarations = Vec::new();
-
-        for decl in iter.flatten() {
-            declarations.push(decl);
-        }
-
-        Ok(StyleRuleIR {
-            selectors: prelude,
-            declarations,
-        })
-    }
-}
-
-impl<'i> AtRuleParser<'i> for StyleRuleParser {
-    type Prelude = ();
-    type AtRule = StyleRuleIR;
-    type Error = ();
-}
-
-struct PropParser;
-
-impl<'i> DeclarationParser<'i> for PropParser {
-    type Declaration = PropertyDeclarationIR;
-    type Error = ();
-
-    fn parse_value<'t>(
-        &mut self,
-        name: cssparser::CowRcStr<'i>,
-        input: &mut Parser<'i, 't>,
-        _state: &ParserState,
-    ) -> Result<Self::Declaration, cssparser::ParseError<'i, Self::Error>> {
-        let mut value = String::new();
-        while let Ok(token) = input.next() {
-            value.push_str(&token.to_css_string());
-        }
-        Ok(PropertyDeclarationIR {
-            name: name.to_string(),
-            value: value.trim().to_string(),
-        })
-    }
-}
-
-impl<'i> QualifiedRuleParser<'i> for PropParser {
-    type Prelude = ();
-    type QualifiedRule = PropertyDeclarationIR;
-    type Error = ();
-}
-
-impl<'i> AtRuleParser<'i> for PropParser {
-    type Prelude = ();
-    type AtRule = PropertyDeclarationIR;
-    type Error = ();
-}
-
-impl<'i> RuleBodyItemParser<'i, PropertyDeclarationIR, ()> for PropParser {
-    fn parse_declarations(&self) -> bool {
-        true
-    }
-    fn parse_qualified(&self) -> bool {
-        false
-    }
-}
+mod parse;
+use parse::stylesheet::StyleRuleParser;
 
 #[proc_macro]
 pub fn css(input: TokenStream) -> TokenStream {

@@ -5,4 +5,4 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-rkyv = { version = "0.8.9" }
+rkyv = { version = "0.8.15" }

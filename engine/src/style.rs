@@ -217,6 +217,7 @@ pub struct StyleContext {
     pub(crate) stylist: Stylist,
     pub(crate) rule_tree: RuleTree,
     pub(crate) lock: SharedRwLock,
+    #[allow(dead_code)]
     pub(crate) url: Url,
     pub(crate) url_data: UrlExtraData,
 }

@@ -1,24 +1,19 @@
+#![recursion_limit = "256"]
 #![no_std]
 // We use no_std so this can be easily included in the macro and the engine or any wasm target without overhead.
 
 extern crate alloc;
-use alloc::string::String;
-use alloc::vec::Vec;
-use rkyv::{Archive, Deserialize, Serialize};
 
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-pub struct StyleSheetIR {
-    pub rules: Vec<StyleRuleIR>,
-}
+mod at_rule;
+mod css_rule;
+mod property;
+mod style_rule;
+mod stylesheet;
 
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-pub struct StyleRuleIR {
-    pub selectors: String,
-    pub declarations: Vec<PropertyDeclarationIR>,
-}
-
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq)]
-pub struct PropertyDeclarationIR {
-    pub name: String,
-    pub value: String,
-}
+pub use at_rule::{ArchivedAtRuleBlockIR, ArchivedAtRuleIR, AtRuleBlockIR, AtRuleIR};
+pub use css_rule::{ArchivedCssRuleIR, CssRuleIR};
+pub use property::{
+    ArchivedCssPropertyIR, ArchivedPropertyDeclarationIR, CssPropertyIR, PropertyDeclarationIR,
+};
+pub use style_rule::{ArchivedStyleRuleIR, StyleRuleIR};
+pub use stylesheet::{ArchivedStyleSheetIR, StyleSheetIR};

@@ -16,7 +16,6 @@ stylo_traits = { version = "0.11", package = "stylo_traits" }
 stylo_dom = { version = "0.11", package = "stylo_dom" }
 stylo_atoms = { version = "0.11", package = "stylo_atoms" }
 selectors = "0.35"
-cssparser = "0.36"
 url = "2.5"
 euclid = "0.22"
 atomic_refcell = "0.1"

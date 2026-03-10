@@ -43,11 +43,26 @@ mod tests {
             rkyv::from_bytes::<paws_style_ir::StyleSheetIR, rkyv::rancor::Error>(stylesheet_bytes)
                 .unwrap();
         assert_eq!(ir.rules.len(), 2);
-        assert_eq!(ir.rules[0].selectors, "div");
-        assert_eq!(ir.rules[0].declarations.len(), 2);
-        assert_eq!(ir.rules[0].declarations[0].name, "color");
-        assert_eq!(ir.rules[0].declarations[0].value, "red");
 
-        assert_eq!(ir.rules[1].selectors, ".classy");
+        match &ir.rules[0] {
+            paws_style_ir::CssRuleIR::Style(s) => {
+                assert_eq!(s.selectors, "div");
+                assert_eq!(s.declarations.len(), 2);
+                assert_eq!(s.declarations[0].name, "color");
+                if let paws_style_ir::CssPropertyIR::Keyword(val) = &s.declarations[0].value {
+                    assert_eq!(val, "red");
+                } else {
+                    panic!("Expected Keyword value for declaration 0");
+                }
+            }
+            _ => panic!("Expected Style rule"),
+        }
+
+        match &ir.rules[1] {
+            paws_style_ir::CssRuleIR::Style(s) => {
+                assert_eq!(s.selectors, ".classy");
+            }
+            _ => panic!("Expected Style rule"),
+        }
     }
 }

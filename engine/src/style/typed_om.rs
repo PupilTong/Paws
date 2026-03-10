@@ -430,6 +430,149 @@ mod tests {
     }
 
     #[test]
+    fn test_behavior_parsed_stylesheet_typed_properties() {
+        let mut state = make_runtime();
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_attribute(el, "class".to_string(), "test-box".to_string())
+            .unwrap();
+
+        // Construct a typed StyleSheetIR that represents:
+        // .test-box { display: flex; width: 50%; }
+        use paws_style_ir::{
+            CssPropertyIR, CssRuleIR, PropertyDeclarationIR, StyleRuleIR, StyleSheetIR,
+        };
+        let rules = vec![CssRuleIR::Style(StyleRuleIR {
+            selectors: ".test-box".to_string(),
+            declarations: vec![
+                PropertyDeclarationIR {
+                    name: "display".to_string(),
+                    value: CssPropertyIR::Keyword("flex".to_string()),
+                },
+                PropertyDeclarationIR {
+                    name: "width".to_string(),
+                    value: CssPropertyIR::Unit(50.0, "%".to_string()),
+                },
+            ],
+            rules: vec![],
+        })];
+        let stylesheet = StyleSheetIR { rules };
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&stylesheet).unwrap();
+
+        // Apply via zero-copy engine path (this tests our direct AST mapping)
+        state.add_parsed_stylesheet(&bytes);
+
+        // Fetch the computed styles
+        let map = state.computed_style_map(el).unwrap();
+
+        let display = map.get("display", &mut state.doc, &state.style_context);
+        match &display {
+            Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "flex"),
+            Some(CSSStyleValue::Unparsed(val)) => assert_eq!(val, "flex"),
+            _ => panic!("Expected Display property to be Flex, got: {:?}", display),
+        };
+
+        let width = map.get("width", &mut state.doc, &state.style_context);
+        match &width {
+            Some(CSSStyleValue::Unit(u)) => {
+                assert_eq!(u.value, 50.0);
+                assert_eq!(u.value, 50.0);
+            }
+            Some(CSSStyleValue::Unparsed(val)) => assert_eq!(val, "50%"),
+            _ => panic!("Expected Width property to be 50%, got: {:?}", width),
+        }
+    }
+
+    #[test]
+    fn test_behavior_parsed_stylesheet_multiple_rules() {
+        let mut state = make_runtime();
+        let el1 = state.create_element("div".to_string());
+        state.append_element(0, el1).unwrap();
+        state
+            .set_attribute(el1, "class".to_string(), "box-1".to_string())
+            .unwrap();
+
+        let el2 = state.create_element("div".to_string());
+        state.append_element(0, el2).unwrap();
+        state
+            .set_attribute(el2, "class".to_string(), "box-2".to_string())
+            .unwrap();
+
+        use paws_style_ir::{
+            CssPropertyIR, CssRuleIR, PropertyDeclarationIR, StyleRuleIR, StyleSheetIR,
+        };
+        let rules = vec![
+            CssRuleIR::Style(StyleRuleIR {
+                selectors: ".box-1".to_string(),
+                declarations: vec![
+                    PropertyDeclarationIR {
+                        name: "display".to_string(),
+                        value: CssPropertyIR::Keyword("block".to_string()),
+                    },
+                    PropertyDeclarationIR {
+                        name: "width".to_string(),
+                        value: CssPropertyIR::Unit(100.0, "px".to_string()),
+                    },
+                ],
+                rules: vec![],
+            }),
+            CssRuleIR::Style(StyleRuleIR {
+                selectors: ".box-2".to_string(),
+                declarations: vec![
+                    PropertyDeclarationIR {
+                        name: "display".to_string(),
+                        value: CssPropertyIR::Keyword("inline".to_string()),
+                    },
+                    PropertyDeclarationIR {
+                        name: "width".to_string(),
+                        value: CssPropertyIR::Unit(25.0, "%".to_string()),
+                    },
+                ],
+                rules: vec![],
+            }),
+        ];
+        let stylesheet = StyleSheetIR { rules };
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&stylesheet).unwrap();
+
+        state.add_parsed_stylesheet(&bytes);
+
+        // Check el1
+        let map1 = state.computed_style_map(el1).unwrap();
+        let display1 = map1.get("display", &mut state.doc, &state.style_context);
+        match display1 {
+            Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "block"),
+            Some(CSSStyleValue::Unparsed(val)) => assert_eq!(val, "block"),
+            _ => panic!("Expected block for box-1"),
+        }
+        let width1 = map1.get("width", &mut state.doc, &state.style_context);
+        match &width1 {
+            Some(CSSStyleValue::Unit(u)) => {
+                assert_eq!(u.value, 100.0);
+            }
+            Some(CSSStyleValue::Unparsed(val)) => assert_eq!(val, "100px"),
+            _ => panic!("Expected 100px for box-1"),
+        }
+
+        // Check el2
+        let map2 = state.computed_style_map(el2).unwrap();
+        let display2 = map2.get("display", &mut state.doc, &state.style_context);
+        match display2 {
+            Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "inline"),
+            Some(CSSStyleValue::Unparsed(val)) => assert_eq!(val, "inline"),
+            _ => panic!("Expected inline for box-2"),
+        }
+        let width2 = map2.get("width", &mut state.doc, &state.style_context);
+        match &width2 {
+            Some(CSSStyleValue::Unit(u)) => {
+                assert_eq!(u.value, 25.0);
+            }
+            Some(CSSStyleValue::Unparsed(val)) => assert_eq!(val, "25%"),
+            _ => panic!("Expected 25% for box-2"),
+        }
+    }
+
+    #[test]
     fn test_computed_style_map_has() {
         let map = StylePropertyMapReadOnly::new(0);
         assert!(map.has("display"));

@@ -640,7 +640,6 @@ dependencies = [
  "app_units",
  "atomic_refcell",
  "bitflags",
- "cssparser",
  "euclid",
  "fnv",
  "markup5ever",

@@ -135,10 +135,10 @@ impl RuntimeState {
 
     /// Adds a pre-parsed stylesheet from rkyv-encoded IR bytes.
     pub fn add_parsed_stylesheet(&mut self, bytes: &[u8]) {
-        use paws_style_ir::StyleSheetIR;
+        use paws_style_ir::ArchivedStyleSheetIR;
         use rkyv::rancor::Error;
 
-        let archived = match rkyv::from_bytes::<StyleSheetIR, Error>(bytes) {
+        let archived = match rkyv::access::<ArchivedStyleSheetIR, Error>(bytes) {
             Ok(sheet) => sheet,
             Err(e) => {
                 self.set_error(
@@ -149,25 +149,49 @@ impl RuntimeState {
             }
         };
 
-        // Note: Stylo `StylesheetContents` handles its own Arc/RwLock allocation internally
-        // and its AST nodes (`StyleRule`, `CssRules`) do not expose simple constructors.
-        // Bypassing Stylo's string parser entirely would require forking Stylo or unsafe transmutations.
-        // For now, we reconstruct a minified valid CSS string from the validated IR, guaranteeing
-        // 0-error runtime parsing and skipping format-lexing overhead, while hitting the StyleCache!
-        let mut minified_css = String::new();
-        for rule in archived.rules.iter() {
-            minified_css.push_str(&rule.selectors);
-            minified_css.push('{');
-            for decl in rule.declarations.iter() {
-                minified_css.push_str(&decl.name);
-                minified_css.push(':');
-                minified_css.push_str(&decl.value);
-                minified_css.push(';');
-            }
-            minified_css.push('}');
-        }
+        use ::style::parser::ParserContext;
+        use ::style::servo_arc::Arc;
+        use ::style::stylesheets::{CssRules, Origin, StylesheetContents};
+        use ::stylo_traits::ParsingMode;
 
-        self.add_stylesheet(minified_css);
+        let lock = self.style_context.lock.clone();
+        let url_data = self.style_context.url_data.clone();
+        let quirks_mode = ::style::context::QuirksMode::NoQuirks;
+
+        let context = ParserContext::new(
+            Origin::Author,
+            &url_data,
+            Some(::style::stylesheets::CssRuleType::Style),
+            ParsingMode::DEFAULT,
+            quirks_mode,
+            Default::default(),
+            None,
+            None,
+        );
+
+        let stylo_rules = construct_stylo_rules(&archived.rules, &lock, &url_data, &context);
+
+        let rules_lock = lock.wrap(CssRules(stylo_rules));
+        let css_rules = unsafe {
+            ::style::servo_arc::Arc::new_static(|layout| std::alloc::alloc(layout), rules_lock)
+        };
+        let contents = StylesheetContents::from_shared_data(
+            css_rules,
+            Origin::Author,
+            url_data.clone(),
+            quirks_mode,
+        );
+        let stylesheet = Arc::new(::style::stylesheets::Stylesheet {
+            contents: lock.wrap(contents),
+            shared_lock: lock.clone(),
+            media: Arc::new(lock.wrap(::style::media_queries::MediaList::empty())),
+            disabled: std::sync::atomic::AtomicBool::new(false),
+        });
+
+        let sheet = crate::style::CSSStyleSheet::new(stylesheet);
+        self.doc.stylesheets.push(sheet);
+        let added_sheet = self.doc.stylesheets.last().unwrap();
+        self.style_context.add_stylesheet(added_sheet);
     }
 
     /// Sets a DOM attribute on an element (e.g. `id`, `class`).
@@ -517,4 +541,132 @@ mod tests {
         let p = state.doc.get_node(parent as usize).unwrap();
         assert!(p.children.is_empty());
     }
+}
+
+fn construct_stylo_rules(
+    rules_ir: &rkyv::vec::ArchivedVec<paws_style_ir::ArchivedCssRuleIR>,
+    lock: &::style::shared_lock::SharedRwLock,
+    url_data: &::style::stylesheets::UrlExtraData,
+    context: &::style::parser::ParserContext,
+) -> Vec<::style::stylesheets::CssRule> {
+    use ::style::properties::PropertyDeclarationBlock;
+    use ::style::servo_arc::Arc;
+    use ::style::stylesheets::{CssRule, CssRules, StyleRule};
+
+    let mut stylo_rules = Vec::new();
+    for rule_ir in rules_ir.iter() {
+        match rule_ir {
+            paws_style_ir::ArchivedCssRuleIR::Style(s) => {
+                let sel_str = s.selectors.as_str();
+                let Ok(selectors) =
+                    ::style::selector_parser::SelectorParser::parse_author_origin_no_namespace(
+                        sel_str, url_data,
+                    )
+                else {
+                    continue;
+                };
+
+                let mut block = PropertyDeclarationBlock::new();
+                for decl in s.declarations.iter() {
+                    let name_str = decl.name.as_str();
+                    use ::style::properties::{PropertyDeclaration, PropertyId};
+
+                    let Ok(id) = PropertyId::parse_unchecked(name_str, None) else {
+                        continue;
+                    };
+
+                    use ::style::properties::Importance;
+
+                    if let Some(longhand_id) = id.longhand_id() {
+                        use ::style::properties::LonghandId;
+                        match longhand_id {
+                            LonghandId::Display => {
+                                if let paws_style_ir::ArchivedCssPropertyIR::Keyword(ref val) =
+                                    decl.value
+                                {
+                                    use ::style::values::specified::Display;
+                                    let display = match val.as_str() {
+                                        "block" => Display::Block,
+                                        "inline" => Display::Inline,
+                                        "inline-block" => Display::InlineBlock,
+                                        "none" => Display::None,
+                                        "flex" => Display::Flex,
+                                        "grid" => Display::Grid,
+                                        _ => continue,
+                                    };
+                                    block.push(
+                                        PropertyDeclaration::Display(display),
+                                        Importance::Normal,
+                                    );
+                                    continue;
+                                }
+                            }
+                            LonghandId::Width => {
+                                if let paws_style_ir::ArchivedCssPropertyIR::Unit(value, ref unit) =
+                                    decl.value
+                                {
+                                    use ::style::values::computed::Percentage;
+                                    use ::style::values::generics::NonNegative;
+                                    use ::style::values::specified::length::{
+                                        LengthPercentage, NoCalcLength,
+                                    };
+                                    use ::style::values::specified::Size;
+
+                                    let size = if unit == "px" {
+                                        Some(Size::LengthPercentage(NonNegative(
+                                            LengthPercentage::Length(NoCalcLength::from_px(
+                                                value.into(),
+                                            )),
+                                        )))
+                                    } else if unit == "%" {
+                                        Some(Size::LengthPercentage(NonNegative(
+                                            LengthPercentage::Percentage(Percentage(value / 100.0)),
+                                        )))
+                                    } else {
+                                        None
+                                    };
+
+                                    if let Some(size) = size {
+                                        block.push(
+                                            PropertyDeclaration::Width(size),
+                                            Importance::Normal,
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    match &decl.value {
+                        paws_style_ir::ArchivedCssPropertyIR::Unparsed(_val) => {
+                            // cssparser has been removed from the engine.
+                            // Unparsed properties are currently ignored.
+                            // To support more properties, add Typed matches above.
+                        }
+                        _ => {}
+                    };
+                }
+
+                let nested_rules_ir = &s.rules;
+                let nested_rules = if nested_rules_ir.is_empty() {
+                    None
+                } else {
+                    let children = construct_stylo_rules(nested_rules_ir, lock, url_data, context);
+                    Some(Arc::new(lock.wrap(CssRules(children))))
+                };
+
+                let style_rule = StyleRule {
+                    selectors,
+                    block: Arc::new(lock.wrap(block)),
+                    rules: nested_rules,
+                    source_location: ::style::values::SourceLocation { line: 0, column: 0 },
+                };
+                stylo_rules.push(CssRule::Style(Arc::new(lock.wrap(style_rule))));
+            }
+            paws_style_ir::ArchivedCssRuleIR::AtRule(_) => {}
+        }
+    }
+    stylo_rules
 }
