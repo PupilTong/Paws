@@ -4,7 +4,7 @@ use cssparser::{
     AtRuleParser, DeclarationParser, Parser, ParserState, QualifiedRuleParser, RuleBodyItemParser,
     RuleBodyParser,
 };
-use paws_style_ir::{CssRuleIR, PropertyDeclarationIR, StyleRuleIR};
+use paws_style_ir::{CssRuleIR, StyleRuleIR};
 
 pub struct NestedBodyParser;
 
@@ -18,43 +18,7 @@ impl<'i> DeclarationParser<'i> for NestedBodyParser {
         input: &mut Parser<'i, 't>,
         _state: &ParserState,
     ) -> Result<Self::Declaration, cssparser::ParseError<'i, Self::Error>> {
-        let state = input.state();
-        let mut ir_value = None;
-        let token = input.next().ok().cloned();
-        if let Some(token) = token {
-            if input.is_exhausted() {
-                match token {
-                    cssparser::Token::Ident(ident) => {
-                        ir_value = Some(paws_style_ir::CssPropertyIR::Keyword(ident.to_string()));
-                    }
-                    cssparser::Token::Dimension { value, unit, .. } => {
-                        ir_value =
-                            Some(paws_style_ir::CssPropertyIR::Unit(value, unit.to_string()));
-                    }
-                    cssparser::Token::Percentage { unit_value, .. } => {
-                        ir_value = Some(paws_style_ir::CssPropertyIR::Unit(
-                            unit_value * 100.0,
-                            "%".to_string(),
-                        ));
-                    }
-                    cssparser::Token::Number { value, .. } => {
-                        ir_value = Some(paws_style_ir::CssPropertyIR::Unit(value, "".to_string()));
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let value = if let Some(ir) = ir_value {
-            ir
-        } else {
-            input.reset(&state);
-            paws_style_ir::CssPropertyIR::Unparsed(collect_tokens_as_string(input))
-        };
-
-        Ok(BodyItem::Declaration(PropertyDeclarationIR {
-            name: name.to_string(),
-            value,
-        }))
+        Ok(BodyItem::Declaration(super::parse_declaration(name, input)))
     }
 }
 

@@ -12,14 +12,15 @@ fn reconstruct_rules_test(rules: &[paws_style_ir::CssRuleIR], css: &mut String) 
                 css.push_str(&s.selectors);
                 css.push('{');
                 for decl in s.declarations.iter() {
-                    css.push_str(&decl.name);
+                    css.push_str(decl.name.as_str());
                     css.push(':');
                     match &decl.value {
+                        paws_style_ir::CssPropertyIR::CssWide(kw) => css.push_str(kw.as_str()),
                         paws_style_ir::CssPropertyIR::Unparsed(val) => css.push_str(val),
                         paws_style_ir::CssPropertyIR::Keyword(val) => css.push_str(val),
                         paws_style_ir::CssPropertyIR::Unit(val, unit) => {
                             css.push_str(&val.to_string());
-                            css.push_str(unit);
+                            css.push_str(unit.as_str());
                         }
                         paws_style_ir::CssPropertyIR::Sum(_) => {}
                     }
@@ -44,14 +45,17 @@ fn reconstruct_rules_test(rules: &[paws_style_ir::CssRuleIR], css: &mut String) 
                     Some(paws_style_ir::AtRuleBlockIR::Declarations(d)) => {
                         css.push('{');
                         for decl in d.iter() {
-                            css.push_str(&decl.name);
+                            css.push_str(decl.name.as_str());
                             css.push(':');
                             match &decl.value {
+                                paws_style_ir::CssPropertyIR::CssWide(kw) => {
+                                    css.push_str(kw.as_str())
+                                }
                                 paws_style_ir::CssPropertyIR::Unparsed(val) => css.push_str(val),
                                 paws_style_ir::CssPropertyIR::Keyword(val) => css.push_str(val),
                                 paws_style_ir::CssPropertyIR::Unit(val, unit) => {
                                     css.push_str(&val.to_string());
-                                    css.push_str(unit);
+                                    css.push_str(unit.as_str());
                                 }
                                 paws_style_ir::CssPropertyIR::Sum(_) => {}
                             }

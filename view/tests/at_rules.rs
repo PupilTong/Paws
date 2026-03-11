@@ -1,4 +1,4 @@
-use paws_style_ir::{AtRuleBlockIR, CssRuleIR, StyleSheetIR};
+use paws_style_ir::{AtRuleBlockIR, CssPropertyName, CssRuleIR, StyleSheetIR};
 use view_macros::css;
 
 fn parse(bytes: &[u8]) -> StyleSheetIR {
@@ -73,9 +73,9 @@ fn test_at_rule_font_face() {
         match &a.block {
             Some(AtRuleBlockIR::Declarations(d)) => {
                 assert_eq!(d.len(), 3);
-                assert_eq!(d[0].name, "font-family");
-                assert_eq!(d[1].name, "src");
-                assert_eq!(d[2].name, "font-weight");
+                assert_eq!(d[0].name, CssPropertyName::FontFamily);
+                assert_eq!(d[1].name, CssPropertyName::Other("src".to_string()));
+                assert_eq!(d[2].name, CssPropertyName::FontWeight);
             }
             _ => panic!("Expected declarations in @font-face"),
         }

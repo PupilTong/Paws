@@ -13,7 +13,9 @@ mod stylesheet;
 pub use at_rule::{ArchivedAtRuleBlockIR, ArchivedAtRuleIR, AtRuleBlockIR, AtRuleIR};
 pub use css_rule::{ArchivedCssRuleIR, CssRuleIR};
 pub use property::{
-    ArchivedCssPropertyIR, ArchivedPropertyDeclarationIR, CssPropertyIR, PropertyDeclarationIR,
+    ArchivedCssPropertyIR, ArchivedCssPropertyName, ArchivedCssUnit, ArchivedCssWideKeyword,
+    ArchivedPropertyDeclarationIR, CssPropertyIR, CssPropertyName, CssUnit, CssWideKeyword,
+    PropertyDeclarationIR,
 };
 pub use style_rule::{ArchivedStyleRuleIR, StyleRuleIR};
 pub use stylesheet::{ArchivedStyleSheetIR, StyleSheetIR};

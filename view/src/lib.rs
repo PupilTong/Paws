@@ -48,7 +48,10 @@ mod tests {
             paws_style_ir::CssRuleIR::Style(s) => {
                 assert_eq!(s.selectors, "div");
                 assert_eq!(s.declarations.len(), 2);
-                assert_eq!(s.declarations[0].name, "color");
+                assert_eq!(
+                    s.declarations[0].name,
+                    paws_style_ir::CssPropertyName::Color
+                );
                 if let paws_style_ir::CssPropertyIR::Keyword(val) = &s.declarations[0].value {
                     assert_eq!(val, "red");
                 } else {

@@ -30,6 +30,7 @@ use crate::dom::PawsElement;
 pub(crate) mod convert;
 pub(crate) mod css_style_sheet;
 pub(crate) mod dom;
+pub(crate) mod ir_convert;
 pub(crate) mod sheet_cache;
 pub mod typed_om;
 

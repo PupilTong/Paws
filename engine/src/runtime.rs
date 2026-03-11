@@ -36,6 +36,7 @@ impl HostErrorCode {
 
 /// Detailed error information stored in [`RuntimeState::last_error`].
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct HostError {
     pub code: i32,
     pub(crate) message: String,
@@ -169,7 +170,12 @@ impl RuntimeState {
             None,
         );
 
-        let stylo_rules = construct_stylo_rules(&archived.rules, &lock, &url_data, &context);
+        let stylo_rules = crate::style::ir_convert::construct_stylo_rules(
+            &archived.rules,
+            &lock,
+            &url_data,
+            &context,
+        );
 
         let rules_lock = lock.wrap(CssRules(stylo_rules));
         let css_rules = unsafe {
@@ -541,132 +547,4 @@ mod tests {
         let p = state.doc.get_node(parent as usize).unwrap();
         assert!(p.children.is_empty());
     }
-}
-
-fn construct_stylo_rules(
-    rules_ir: &rkyv::vec::ArchivedVec<paws_style_ir::ArchivedCssRuleIR>,
-    lock: &::style::shared_lock::SharedRwLock,
-    url_data: &::style::stylesheets::UrlExtraData,
-    context: &::style::parser::ParserContext,
-) -> Vec<::style::stylesheets::CssRule> {
-    use ::style::properties::PropertyDeclarationBlock;
-    use ::style::servo_arc::Arc;
-    use ::style::stylesheets::{CssRule, CssRules, StyleRule};
-
-    let mut stylo_rules = Vec::new();
-    for rule_ir in rules_ir.iter() {
-        match rule_ir {
-            paws_style_ir::ArchivedCssRuleIR::Style(s) => {
-                let sel_str = s.selectors.as_str();
-                let Ok(selectors) =
-                    ::style::selector_parser::SelectorParser::parse_author_origin_no_namespace(
-                        sel_str, url_data,
-                    )
-                else {
-                    continue;
-                };
-
-                let mut block = PropertyDeclarationBlock::new();
-                for decl in s.declarations.iter() {
-                    let name_str = decl.name.as_str();
-                    use ::style::properties::{PropertyDeclaration, PropertyId};
-
-                    let Ok(id) = PropertyId::parse_unchecked(name_str, None) else {
-                        continue;
-                    };
-
-                    use ::style::properties::Importance;
-
-                    if let Some(longhand_id) = id.longhand_id() {
-                        use ::style::properties::LonghandId;
-                        match longhand_id {
-                            LonghandId::Display => {
-                                if let paws_style_ir::ArchivedCssPropertyIR::Keyword(ref val) =
-                                    decl.value
-                                {
-                                    use ::style::values::specified::Display;
-                                    let display = match val.as_str() {
-                                        "block" => Display::Block,
-                                        "inline" => Display::Inline,
-                                        "inline-block" => Display::InlineBlock,
-                                        "none" => Display::None,
-                                        "flex" => Display::Flex,
-                                        "grid" => Display::Grid,
-                                        _ => continue,
-                                    };
-                                    block.push(
-                                        PropertyDeclaration::Display(display),
-                                        Importance::Normal,
-                                    );
-                                    continue;
-                                }
-                            }
-                            LonghandId::Width => {
-                                if let paws_style_ir::ArchivedCssPropertyIR::Unit(value, ref unit) =
-                                    decl.value
-                                {
-                                    use ::style::values::computed::Percentage;
-                                    use ::style::values::generics::NonNegative;
-                                    use ::style::values::specified::length::{
-                                        LengthPercentage, NoCalcLength,
-                                    };
-                                    use ::style::values::specified::Size;
-
-                                    let size = if unit == "px" {
-                                        Some(Size::LengthPercentage(NonNegative(
-                                            LengthPercentage::Length(NoCalcLength::from_px(
-                                                value.into(),
-                                            )),
-                                        )))
-                                    } else if unit == "%" {
-                                        Some(Size::LengthPercentage(NonNegative(
-                                            LengthPercentage::Percentage(Percentage(value / 100.0)),
-                                        )))
-                                    } else {
-                                        None
-                                    };
-
-                                    if let Some(size) = size {
-                                        block.push(
-                                            PropertyDeclaration::Width(size),
-                                            Importance::Normal,
-                                        );
-                                        continue;
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    match &decl.value {
-                        paws_style_ir::ArchivedCssPropertyIR::Unparsed(_val) => {
-                            // cssparser has been removed from the engine.
-                            // Unparsed properties are currently ignored.
-                            // To support more properties, add Typed matches above.
-                        }
-                        _ => {}
-                    };
-                }
-
-                let nested_rules_ir = &s.rules;
-                let nested_rules = if nested_rules_ir.is_empty() {
-                    None
-                } else {
-                    let children = construct_stylo_rules(nested_rules_ir, lock, url_data, context);
-                    Some(Arc::new(lock.wrap(CssRules(children))))
-                };
-
-                let style_rule = StyleRule {
-                    selectors,
-                    block: Arc::new(lock.wrap(block)),
-                    rules: nested_rules,
-                    source_location: ::style::values::SourceLocation { line: 0, column: 0 },
-                };
-                stylo_rules.push(CssRule::Style(Arc::new(lock.wrap(style_rule))));
-            }
-            paws_style_ir::ArchivedCssRuleIR::AtRule(_) => {}
-        }
-    }
-    stylo_rules
 }

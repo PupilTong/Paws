@@ -441,18 +441,19 @@ mod tests {
         // Construct a typed StyleSheetIR that represents:
         // .test-box { display: flex; width: 50%; }
         use paws_style_ir::{
-            CssPropertyIR, CssRuleIR, PropertyDeclarationIR, StyleRuleIR, StyleSheetIR,
+            CssPropertyIR, CssPropertyName, CssRuleIR, CssUnit, PropertyDeclarationIR, StyleRuleIR,
+            StyleSheetIR,
         };
         let rules = vec![CssRuleIR::Style(StyleRuleIR {
             selectors: ".test-box".to_string(),
             declarations: vec![
                 PropertyDeclarationIR {
-                    name: "display".to_string(),
+                    name: CssPropertyName::Display,
                     value: CssPropertyIR::Keyword("flex".to_string()),
                 },
                 PropertyDeclarationIR {
-                    name: "width".to_string(),
-                    value: CssPropertyIR::Unit(50.0, "%".to_string()),
+                    name: CssPropertyName::Width,
+                    value: CssPropertyIR::Unit(50.0, CssUnit::Percent),
                 },
             ],
             rules: vec![],
@@ -500,19 +501,20 @@ mod tests {
             .unwrap();
 
         use paws_style_ir::{
-            CssPropertyIR, CssRuleIR, PropertyDeclarationIR, StyleRuleIR, StyleSheetIR,
+            CssPropertyIR, CssPropertyName, CssRuleIR, CssUnit, PropertyDeclarationIR, StyleRuleIR,
+            StyleSheetIR,
         };
         let rules = vec![
             CssRuleIR::Style(StyleRuleIR {
                 selectors: ".box-1".to_string(),
                 declarations: vec![
                     PropertyDeclarationIR {
-                        name: "display".to_string(),
+                        name: CssPropertyName::Display,
                         value: CssPropertyIR::Keyword("block".to_string()),
                     },
                     PropertyDeclarationIR {
-                        name: "width".to_string(),
-                        value: CssPropertyIR::Unit(100.0, "px".to_string()),
+                        name: CssPropertyName::Width,
+                        value: CssPropertyIR::Unit(100.0, CssUnit::Px),
                     },
                 ],
                 rules: vec![],
@@ -521,12 +523,12 @@ mod tests {
                 selectors: ".box-2".to_string(),
                 declarations: vec![
                     PropertyDeclarationIR {
-                        name: "display".to_string(),
+                        name: CssPropertyName::Display,
                         value: CssPropertyIR::Keyword("inline".to_string()),
                     },
                     PropertyDeclarationIR {
-                        name: "width".to_string(),
-                        value: CssPropertyIR::Unit(25.0, "%".to_string()),
+                        name: CssPropertyName::Width,
+                        value: CssPropertyIR::Unit(25.0, CssUnit::Percent),
                     },
                 ],
                 rules: vec![],
