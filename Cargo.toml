@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "engine",
+    "wasm-bridge",
+    "view", "paws-style-ir", "view-macros",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[workspace.dependencies]
+# Shared dependency versions can be centralized here later if needed.

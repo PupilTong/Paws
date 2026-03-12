@@ -1,0 +1,32 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+taffy = "0.4"
+# Note: Stylo is a complex crate from Mozilla; this is a light-weight usage surface.
+# The crate name is `style` in Gecko; here we use `stylo` when available on crates.io.
+stylo = "0.11"
+stylo_traits = { version = "0.11", package = "stylo_traits" }
+stylo_dom = { version = "0.11", package = "stylo_dom" }
+stylo_atoms = { version = "0.11", package = "stylo_atoms" }
+selectors = "0.35"
+url = "2.5"
+euclid = "0.22"
+atomic_refcell = "0.1"
+app_units = "0.7"
+fnv = "1.0.7"
+smallvec = "1.15.1"
+slab = "0.4.11"
+bitflags = "2.10.0"
+markup5ever = "0.38.0"
+rkyv = { version = "0.8.9" }
+paws-style-ir = { path = "../paws-style-ir" }
+
+[dev-dependencies]
+thin-vec = "0.2"
