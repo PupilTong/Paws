@@ -111,7 +111,16 @@ fn ir_to_lp(value: &ArchivedCssPropertyIR) -> Option<LengthPercentage> {
 }
 
 /// Converts an IR value to a `NonNegative<LengthPercentage>`.
+///
+/// Returns `None` for negative values so the fallback string parser can
+/// correctly reject them per the CSS spec.
 fn ir_to_nn_lp(value: &ArchivedCssPropertyIR) -> Option<NonNegative<LengthPercentage>> {
+    if let ArchivedCssPropertyIR::Unit(val, _) = value {
+        let v: f32 = (*val).into();
+        if v < 0.0 {
+            return None;
+        }
+    }
     ir_to_lp(value).map(NonNegative)
 }
 
@@ -167,22 +176,18 @@ fn ir_to_border_style(
 ) -> Option<::style::values::specified::BorderStyle> {
     use ::style::values::specified::BorderStyle;
 
-    if let ArchivedCssPropertyIR::Keyword(ref kw) = value {
-        match kw.as_str() {
-            "none" => Some(BorderStyle::None),
-            "hidden" => Some(BorderStyle::Hidden),
-            "solid" => Some(BorderStyle::Solid),
-            "double" => Some(BorderStyle::Double),
-            "dotted" => Some(BorderStyle::Dotted),
-            "dashed" => Some(BorderStyle::Dashed),
-            "groove" => Some(BorderStyle::Groove),
-            "ridge" => Some(BorderStyle::Ridge),
-            "inset" => Some(BorderStyle::Inset),
-            "outset" => Some(BorderStyle::Outset),
-            _ => None,
-        }
-    } else {
-        None
+    match ir_keyword(value)? {
+        "none" => Some(BorderStyle::None),
+        "hidden" => Some(BorderStyle::Hidden),
+        "solid" => Some(BorderStyle::Solid),
+        "double" => Some(BorderStyle::Double),
+        "dotted" => Some(BorderStyle::Dotted),
+        "dashed" => Some(BorderStyle::Dashed),
+        "groove" => Some(BorderStyle::Groove),
+        "ridge" => Some(BorderStyle::Ridge),
+        "inset" => Some(BorderStyle::Inset),
+        "outset" => Some(BorderStyle::Outset),
+        _ => None,
     }
 }
 
@@ -196,12 +201,11 @@ fn ir_to_border_width(
 ) -> Option<::style::values::specified::BorderSideWidth> {
     use ::style::values::specified::BorderSideWidth;
 
-    if let ArchivedCssPropertyIR::Keyword(ref kw) = value {
-        if kw.as_str() == "medium" {
-            return Some(BorderSideWidth::medium());
-        }
+    if ir_keyword(value)? == "medium" {
+        Some(BorderSideWidth::medium())
+    } else {
+        None
     }
-    None
 }
 
 /// Converts an IR value to a Stylo `NonNegativeLengthPercentageOrNormal` (gap).
@@ -659,43 +663,61 @@ fn convert_object_fit(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclarati
 // ─── Numeric property converters ─────────────────────────────────────
 
 /// Converts a `flex-grow` value (non-negative unitless number).
+///
+/// Rejects negative values so the fallback string parser can correctly
+/// reject them per the CSS spec, rather than wrapping in `NonNegativeNumber`.
 fn convert_flex_grow(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
     use ::style::values::specified::NonNegativeNumber;
 
-    ir_unitless(value).map(|v| PropertyDeclaration::FlexGrow(NonNegativeNumber::new(v)))
+    let v = ir_unitless(value)?;
+    if v < 0.0 {
+        return None;
+    }
+    Some(PropertyDeclaration::FlexGrow(NonNegativeNumber::new(v)))
 }
 
 /// Converts a `flex-shrink` value (non-negative unitless number).
+///
+/// Rejects negative values so the fallback string parser can correctly
+/// reject them per the CSS spec, rather than wrapping in `NonNegativeNumber`.
 fn convert_flex_shrink(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
     use ::style::values::specified::NonNegativeNumber;
 
-    ir_unitless(value).map(|v| PropertyDeclaration::FlexShrink(NonNegativeNumber::new(v)))
+    let v = ir_unitless(value)?;
+    if v < 0.0 {
+        return None;
+    }
+    Some(PropertyDeclaration::FlexShrink(NonNegativeNumber::new(v)))
 }
 
 /// Converts a `flex-basis` value (`auto`, `content`, or size).
+///
+/// The `content` keyword is special-cased; `auto` and length-percentage
+/// values are handled by `ir_to_size` which already supports both.
 fn convert_flex_basis(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
     use ::style::values::generics::flex::GenericFlexBasis;
 
-    match value {
-        ArchivedCssPropertyIR::Keyword(ref kw) => match kw.as_str() {
-            "auto" => Some(PropertyDeclaration::FlexBasis(Box::new(
-                GenericFlexBasis::Size(::style::values::specified::Size::Auto),
-            ))),
-            "content" => Some(PropertyDeclaration::FlexBasis(Box::new(
-                GenericFlexBasis::Content,
-            ))),
-            _ => None,
-        },
-        _ => ir_to_size(value)
-            .map(|s| PropertyDeclaration::FlexBasis(Box::new(GenericFlexBasis::Size(s)))),
+    if ir_keyword(value) == Some("content") {
+        return Some(PropertyDeclaration::FlexBasis(Box::new(
+            GenericFlexBasis::Content,
+        )));
     }
+
+    ir_to_size(value).map(|s| PropertyDeclaration::FlexBasis(Box::new(GenericFlexBasis::Size(s))))
 }
 
 /// Converts an `order` value (integer).
+///
+/// Rejects non-integer floats (e.g. `1.5`) since CSS `<integer>` values
+/// must not have a fractional part — a string parser would reject them.
 fn convert_order(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
     use ::style::values::specified::Integer;
 
-    ir_unitless(value).map(|v| PropertyDeclaration::Order(Integer::new(v as i32)))
+    let v = ir_unitless(value)?;
+    if v.fract() != 0.0 {
+        return None;
+    }
+    Some(PropertyDeclaration::Order(Integer::new(v as i32)))
 }
 
 /// Converts a `z-index` value (`auto` or integer).
@@ -709,6 +731,10 @@ fn convert_z_index(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration>
         }
         ArchivedCssPropertyIR::Unit(val, ArchivedCssUnit::Unitless) => {
             let v: f32 = (*val).into();
+            // CSS `<integer>` must not have a fractional part.
+            if v.fract() != 0.0 {
+                return None;
+            }
             Some(PropertyDeclaration::ZIndex(ZIndex::Integer(Integer::new(
                 v as i32,
             ))))
