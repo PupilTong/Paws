@@ -124,17 +124,25 @@ pub(crate) fn ir_to_no_calc_length(val: f32, unit: &ArchivedCssUnit) -> Option<N
     }
 }
 
+/// Converts a pre-extracted numeric value and unit to a Stylo [`LengthPercentage`].
+///
+/// This is the shared implementation used by both [`ir_to_lp`] and [`ir_to_nn_lp`]
+/// to avoid redundant `ir_single_number` calls.
+fn lp_from_number(val: f32, unit: &ArchivedCssUnit) -> Option<LengthPercentage> {
+    if matches!(unit, ArchivedCssUnit::Percent) {
+        Some(LengthPercentage::Percentage(Percentage(val / 100.0)))
+    } else {
+        ir_to_no_calc_length(val, unit).map(LengthPercentage::Length)
+    }
+}
+
 /// Converts a single-value component list to a Stylo [`LengthPercentage`].
 ///
 /// Accepts `Number(_, Px|Em|Rem|…)` for lengths and `Number(_, Percent)` for
 /// percentages.  Returns `None` for keywords or multi-value lists.
 pub(crate) fn ir_to_lp(values: &[ArchivedCssComponentValue]) -> Option<LengthPercentage> {
     let (val, unit) = ir_single_number(values)?;
-    if matches!(unit, ArchivedCssUnit::Percent) {
-        Some(LengthPercentage::Percentage(Percentage(val / 100.0)))
-    } else {
-        ir_to_no_calc_length(val, unit).map(LengthPercentage::Length)
-    }
+    lp_from_number(val, unit)
 }
 
 /// Converts a single-value component list to a `NonNegative<LengthPercentage>`.
@@ -144,11 +152,11 @@ pub(crate) fn ir_to_lp(values: &[ArchivedCssComponentValue]) -> Option<LengthPer
 pub(crate) fn ir_to_nn_lp(
     values: &[ArchivedCssComponentValue],
 ) -> Option<NonNegative<LengthPercentage>> {
-    let (val, _) = ir_single_number(values)?;
+    let (val, unit) = ir_single_number(values)?;
     if val < 0.0 {
         return None;
     }
-    ir_to_lp(values).map(NonNegative)
+    lp_from_number(val, unit).map(NonNegative)
 }
 
 // ─── Typed dimension helpers ─────────────────────────────────────────
