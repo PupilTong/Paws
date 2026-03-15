@@ -52,10 +52,11 @@ mod tests {
                     s.declarations[0].name,
                     paws_style_ir::CssPropertyName::Color
                 );
-                if let paws_style_ir::CssPropertyIR::Keyword(val) = &s.declarations[0].value {
-                    assert_eq!(val, "red");
-                } else {
-                    panic!("Expected Keyword value for declaration 0");
+                match &s.declarations[0].value[..] {
+                    [paws_style_ir::CssComponentValue::Ident(val)] => {
+                        assert_eq!(val, "red");
+                    }
+                    other => panic!("Expected Ident value for declaration 0, got: {other:?}"),
                 }
             }
             _ => panic!("Expected Style rule"),

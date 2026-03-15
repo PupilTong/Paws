@@ -20,7 +20,7 @@ use ::style::properties::{Importance, PropertyDeclaration, PropertyDeclarationBl
 use ::style::servo_arc::Arc;
 use ::style::shared_lock::SharedRwLock;
 use ::style::stylesheets::{CssRule, CssRules, StyleRule, UrlExtraData};
-use paws_style_ir::{ArchivedCssPropertyIR, ArchivedCssPropertyName};
+use paws_style_ir::{ArchivedCssComponentValue, ArchivedCssPropertyName};
 
 use helpers::{
     ir_to_border_style, ir_to_border_width, ir_to_gap, ir_to_inset, ir_to_margin, ir_to_max_size,
@@ -76,8 +76,13 @@ fn convert_style_rule(
 
     let mut block = PropertyDeclarationBlock::new();
     for decl in s.declarations.iter() {
+        let importance = if decl.important {
+            Importance::Important
+        } else {
+            Importance::Normal
+        };
         if let Some(prop_decl) = convert_declaration(&decl.name, &decl.value) {
-            block.push(prop_decl, Importance::Normal);
+            block.push(prop_decl, importance);
         }
     }
 
@@ -117,7 +122,7 @@ fn convert_style_rule(
 /// `Other(s)` falls back to string-based parsing via [`convert_by_string`].
 fn convert_declaration(
     name: &ArchivedCssPropertyName,
-    value: &ArchivedCssPropertyIR,
+    value: &[ArchivedCssComponentValue],
 ) -> Option<PropertyDeclaration> {
     match name {
         // ── Display & box model ──────────────────────────────────
@@ -281,20 +286,6 @@ fn convert_declaration(
         ArchivedCssPropertyName::AspectRatio => None,
 
         // ── Catch-all ────────────────────────────────────────────
-        ArchivedCssPropertyName::Other(name_str) => convert_by_string(name_str.as_str(), value),
-        ArchivedCssPropertyName::Custom(_) => None,
+        ArchivedCssPropertyName::Other(_) | ArchivedCssPropertyName::Custom(_) => None,
     }
-}
-
-// ─── Fallback ────────────────────────────────────────────────────────
-
-/// Fallback: attempt string-based property parsing via Stylo's `PropertyId`.
-///
-/// Currently returns `None` since the engine's cssparser dependency was
-/// removed.  As more typed converters are added above, fewer properties
-/// reach this path.
-fn convert_by_string(_name: &str, _value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
-    // Unparsed/fallback properties are currently not supported.
-    // Add typed match arms in `convert_declaration` to support more properties.
-    None
 }

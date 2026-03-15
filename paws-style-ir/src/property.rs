@@ -5,7 +5,7 @@ use rkyv::{Archive, Deserialize, Serialize};
 /// CSS unit types for numeric values.
 ///
 /// Uses `#[repr(u8)]` for compact rkyv serialization (1 byte vs heap-allocated String).
-/// Unrecognized units at parse time cause the value to fall back to `CssPropertyIR::Unparsed`.
+/// Unrecognized units at parse time cause the value to fall back to `CssComponentValue::Unparsed`.
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(
     bytecheck(bounds(__C: rkyv::validation::ArchiveContext, __C::Error: rkyv::rancor::Source)),
@@ -69,7 +69,7 @@ impl CssUnit {
     /// Converts a CSS unit string to a typed `CssUnit`.
     ///
     /// Returns `None` for unrecognized units, which should cause the
-    /// declaration to fall back to `CssPropertyIR::Unparsed`.
+    /// declaration to fall back to `CssComponentValue::Unparsed`.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "px" => Some(CssUnit::Px),
@@ -512,23 +512,37 @@ impl CssPropertyName {
     }
 }
 
-/// A CSS property value in the intermediate representation.
+/// A CSS component value — the building block of CSS property values.
+///
+/// Follows the CSS Syntax specification's component value model. A property
+/// value is a list of component values that may include functions (which
+/// recursively contain component values).
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
     bytecheck(bounds(__C: rkyv::validation::ArchiveContext, __C::Error: rkyv::rancor::Source)),
     serialize_bounds(__S: rkyv::ser::Writer, __S: rkyv::ser::Allocator, __S::Error: rkyv::rancor::Source),
     deserialize_bounds(__D::Error: rkyv::rancor::Source)
 )]
-pub enum CssPropertyIR {
+pub enum CssComponentValue {
     /// A CSS-wide keyword (inherit, initial, unset, revert, revert-layer).
     CssWide(CssWideKeyword),
-    /// A property-specific keyword (e.g., "red", "auto", "flex", "block").
-    Keyword(String),
-    /// A numeric value with a typed unit.
-    Unit(f32, CssUnit),
-    /// A calc()-like sum of typed units.
-    Sum(Vec<(f32, CssUnit)>),
-    /// Fallback for multi-token or complex values.
+    /// An identifier token (e.g., "red", "auto", "flex", "block").
+    Ident(String),
+    /// A numeric value with a typed unit (includes bare numbers as `Unitless`).
+    Number(f32, CssUnit),
+    /// A quoted string value (e.g., `"Helvetica Neue"`).
+    QuotedString(String),
+    /// A hash token without the leading `#` (e.g., `ff0000` from `#ff0000`).
+    Hash(String),
+    /// A delimiter character (e.g., `+`, `-`, `*`, `/`).
+    Delimiter(char),
+    /// A comma separator.
+    Comma,
+    /// A function call with its name and argument component values.
+    ///
+    /// Examples: `rgb(255, 0, 0)`, `calc(100% - 20px)`, `var(--x)`.
+    Function(String, #[rkyv(omit_bounds)] Vec<CssComponentValue>),
+    /// Fallback for values that could not be parsed into structured form.
     Unparsed(String),
 }
 
@@ -541,7 +555,9 @@ pub enum CssPropertyIR {
 )]
 pub struct PropertyDeclarationIR {
     pub name: CssPropertyName,
-    pub value: CssPropertyIR,
+    #[rkyv(omit_bounds)]
+    pub value: Vec<CssComponentValue>,
+    pub important: bool,
 }
 
 impl ArchivedCssPropertyName {

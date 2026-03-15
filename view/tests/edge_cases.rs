@@ -25,10 +25,11 @@ fn test_comments_and_whitespace() {
     assert_eq!(ir.rules.len(), 1);
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(s.selectors, "div");
-        if let paws_style_ir::CssPropertyIR::Keyword(val) = &s.declarations[0].value {
-            assert_eq!(val.as_str(), "red");
-        } else {
-            panic!("Expected Keyword value for declaration 0");
+        match &s.declarations[0].value[..] {
+            [paws_style_ir::CssComponentValue::Ident(val)] => {
+                assert_eq!(val.as_str(), "red");
+            }
+            other => panic!("Expected Ident value for declaration 0, got: {other:?}"),
         }
     }
 }
