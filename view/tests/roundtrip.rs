@@ -1,8 +1,54 @@
-use paws_style_ir::StyleSheetIR;
+use paws_style_ir::{CssComponentValue, StyleSheetIR};
 use view_macros::css;
 
 fn parse(bytes: &[u8]) -> StyleSheetIR {
     rkyv::from_bytes::<StyleSheetIR, rkyv::rancor::Error>(bytes).unwrap()
+}
+
+fn serialize_values(values: &[CssComponentValue], css: &mut String) {
+    for (i, val) in values.iter().enumerate() {
+        if i > 0
+            && !matches!(
+                val,
+                CssComponentValue::Comma | CssComponentValue::Delimiter(_)
+            )
+        {
+            // Don't add space before comma/delimiter
+            let prev = &values[i - 1];
+            if !matches!(
+                prev,
+                CssComponentValue::Comma | CssComponentValue::Delimiter(_)
+            ) {
+                // Omit space — reconstruct is lossy but sufficient for roundtrip checks
+            }
+        }
+        match val {
+            CssComponentValue::CssWide(kw) => css.push_str(kw.as_str()),
+            CssComponentValue::Ident(s) => css.push_str(s),
+            CssComponentValue::Number(v, unit) => {
+                css.push_str(&v.to_string());
+                css.push_str(unit.as_str());
+            }
+            CssComponentValue::QuotedString(s) => {
+                css.push('"');
+                css.push_str(s);
+                css.push('"');
+            }
+            CssComponentValue::Hash(s) => {
+                css.push('#');
+                css.push_str(s);
+            }
+            CssComponentValue::Delimiter(c) => css.push(*c),
+            CssComponentValue::Comma => css.push(','),
+            CssComponentValue::Function(name, args) => {
+                css.push_str(name);
+                css.push('(');
+                serialize_values(args, css);
+                css.push(')');
+            }
+            CssComponentValue::Unparsed(s) => css.push_str(s),
+        }
+    }
 }
 
 fn reconstruct_rules_test(rules: &[paws_style_ir::CssRuleIR], css: &mut String) {
@@ -14,15 +60,9 @@ fn reconstruct_rules_test(rules: &[paws_style_ir::CssRuleIR], css: &mut String) 
                 for decl in s.declarations.iter() {
                     css.push_str(decl.name.as_str());
                     css.push(':');
-                    match &decl.value {
-                        paws_style_ir::CssPropertyIR::CssWide(kw) => css.push_str(kw.as_str()),
-                        paws_style_ir::CssPropertyIR::Unparsed(val) => css.push_str(val),
-                        paws_style_ir::CssPropertyIR::Keyword(val) => css.push_str(val),
-                        paws_style_ir::CssPropertyIR::Unit(val, unit) => {
-                            css.push_str(&val.to_string());
-                            css.push_str(unit.as_str());
-                        }
-                        paws_style_ir::CssPropertyIR::Sum(_) => {}
+                    serialize_values(&decl.value, css);
+                    if decl.important {
+                        css.push_str("!important");
                     }
                     css.push(';');
                 }
@@ -47,17 +87,9 @@ fn reconstruct_rules_test(rules: &[paws_style_ir::CssRuleIR], css: &mut String) 
                         for decl in d.iter() {
                             css.push_str(decl.name.as_str());
                             css.push(':');
-                            match &decl.value {
-                                paws_style_ir::CssPropertyIR::CssWide(kw) => {
-                                    css.push_str(kw.as_str())
-                                }
-                                paws_style_ir::CssPropertyIR::Unparsed(val) => css.push_str(val),
-                                paws_style_ir::CssPropertyIR::Keyword(val) => css.push_str(val),
-                                paws_style_ir::CssPropertyIR::Unit(val, unit) => {
-                                    css.push_str(&val.to_string());
-                                    css.push_str(unit.as_str());
-                                }
-                                paws_style_ir::CssPropertyIR::Sum(_) => {}
+                            serialize_values(&decl.value, css);
+                            if decl.important {
+                                css.push_str("!important");
                             }
                             css.push(';');
                         }

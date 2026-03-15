@@ -13,8 +13,8 @@ mod stylesheet;
 pub use at_rule::{ArchivedAtRuleBlockIR, ArchivedAtRuleIR, AtRuleBlockIR, AtRuleIR};
 pub use css_rule::{ArchivedCssRuleIR, CssRuleIR};
 pub use property::{
-    ArchivedCssPropertyIR, ArchivedCssPropertyName, ArchivedCssUnit, ArchivedCssWideKeyword,
-    ArchivedPropertyDeclarationIR, CssPropertyIR, CssPropertyName, CssUnit, CssWideKeyword,
+    ArchivedCssComponentValue, ArchivedCssPropertyName, ArchivedCssUnit, ArchivedCssWideKeyword,
+    ArchivedPropertyDeclarationIR, CssComponentValue, CssPropertyName, CssUnit, CssWideKeyword,
     PropertyDeclarationIR,
 };
 pub use style_rule::{ArchivedStyleRuleIR, StyleRuleIR};

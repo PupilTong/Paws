@@ -7,15 +7,15 @@
 
 use ::style::properties::PropertyDeclaration;
 use ::style::values::specified::Display;
-use paws_style_ir::ArchivedCssPropertyIR;
+use paws_style_ir::ArchivedCssComponentValue;
 
 use super::helpers::ir_keyword;
 
 // ─── Box model ───────────────────────────────────────────────────────
 
 /// Converts a `display` keyword.
-pub(super) fn convert_display(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
-    let display = match ir_keyword(value)? {
+pub(super) fn convert_display(values: &[ArchivedCssComponentValue]) -> Option<PropertyDeclaration> {
+    let display = match ir_keyword(values)? {
         "block" => Display::Block,
         "inline" => Display::Inline,
         "inline-block" => Display::InlineBlock,
@@ -43,9 +43,11 @@ pub(super) fn convert_display(value: &ArchivedCssPropertyIR) -> Option<PropertyD
 }
 
 /// Converts a `box-sizing` keyword.
-pub(super) fn convert_box_sizing(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
+pub(super) fn convert_box_sizing(
+    values: &[ArchivedCssComponentValue],
+) -> Option<PropertyDeclaration> {
     use ::style::computed_values::box_sizing::T as BoxSizing;
-    let bs = match ir_keyword(value)? {
+    let bs = match ir_keyword(values)? {
         "content-box" => BoxSizing::ContentBox,
         "border-box" => BoxSizing::BorderBox,
         _ => return None,
@@ -56,9 +58,11 @@ pub(super) fn convert_box_sizing(value: &ArchivedCssPropertyIR) -> Option<Proper
 // ─── Positioning ─────────────────────────────────────────────────────
 
 /// Converts a `position` keyword.
-pub(super) fn convert_position(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
+pub(super) fn convert_position(
+    values: &[ArchivedCssComponentValue],
+) -> Option<PropertyDeclaration> {
     use ::style::values::specified::box_::PositionProperty;
-    let pos = match ir_keyword(value)? {
+    let pos = match ir_keyword(values)? {
         "static" => PositionProperty::Static,
         "relative" => PositionProperty::Relative,
         "absolute" => PositionProperty::Absolute,
@@ -70,9 +74,9 @@ pub(super) fn convert_position(value: &ArchivedCssPropertyIR) -> Option<Property
 }
 
 /// Converts a `float` keyword.
-pub(super) fn convert_float(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
+pub(super) fn convert_float(values: &[ArchivedCssComponentValue]) -> Option<PropertyDeclaration> {
     use ::style::values::specified::box_::Float;
-    let f = match ir_keyword(value)? {
+    let f = match ir_keyword(values)? {
         "none" => Float::None,
         "left" => Float::Left,
         "right" => Float::Right,
@@ -84,9 +88,9 @@ pub(super) fn convert_float(value: &ArchivedCssPropertyIR) -> Option<PropertyDec
 }
 
 /// Converts a `clear` keyword.
-pub(super) fn convert_clear(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
+pub(super) fn convert_clear(values: &[ArchivedCssComponentValue]) -> Option<PropertyDeclaration> {
     use ::style::values::specified::box_::Clear;
-    let c = match ir_keyword(value)? {
+    let c = match ir_keyword(values)? {
         "none" => Clear::None,
         "left" => Clear::Left,
         "right" => Clear::Right,
@@ -101,9 +105,11 @@ pub(super) fn convert_clear(value: &ArchivedCssPropertyIR) -> Option<PropertyDec
 // ─── Visual ──────────────────────────────────────────────────────────
 
 /// Converts a `visibility` keyword.
-pub(super) fn convert_visibility(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
+pub(super) fn convert_visibility(
+    values: &[ArchivedCssComponentValue],
+) -> Option<PropertyDeclaration> {
     use ::style::computed_values::visibility::T as Visibility;
-    let v = match ir_keyword(value)? {
+    let v = match ir_keyword(values)? {
         "visible" => Visibility::Visible,
         "hidden" => Visibility::Hidden,
         "collapse" => Visibility::Collapse,
@@ -113,21 +119,25 @@ pub(super) fn convert_visibility(value: &ArchivedCssPropertyIR) -> Option<Proper
 }
 
 /// Converts an `overflow-x` keyword.
-pub(super) fn convert_overflow_x(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
-    ir_to_overflow(value).map(PropertyDeclaration::OverflowX)
+pub(super) fn convert_overflow_x(
+    values: &[ArchivedCssComponentValue],
+) -> Option<PropertyDeclaration> {
+    ir_to_overflow(values).map(PropertyDeclaration::OverflowX)
 }
 
 /// Converts an `overflow-y` keyword.
-pub(super) fn convert_overflow_y(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
-    ir_to_overflow(value).map(PropertyDeclaration::OverflowY)
+pub(super) fn convert_overflow_y(
+    values: &[ArchivedCssComponentValue],
+) -> Option<PropertyDeclaration> {
+    ir_to_overflow(values).map(PropertyDeclaration::OverflowY)
 }
 
 /// Shared helper for `overflow-x` / `overflow-y`.
 fn ir_to_overflow(
-    value: &ArchivedCssPropertyIR,
+    values: &[ArchivedCssComponentValue],
 ) -> Option<::style::values::specified::box_::Overflow> {
     use ::style::values::specified::box_::Overflow;
-    let o = match ir_keyword(value)? {
+    let o = match ir_keyword(values)? {
         "visible" => Overflow::Visible,
         "hidden" => Overflow::Hidden,
         "scroll" => Overflow::Scroll,
@@ -139,9 +149,11 @@ fn ir_to_overflow(
 }
 
 /// Converts an `object-fit` keyword.
-pub(super) fn convert_object_fit(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
+pub(super) fn convert_object_fit(
+    values: &[ArchivedCssComponentValue],
+) -> Option<PropertyDeclaration> {
     use ::style::computed_values::object_fit::T as ObjectFit;
-    let of = match ir_keyword(value)? {
+    let of = match ir_keyword(values)? {
         "fill" => ObjectFit::Fill,
         "contain" => ObjectFit::Contain,
         "cover" => ObjectFit::Cover,
@@ -155,9 +167,11 @@ pub(super) fn convert_object_fit(value: &ArchivedCssPropertyIR) -> Option<Proper
 // ─── Flexbox keywords ────────────────────────────────────────────────
 
 /// Converts a `flex-direction` keyword.
-pub(super) fn convert_flex_direction(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
+pub(super) fn convert_flex_direction(
+    values: &[ArchivedCssComponentValue],
+) -> Option<PropertyDeclaration> {
     use ::style::computed_values::flex_direction::T as FlexDirection;
-    let fd = match ir_keyword(value)? {
+    let fd = match ir_keyword(values)? {
         "row" => FlexDirection::Row,
         "row-reverse" => FlexDirection::RowReverse,
         "column" => FlexDirection::Column,
@@ -168,9 +182,11 @@ pub(super) fn convert_flex_direction(value: &ArchivedCssPropertyIR) -> Option<Pr
 }
 
 /// Converts a `flex-wrap` keyword.
-pub(super) fn convert_flex_wrap(value: &ArchivedCssPropertyIR) -> Option<PropertyDeclaration> {
+pub(super) fn convert_flex_wrap(
+    values: &[ArchivedCssComponentValue],
+) -> Option<PropertyDeclaration> {
     use ::style::computed_values::flex_wrap::T as FlexWrap;
-    let fw = match ir_keyword(value)? {
+    let fw = match ir_keyword(values)? {
         "nowrap" => FlexWrap::Nowrap,
         "wrap" => FlexWrap::Wrap,
         "wrap-reverse" => FlexWrap::WrapReverse,
