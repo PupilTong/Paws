@@ -93,9 +93,11 @@ pub(crate) fn lp_ir_to_stylo(ir: &ArchivedLengthPercentageIR) -> LengthPercentag
         }
         ArchivedLengthPercentageIR::Length(val, ref unit) => {
             let v: f32 = (*val).into();
-            // If the unit isn't a valid length, fall back to 0px.
-            let len =
-                no_calc_length(v, unit).unwrap_or(NoCalcLength::Absolute(AbsoluteLength::Px(0.0)));
+            // Typed IR should only contain valid length units; flag violations in debug builds.
+            let len = no_calc_length(v, unit).unwrap_or_else(|| {
+                debug_assert!(false, "Invalid length unit in typed IR");
+                NoCalcLength::Absolute(AbsoluteLength::Px(0.0))
+            });
             LengthPercentage::Length(len)
         }
     }
@@ -109,8 +111,10 @@ pub(crate) fn nn_lp_ir_to_stylo(ir: &ArchivedNonNegativeLPIR) -> NonNegative<Len
         )),
         ArchivedNonNegativeLPIR::Length(val, ref unit) => {
             let v: f32 = (*val).into();
-            let len =
-                no_calc_length(v, unit).unwrap_or(NoCalcLength::Absolute(AbsoluteLength::Px(0.0)));
+            let len = no_calc_length(v, unit).unwrap_or_else(|| {
+                debug_assert!(false, "Invalid length unit in typed IR");
+                NoCalcLength::Absolute(AbsoluteLength::Px(0.0))
+            });
             NonNegative(LengthPercentage::Length(len))
         }
     }
