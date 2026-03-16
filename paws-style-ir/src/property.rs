@@ -512,20 +512,19 @@ impl CssPropertyName {
     }
 }
 
-/// A CSS component value — the building block of CSS property values.
+/// A CSS token — the low-level building block of CSS property values.
 ///
-/// Follows the CSS Syntax specification's component value model. A property
-/// value is a list of component values that may include functions (which
-/// recursively contain component values).
+/// Follows the CSS Syntax specification's component value model.  Used inside
+/// [`PropertyValueIR::Raw`] for properties that have not yet been typed or
+/// could not be resolved at compile time.  Functions recursively contain
+/// token lists.
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
     bytecheck(bounds(__C: rkyv::validation::ArchiveContext, __C::Error: rkyv::rancor::Source)),
     serialize_bounds(__S: rkyv::ser::Writer, __S: rkyv::ser::Allocator, __S::Error: rkyv::rancor::Source),
     deserialize_bounds(__D::Error: rkyv::rancor::Source)
 )]
-pub enum CssComponentValue {
-    /// A CSS-wide keyword (inherit, initial, unset, revert, revert-layer).
-    CssWide(CssWideKeyword),
+pub enum CssToken {
     /// An identifier token (e.g., "red", "auto", "flex", "block").
     Ident(String),
     /// A numeric value with a typed unit (includes bare numbers as `Unitless`).
@@ -538,11 +537,11 @@ pub enum CssComponentValue {
     Delimiter(char),
     /// A comma separator.
     Comma,
-    /// A function call with its name and argument component values.
+    /// A function call with its name and argument tokens.
     ///
     /// Examples: `rgb(255, 0, 0)`, `calc(100% - 20px)`, `var(--x)`.
-    Function(String, #[rkyv(omit_bounds)] Vec<CssComponentValue>),
-    /// Fallback for values that could not be parsed into structured form.
+    Function(String, #[rkyv(omit_bounds)] Vec<CssToken>),
+    /// Fallback for tokens that could not be parsed into structured form.
     Unparsed(String),
 }
 
@@ -556,7 +555,7 @@ pub enum CssComponentValue {
 pub struct PropertyDeclarationIR {
     pub name: CssPropertyName,
     #[rkyv(omit_bounds)]
-    pub value: Vec<CssComponentValue>,
+    pub value: crate::PropertyValueIR,
     pub important: bool,
 }
 

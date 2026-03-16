@@ -25,11 +25,14 @@ fn test_comments_and_whitespace() {
     assert_eq!(ir.rules.len(), 1);
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(s.selectors, "div");
-        match &s.declarations[0].value[..] {
-            [paws_style_ir::CssComponentValue::Ident(val)] => {
-                assert_eq!(val.as_str(), "red");
-            }
-            other => panic!("Expected Ident value for declaration 0, got: {other:?}"),
+        match &s.declarations[0].value {
+            paws_style_ir::PropertyValueIR::Raw(tokens) => match &tokens[..] {
+                [paws_style_ir::CssToken::Ident(val)] => {
+                    assert_eq!(val.as_str(), "red");
+                }
+                other => panic!("Expected Raw Ident token, got: {other:?}"),
+            },
+            other => panic!("Expected Raw value for color, got: {other:?}"),
         }
     }
 }

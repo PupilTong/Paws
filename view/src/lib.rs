@@ -52,11 +52,15 @@ mod tests {
                     s.declarations[0].name,
                     paws_style_ir::CssPropertyName::Color
                 );
-                match &s.declarations[0].value[..] {
-                    [paws_style_ir::CssComponentValue::Ident(val)] => {
-                        assert_eq!(val, "red");
-                    }
-                    other => panic!("Expected Ident value for declaration 0, got: {other:?}"),
+                // `color: red` is not typed — falls back to Raw tokens.
+                match &s.declarations[0].value {
+                    paws_style_ir::PropertyValueIR::Raw(tokens) => match &tokens[..] {
+                        [paws_style_ir::CssToken::Ident(val)] => {
+                            assert_eq!(val, "red");
+                        }
+                        other => panic!("Expected Raw Ident token, got: {other:?}"),
+                    },
+                    other => panic!("Expected Raw value for color, got: {other:?}"),
                 }
             }
             _ => panic!("Expected Style rule"),

@@ -1,4 +1,7 @@
-use paws_style_ir::{CssComponentValue, CssPropertyName, CssRuleIR, CssUnit, StyleSheetIR};
+use paws_style_ir::values::*;
+use paws_style_ir::{
+    CssPropertyName, CssRuleIR, CssToken, CssUnit, CssWideKeyword, PropertyValueIR, StyleSheetIR,
+};
 use view_macros::css;
 
 fn parse(bytes: &[u8]) -> StyleSheetIR {
@@ -30,54 +33,57 @@ fn test_properties_basic() {
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(s.declarations.len(), 11);
 
-        // color: red → Ident("red")
+        // color: red → Raw(Ident("red"))
         assert_eq!(s.declarations[0].name, CssPropertyName::Color);
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::Ident("red".to_string())]
+            PropertyValueIR::Raw(vec![CssToken::Ident("red".to_string())])
         );
         assert!(!s.declarations[0].important);
 
-        // display: block
+        // display: block → Display(DisplayIR::Block)
         assert_eq!(s.declarations[1].name, CssPropertyName::Display);
         assert_eq!(
             s.declarations[1].value,
-            vec![CssComponentValue::Ident("block".to_string())]
+            PropertyValueIR::Display(DisplayIR::Block)
         );
 
-        // width: 100%
+        // width: 100% → Size(SizeIR::LengthPercentage(NonNegativeLPIR::Percentage(100.0)))
         assert_eq!(s.declarations[2].name, CssPropertyName::Width);
         assert_eq!(
             s.declarations[2].value,
-            vec![CssComponentValue::Number(100.0, CssUnit::Percent)]
+            PropertyValueIR::Size(SizeIR::LengthPercentage(NonNegativeLPIR::Percentage(100.0)))
         );
 
-        // height: 100vh
+        // height: 100vh → Size(SizeIR::LengthPercentage(NonNegativeLPIR::Length(100.0, Vh)))
         assert_eq!(s.declarations[3].name, CssPropertyName::Height);
         assert_eq!(
             s.declarations[3].value,
-            vec![CssComponentValue::Number(100.0, CssUnit::Vh)]
+            PropertyValueIR::Size(SizeIR::LengthPercentage(NonNegativeLPIR::Length(
+                100.0,
+                CssUnit::Vh
+            )))
         );
 
-        // font-size: 16px
+        // font-size: 16px → Raw (font-size is not typed yet)
         assert_eq!(s.declarations[6].name, CssPropertyName::FontSize);
         assert_eq!(
             s.declarations[6].value,
-            vec![CssComponentValue::Number(16.0, CssUnit::Px)]
+            PropertyValueIR::Raw(vec![CssToken::Number(16.0, CssUnit::Px)])
         );
 
-        // --custom-prop: 10px
+        // --custom-prop: 10px → Raw
         assert_eq!(
             s.declarations[9].name,
             CssPropertyName::Custom("--custom-prop".to_string())
         );
 
-        // color: red !important → important flag set, value is just Ident("red")
+        // color: red !important → Raw(Ident("red")) + important=true
         assert_eq!(s.declarations[10].name, CssPropertyName::Color);
         assert!(s.declarations[10].important);
         assert_eq!(
             s.declarations[10].value,
-            vec![CssComponentValue::Ident("red".to_string())]
+            PropertyValueIR::Raw(vec![CssToken::Ident("red".to_string())])
         );
     } else {
         panic!("Expected StyleRuleIR");
@@ -105,26 +111,32 @@ fn test_properties_functions() {
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(s.declarations.len(), 7);
 
-        // width: calc(100% - 20px) → Function("calc", [...])
+        // width: calc(100% - 20px) → Raw(Function("calc", [...]))
         assert_eq!(s.declarations[0].name, CssPropertyName::Width);
-        match &s.declarations[0].value[..] {
-            [CssComponentValue::Function(name, args)] => {
-                assert_eq!(name, "calc");
-                // Should contain: Number(100, Percent), Delimiter('-'), Number(20, Px)
-                assert!(args.len() >= 3, "calc args: {args:?}");
-            }
-            other => panic!("Expected Function for calc, got: {other:?}"),
+        match &s.declarations[0].value {
+            PropertyValueIR::Raw(tokens) => match &tokens[..] {
+                [CssToken::Function(name, args)] => {
+                    assert_eq!(name, "calc");
+                    // Should contain: Number(100, Percent), Delimiter('-'), Number(20, Px)
+                    assert!(args.len() >= 3, "calc args: {args:?}");
+                }
+                other => panic!("Expected Function for calc, got: {other:?}"),
+            },
+            other => panic!("Expected Raw value for width calc, got: {other:?}"),
         }
 
-        // color: rgb(255, 0, 0) → Function("rgb", [Number(255, Unitless), Comma, ...])
+        // color: rgb(255, 0, 0) → Raw(Function("rgb", [...]))
         assert_eq!(s.declarations[5].name, CssPropertyName::Color);
-        match &s.declarations[5].value[..] {
-            [CssComponentValue::Function(name, args)] => {
-                assert_eq!(name, "rgb");
-                // Should contain numbers and commas
-                assert!(args.len() >= 5, "rgb args: {args:?}");
-            }
-            other => panic!("Expected Function for rgb, got: {other:?}"),
+        match &s.declarations[5].value {
+            PropertyValueIR::Raw(tokens) => match &tokens[..] {
+                [CssToken::Function(name, args)] => {
+                    assert_eq!(name, "rgb");
+                    // Should contain numbers and commas
+                    assert!(args.len() >= 5, "rgb args: {args:?}");
+                }
+                other => panic!("Expected Function for rgb, got: {other:?}"),
+            },
+            other => panic!("Expected Raw value for color rgb, got: {other:?}"),
         }
     }
 }
@@ -141,7 +153,7 @@ fn test_hash_color() {
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::Hash("ff0000".to_string())]
+            PropertyValueIR::Raw(vec![CssToken::Hash("ff0000".to_string())])
         );
     }
 }
@@ -156,7 +168,7 @@ fn test_short_hash_color() {
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::Hash("abc".to_string())]
+            PropertyValueIR::Raw(vec![CssToken::Hash("abc".to_string())])
         );
     }
 }
@@ -171,9 +183,7 @@ fn test_quoted_string() {
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::QuotedString(
-                "Helvetica Neue".to_string()
-            )]
+            PropertyValueIR::Raw(vec![CssToken::QuotedString("Helvetica Neue".to_string())])
         );
     }
 }
@@ -188,11 +198,11 @@ fn test_comma_separated_values() {
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(
             s.declarations[0].value,
-            vec![
-                CssComponentValue::Ident("Arial".to_string()),
-                CssComponentValue::Comma,
-                CssComponentValue::Ident("sans-serif".to_string()),
-            ]
+            PropertyValueIR::Raw(vec![
+                CssToken::Ident("Arial".to_string()),
+                CssToken::Comma,
+                CssToken::Ident("sans-serif".to_string()),
+            ])
         );
     }
 }
@@ -205,20 +215,23 @@ fn test_delimiter_tokens() {
     "#
     ));
     if let CssRuleIR::Style(s) = &ir.rules[0] {
-        match &s.declarations[0].value[..] {
-            [CssComponentValue::Function(name, args)] => {
-                assert_eq!(name, "calc");
-                // Verify delimiters are present
-                assert!(
-                    args.contains(&CssComponentValue::Delimiter('-')),
-                    "Missing '-' delimiter in: {args:?}"
-                );
-                assert!(
-                    args.contains(&CssComponentValue::Delimiter('+')),
-                    "Missing '+' delimiter in: {args:?}"
-                );
-            }
-            other => panic!("Expected Function, got: {other:?}"),
+        match &s.declarations[0].value {
+            PropertyValueIR::Raw(tokens) => match &tokens[..] {
+                [CssToken::Function(name, args)] => {
+                    assert_eq!(name, "calc");
+                    // Verify delimiters are present
+                    assert!(
+                        args.contains(&CssToken::Delimiter('-')),
+                        "Missing '-' delimiter in: {args:?}"
+                    );
+                    assert!(
+                        args.contains(&CssToken::Delimiter('+')),
+                        "Missing '+' delimiter in: {args:?}"
+                    );
+                }
+                other => panic!("Expected Function, got: {other:?}"),
+            },
+            other => panic!("Expected Raw value, got: {other:?}"),
         }
     }
 }
@@ -236,7 +249,7 @@ fn test_important_keyword() {
         assert!(s.declarations[0].important);
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::Ident("block".to_string())]
+            PropertyValueIR::Display(DisplayIR::Block)
         );
     }
 }
@@ -252,7 +265,10 @@ fn test_important_numeric() {
         assert!(s.declarations[0].important);
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::Number(100.0, CssUnit::Px)]
+            PropertyValueIR::Size(SizeIR::LengthPercentage(NonNegativeLPIR::Length(
+                100.0,
+                CssUnit::Px
+            )))
         );
     }
 }
@@ -273,7 +289,6 @@ fn test_no_important() {
 
 #[test]
 fn test_css_wide_keywords() {
-    use paws_style_ir::CssWideKeyword;
     let ir = parse(css!(
         r#"
         div {
@@ -288,23 +303,23 @@ fn test_css_wide_keywords() {
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::CssWide(CssWideKeyword::Inherit)]
+            PropertyValueIR::CssWide(CssWideKeyword::Inherit)
         );
         assert_eq!(
             s.declarations[1].value,
-            vec![CssComponentValue::CssWide(CssWideKeyword::Initial)]
+            PropertyValueIR::CssWide(CssWideKeyword::Initial)
         );
         assert_eq!(
             s.declarations[2].value,
-            vec![CssComponentValue::CssWide(CssWideKeyword::Unset)]
+            PropertyValueIR::CssWide(CssWideKeyword::Unset)
         );
         assert_eq!(
             s.declarations[3].value,
-            vec![CssComponentValue::CssWide(CssWideKeyword::Revert)]
+            PropertyValueIR::CssWide(CssWideKeyword::Revert)
         );
         assert_eq!(
             s.declarations[4].value,
-            vec![CssComponentValue::CssWide(CssWideKeyword::RevertLayer)]
+            PropertyValueIR::CssWide(CssWideKeyword::RevertLayer)
         );
     }
 }
@@ -326,29 +341,47 @@ fn test_unit_types() {
     "#
     ));
     if let CssRuleIR::Style(s) = &ir.rules[0] {
+        // width: 10em → Size(SizeIR::LengthPercentage(NonNegativeLPIR::Length(10.0, Em)))
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::Number(10.0, CssUnit::Em)]
+            PropertyValueIR::Size(SizeIR::LengthPercentage(NonNegativeLPIR::Length(
+                10.0,
+                CssUnit::Em
+            )))
         );
+        // height: 2rem → Size(SizeIR::LengthPercentage(NonNegativeLPIR::Length(2.0, Rem)))
         assert_eq!(
             s.declarations[1].value,
-            vec![CssComponentValue::Number(2.0, CssUnit::Rem)]
+            PropertyValueIR::Size(SizeIR::LengthPercentage(NonNegativeLPIR::Length(
+                2.0,
+                CssUnit::Rem
+            )))
         );
+        // top: 50vh → Inset(InsetIR::LengthPercentage(LengthPercentageIR::Length(50.0, Vh)))
         assert_eq!(
             s.declarations[2].value,
-            vec![CssComponentValue::Number(50.0, CssUnit::Vh)]
+            PropertyValueIR::Inset(InsetIR::LengthPercentage(LengthPercentageIR::Length(
+                50.0,
+                CssUnit::Vh
+            )))
         );
+        // left: 50vw → Inset(InsetIR::LengthPercentage(LengthPercentageIR::Length(50.0, Vw)))
         assert_eq!(
             s.declarations[3].value,
-            vec![CssComponentValue::Number(50.0, CssUnit::Vw)]
+            PropertyValueIR::Inset(InsetIR::LengthPercentage(LengthPercentageIR::Length(
+                50.0,
+                CssUnit::Vw
+            )))
         );
+        // font-size: 90deg → Raw (font-size is not typed)
         assert_eq!(
             s.declarations[4].value,
-            vec![CssComponentValue::Number(90.0, CssUnit::Deg)]
+            PropertyValueIR::Raw(vec![CssToken::Number(90.0, CssUnit::Deg)])
         );
+        // margin: 1s → Raw (shorthand margin → Other → Raw)
         assert_eq!(
             s.declarations[5].value,
-            vec![CssComponentValue::Number(1.0, CssUnit::S)]
+            PropertyValueIR::Raw(vec![CssToken::Number(1.0, CssUnit::S)])
         );
     }
 }
@@ -363,7 +396,7 @@ fn test_unitless_number() {
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::Number(2.0, CssUnit::Unitless)]
+            PropertyValueIR::FlexGrow(NonNegativeNumberIR(2.0))
         );
     }
 }
@@ -384,10 +417,10 @@ fn test_custom_property() {
         );
         assert_eq!(
             s.declarations[0].value,
-            vec![
-                CssComponentValue::Number(10.0, CssUnit::Px),
-                CssComponentValue::Number(20.0, CssUnit::Px),
-            ]
+            PropertyValueIR::Raw(vec![
+                CssToken::Number(10.0, CssUnit::Px),
+                CssToken::Number(20.0, CssUnit::Px),
+            ])
         );
     }
 }
@@ -406,7 +439,7 @@ fn test_custom_property_hash() {
         );
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::Hash("ff0000".to_string())]
+            PropertyValueIR::Raw(vec![CssToken::Hash("ff0000".to_string())])
         );
     }
 }
@@ -421,19 +454,22 @@ fn test_nested_function() {
     "#
     ));
     if let CssRuleIR::Style(s) = &ir.rules[0] {
-        match &s.declarations[0].value[..] {
-            [CssComponentValue::Function(name, args)] => {
-                assert_eq!(name, "min");
-                assert_eq!(
-                    args,
-                    &vec![
-                        CssComponentValue::Number(100.0, CssUnit::Percent),
-                        CssComponentValue::Comma,
-                        CssComponentValue::Number(500.0, CssUnit::Px),
-                    ]
-                );
-            }
-            other => panic!("Expected Function, got: {other:?}"),
+        match &s.declarations[0].value {
+            PropertyValueIR::Raw(tokens) => match &tokens[..] {
+                [CssToken::Function(name, args)] => {
+                    assert_eq!(name, "min");
+                    assert_eq!(
+                        args,
+                        &vec![
+                            CssToken::Number(100.0, CssUnit::Percent),
+                            CssToken::Comma,
+                            CssToken::Number(500.0, CssUnit::Px),
+                        ]
+                    );
+                }
+                other => panic!("Expected Function, got: {other:?}"),
+            },
+            other => panic!("Expected Raw value, got: {other:?}"),
         }
     }
 }
@@ -446,18 +482,21 @@ fn test_var_with_fallback() {
     "#
     ));
     if let CssRuleIR::Style(s) = &ir.rules[0] {
-        match &s.declarations[0].value[..] {
-            [CssComponentValue::Function(name, args)] => {
-                assert_eq!(name, "var");
-                // var(--primary, red) → args should contain ident, comma, ident
-                assert!(args.len() >= 3, "var args: {args:?}");
-                assert!(
-                    matches!(&args[0], CssComponentValue::Ident(s) if s == "--primary"),
-                    "Expected --primary ident, got: {:?}",
-                    args[0]
-                );
-            }
-            other => panic!("Expected Function for var, got: {other:?}"),
+        match &s.declarations[0].value {
+            PropertyValueIR::Raw(tokens) => match &tokens[..] {
+                [CssToken::Function(name, args)] => {
+                    assert_eq!(name, "var");
+                    // var(--primary, red) → args should contain ident, comma, ident
+                    assert!(args.len() >= 3, "var args: {args:?}");
+                    assert!(
+                        matches!(&args[0], CssToken::Ident(s) if s == "--primary"),
+                        "Expected --primary ident, got: {:?}",
+                        args[0]
+                    );
+                }
+                other => panic!("Expected Function for var, got: {other:?}"),
+            },
+            other => panic!("Expected Raw value for color var, got: {other:?}"),
         }
     }
 }
@@ -475,10 +514,10 @@ fn test_multi_value_margin() {
         // margin is parsed as Other("margin") since it's a shorthand
         assert_eq!(
             s.declarations[0].value,
-            vec![
-                CssComponentValue::Number(10.0, CssUnit::Px),
-                CssComponentValue::Number(20.0, CssUnit::Px),
-            ]
+            PropertyValueIR::Raw(vec![
+                CssToken::Number(10.0, CssUnit::Px),
+                CssToken::Number(20.0, CssUnit::Px),
+            ])
         );
     }
 }
@@ -493,7 +532,7 @@ fn test_zero_unitless() {
     if let CssRuleIR::Style(s) = &ir.rules[0] {
         assert_eq!(
             s.declarations[0].value,
-            vec![CssComponentValue::Number(0.0, CssUnit::Unitless)]
+            PropertyValueIR::Raw(vec![CssToken::Number(0.0, CssUnit::Unitless)])
         );
     }
 }

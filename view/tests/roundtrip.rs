@@ -1,53 +1,53 @@
-use paws_style_ir::{CssComponentValue, StyleSheetIR};
+use paws_style_ir::{CssToken, PropertyValueIR, StyleSheetIR};
 use view_macros::css;
 
 fn parse(bytes: &[u8]) -> StyleSheetIR {
     rkyv::from_bytes::<StyleSheetIR, rkyv::rancor::Error>(bytes).unwrap()
 }
 
-fn serialize_values(values: &[CssComponentValue], css: &mut String) {
+fn serialize_values(values: &[CssToken], css: &mut String) {
     for (i, val) in values.iter().enumerate() {
-        if i > 0
-            && !matches!(
-                val,
-                CssComponentValue::Comma | CssComponentValue::Delimiter(_)
-            )
-        {
+        if i > 0 && !matches!(val, CssToken::Comma | CssToken::Delimiter(_)) {
             // Don't add space before comma/delimiter
             let prev = &values[i - 1];
-            if !matches!(
-                prev,
-                CssComponentValue::Comma | CssComponentValue::Delimiter(_)
-            ) {
+            if !matches!(prev, CssToken::Comma | CssToken::Delimiter(_)) {
                 // Omit space — reconstruct is lossy but sufficient for roundtrip checks
             }
         }
         match val {
-            CssComponentValue::CssWide(kw) => css.push_str(kw.as_str()),
-            CssComponentValue::Ident(s) => css.push_str(s),
-            CssComponentValue::Number(v, unit) => {
+            CssToken::Ident(s) => css.push_str(s),
+            CssToken::Number(v, unit) => {
                 css.push_str(&v.to_string());
                 css.push_str(unit.as_str());
             }
-            CssComponentValue::QuotedString(s) => {
+            CssToken::QuotedString(s) => {
                 css.push('"');
                 css.push_str(s);
                 css.push('"');
             }
-            CssComponentValue::Hash(s) => {
+            CssToken::Hash(s) => {
                 css.push('#');
                 css.push_str(s);
             }
-            CssComponentValue::Delimiter(c) => css.push(*c),
-            CssComponentValue::Comma => css.push(','),
-            CssComponentValue::Function(name, args) => {
+            CssToken::Delimiter(c) => css.push(*c),
+            CssToken::Comma => css.push(','),
+            CssToken::Function(name, args) => {
                 css.push_str(name);
                 css.push('(');
                 serialize_values(args, css);
                 css.push(')');
             }
-            CssComponentValue::Unparsed(s) => css.push_str(s),
+            CssToken::Unparsed(s) => css.push_str(s),
         }
+    }
+}
+
+fn serialize_property_value(value: &PropertyValueIR, css: &mut String) {
+    match value {
+        PropertyValueIR::Raw(tokens) => serialize_values(tokens, css),
+        PropertyValueIR::CssWide(kw) => css.push_str(kw.as_str()),
+        // For typed values, serialize a best-effort CSS representation
+        _ => css.push_str("/* typed */"),
     }
 }
 
@@ -60,7 +60,7 @@ fn reconstruct_rules_test(rules: &[paws_style_ir::CssRuleIR], css: &mut String) 
                 for decl in s.declarations.iter() {
                     css.push_str(decl.name.as_str());
                     css.push(':');
-                    serialize_values(&decl.value, css);
+                    serialize_property_value(&decl.value, css);
                     if decl.important {
                         css.push_str("!important");
                     }
@@ -87,7 +87,7 @@ fn reconstruct_rules_test(rules: &[paws_style_ir::CssRuleIR], css: &mut String) 
                         for decl in d.iter() {
                             css.push_str(decl.name.as_str());
                             css.push(':');
-                            serialize_values(&decl.value, css);
+                            serialize_property_value(&decl.value, css);
                             if decl.important {
                                 css.push_str("!important");
                             }
