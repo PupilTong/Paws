@@ -7,37 +7,71 @@ fn parse(bytes: &[u8]) -> StyleSheetIR {
 
 fn serialize_values(values: &[CssToken], css: &mut String) {
     for (i, val) in values.iter().enumerate() {
-        if i > 0 && !matches!(val, CssToken::Comma | CssToken::Delimiter(_)) {
-            // Don't add space before comma/delimiter
+        if i > 0
+            && !matches!(
+                val,
+                CssToken::Comma | CssToken::Delim(_) | CssToken::CloseParen
+            )
+        {
             let prev = &values[i - 1];
-            if !matches!(prev, CssToken::Comma | CssToken::Delimiter(_)) {
+            if !matches!(
+                prev,
+                CssToken::Comma | CssToken::Delim(_) | CssToken::Function(_) | CssToken::OpenParen
+            ) {
                 // Omit space — reconstruct is lossy but sufficient for roundtrip checks
             }
         }
         match val {
             CssToken::Ident(s) => css.push_str(s),
-            CssToken::Number(v, unit) => {
-                css.push_str(&v.to_string());
-                css.push_str(unit.as_str());
+            CssToken::Function(name) => {
+                css.push_str(name);
+                css.push('(');
             }
-            CssToken::QuotedString(s) => {
-                css.push('"');
+            CssToken::AtKeyword(s) => {
+                css.push('@');
                 css.push_str(s);
-                css.push('"');
             }
-            CssToken::Hash(s) => {
+            CssToken::Hash(s, _) => {
                 css.push('#');
                 css.push_str(s);
             }
-            CssToken::Delimiter(c) => css.push(*c),
-            CssToken::Comma => css.push(','),
-            CssToken::Function(name, args) => {
-                css.push_str(name);
-                css.push('(');
-                serialize_values(args, css);
+            CssToken::String(s) => {
+                css.push('"');
+                css.push_str(s);
+                css.push('"');
+            }
+            CssToken::BadString => css.push_str("/* bad-string */"),
+            CssToken::Url(s) => {
+                css.push_str("url(");
+                css.push_str(s);
                 css.push(')');
             }
-            CssToken::Unparsed(s) => css.push_str(s),
+            CssToken::BadUrl => css.push_str("/* bad-url */"),
+            CssToken::Delim(c) => css.push(*c),
+            CssToken::Number(v) => css.push_str(&v.to_string()),
+            CssToken::Percentage(v) => {
+                css.push_str(&v.to_string());
+                css.push('%');
+            }
+            CssToken::Dimension(v, unit) => {
+                css.push_str(&v.to_string());
+                css.push_str(unit.as_str());
+            }
+            CssToken::UnicodeRange(start, end) => {
+                css.push_str(&format!("U+{:X}-{:X}", start, end));
+            }
+            CssToken::Whitespace => css.push(' '),
+            CssToken::CDO => css.push_str("<!--"),
+            CssToken::CDC => css.push_str("-->"),
+            CssToken::Colon => css.push(':'),
+            CssToken::Semicolon => css.push(';'),
+            CssToken::Comma => css.push(','),
+            CssToken::OpenSquare => css.push('['),
+            CssToken::CloseSquare => css.push(']'),
+            CssToken::OpenParen => css.push('('),
+            CssToken::CloseParen => css.push(')'),
+            CssToken::OpenCurly => css.push('{'),
+            CssToken::CloseCurly => css.push('}'),
         }
     }
 }

@@ -655,6 +655,7 @@ dependencies = [
  "taffy",
  "thin-vec",
  "url",
+ "view-macros",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@
 //! compile time rather than at runtime in the engine.
 
 use paws_style_ir::values::*;
-use paws_style_ir::{CssPropertyName, CssToken, CssUnit, CssWideKeyword, PropertyValueIR};
+use paws_style_ir::{CssPropertyName, CssToken, CssWideKeyword, PropertyValueIR};
 
 /// Resolves a parsed token list into a typed [`PropertyValueIR`].
 ///
@@ -160,43 +160,40 @@ fn keyword(tokens: &[CssToken]) -> Option<&str> {
     }
 }
 
-/// Extracts a single numeric value and unit.
-fn single_number(tokens: &[CssToken]) -> Option<(f32, &CssUnit)> {
+// ─── Length / percentage helpers ─────────────────────────────────────
+
+fn resolve_lp(tokens: &[CssToken]) -> Option<LengthPercentageIR> {
     match tokens {
-        [CssToken::Number(val, ref unit)] => Some((*val, unit)),
+        [CssToken::Percentage(val)] => Some(LengthPercentageIR::Percentage(*val)),
+        [CssToken::Dimension(val, ref unit)] if is_length_unit(unit) => {
+            Some(LengthPercentageIR::Length(*val, *unit))
+        }
+        // Bare zero is a valid zero-length.
+        [CssToken::Number(val)] if *val == 0.0 => {
+            Some(LengthPercentageIR::Length(0.0, paws_style_ir::CssUnit::Px))
+        }
         _ => None,
     }
 }
 
-// ─── Length / percentage helpers ─────────────────────────────────────
-
-fn resolve_lp(tokens: &[CssToken]) -> Option<LengthPercentageIR> {
-    let (val, unit) = single_number(tokens)?;
-    if matches!(unit, CssUnit::Percent) {
-        Some(LengthPercentageIR::Percentage(val))
-    } else if is_length_unit(unit) {
-        Some(LengthPercentageIR::Length(val, *unit))
-    } else {
-        None
-    }
-}
-
 fn resolve_nn_lp(tokens: &[CssToken]) -> Option<NonNegativeLPIR> {
-    let (val, unit) = single_number(tokens)?;
-    if matches!(unit, CssUnit::Percent) {
-        NonNegativeLPIR::new_percentage(val)
-    } else if is_length_unit(unit) {
-        NonNegativeLPIR::new_length(val, *unit)
-    } else {
-        None
+    match tokens {
+        [CssToken::Percentage(val)] => NonNegativeLPIR::new_percentage(*val),
+        [CssToken::Dimension(val, ref unit)] if is_length_unit(unit) => {
+            NonNegativeLPIR::new_length(*val, *unit)
+        }
+        [CssToken::Number(val)] if *val == 0.0 => {
+            NonNegativeLPIR::new_length(0.0, paws_style_ir::CssUnit::Px)
+        }
+        _ => None,
     }
 }
 
-fn is_length_unit(unit: &CssUnit) -> bool {
+fn is_length_unit(unit: &paws_style_ir::CssUnit) -> bool {
+    use paws_style_ir::CssUnit;
     !matches!(
         unit,
-        CssUnit::Percent
-            | CssUnit::Fr
+        CssUnit::Fr
             | CssUnit::Deg
             | CssUnit::Rad
             | CssUnit::Grad
@@ -206,7 +203,6 @@ fn is_length_unit(unit: &CssUnit) -> bool {
             | CssUnit::Dpi
             | CssUnit::Dpcm
             | CssUnit::Dppx
-            | CssUnit::Unitless
     )
 }
 
@@ -395,14 +391,14 @@ fn resolve_flex_basis(tokens: &[CssToken]) -> Option<FlexBasisIR> {
 
 fn resolve_nn_number(tokens: &[CssToken]) -> Option<NonNegativeNumberIR> {
     match tokens {
-        [CssToken::Number(val, CssUnit::Unitless)] => NonNegativeNumberIR::new(*val),
+        [CssToken::Number(val)] => NonNegativeNumberIR::new(*val),
         _ => None,
     }
 }
 
 fn resolve_integer(tokens: &[CssToken]) -> Option<IntegerIR> {
     match tokens {
-        [CssToken::Number(val, CssUnit::Unitless)] => IntegerIR::from_f32(*val),
+        [CssToken::Number(val)] => IntegerIR::from_f32(*val),
         _ => None,
     }
 }

@@ -14,8 +14,8 @@ use ::style::values::computed::Percentage;
 use ::style::values::generics::NonNegative;
 use ::style::values::specified::length::LengthPercentage;
 use paws_style_ir::{
-    ArchivedCssToken, ArchivedCssUnit, ArchivedGapIR, ArchivedInsetIR, ArchivedMarginIR,
-    ArchivedMaxSizeIR, ArchivedSizeIR,
+    ArchivedCssToken, ArchivedGapIR, ArchivedInsetIR, ArchivedMarginIR, ArchivedMaxSizeIR,
+    ArchivedSizeIR,
 };
 
 use super::length::{lp_ir_to_stylo, nn_lp_ir_to_stylo, no_calc_length};
@@ -89,44 +89,61 @@ pub(crate) fn ir_keyword(values: &[ArchivedCssToken]) -> Option<&str> {
     }
 }
 
-/// Extracts a unitless numeric value from a single-value token list.
+/// Extracts a bare numeric value from a single `<number-token>`.
 pub(crate) fn ir_unitless(values: &[ArchivedCssToken]) -> Option<f32> {
     match values {
-        [ArchivedCssToken::Number(val, ArchivedCssUnit::Unitless)] => Some((*val).into()),
+        [ArchivedCssToken::Number(val)] => Some((*val).into()),
         _ => None,
-    }
-}
-
-/// Extracts the number and unit from a single `Number` token.
-pub(crate) fn ir_single_number(values: &[ArchivedCssToken]) -> Option<(f32, &ArchivedCssUnit)> {
-    match values {
-        [ArchivedCssToken::Number(val, ref unit)] => Some(((*val).into(), unit)),
-        _ => None,
-    }
-}
-
-/// Converts a single-value token list to a Stylo [`LengthPercentage`] (Raw fallback).
-fn lp_from_number(val: f32, unit: &ArchivedCssUnit) -> Option<LengthPercentage> {
-    if matches!(unit, ArchivedCssUnit::Percent) {
-        Some(LengthPercentage::Percentage(Percentage(val / 100.0)))
-    } else {
-        no_calc_length(val, unit).map(LengthPercentage::Length)
     }
 }
 
 /// Converts a single-value token list to a Stylo [`LengthPercentage`] (Raw fallback).
 pub(crate) fn ir_to_lp(values: &[ArchivedCssToken]) -> Option<LengthPercentage> {
-    let (val, unit) = ir_single_number(values)?;
-    lp_from_number(val, unit)
+    match values {
+        [ArchivedCssToken::Percentage(val)] => {
+            let v: f32 = (*val).into();
+            Some(LengthPercentage::Percentage(Percentage(v / 100.0)))
+        }
+        [ArchivedCssToken::Dimension(val, ref unit)] => {
+            let v: f32 = (*val).into();
+            no_calc_length(v, unit).map(LengthPercentage::Length)
+        }
+        // Bare zero is a valid zero-length.
+        [ArchivedCssToken::Number(val)] if Into::<f32>::into(*val) == 0.0 => Some(
+            LengthPercentage::Length(::style::values::specified::length::NoCalcLength::Absolute(
+                ::style::values::specified::length::AbsoluteLength::Px(0.0),
+            )),
+        ),
+        _ => None,
+    }
 }
 
 /// Converts a single-value token list to a `NonNegative<LengthPercentage>` (Raw fallback).
 pub(crate) fn ir_to_nn_lp(values: &[ArchivedCssToken]) -> Option<NonNegative<LengthPercentage>> {
-    let (val, unit) = ir_single_number(values)?;
-    if val < 0.0 {
-        return None;
+    match values {
+        [ArchivedCssToken::Percentage(val)] => {
+            let v: f32 = (*val).into();
+            if v < 0.0 {
+                return None;
+            }
+            Some(NonNegative(LengthPercentage::Percentage(Percentage(
+                v / 100.0,
+            ))))
+        }
+        [ArchivedCssToken::Dimension(val, ref unit)] => {
+            let v: f32 = (*val).into();
+            if v < 0.0 {
+                return None;
+            }
+            no_calc_length(v, unit).map(|l| NonNegative(LengthPercentage::Length(l)))
+        }
+        [ArchivedCssToken::Number(val)] if Into::<f32>::into(*val) == 0.0 => Some(NonNegative(
+            LengthPercentage::Length(::style::values::specified::length::NoCalcLength::Absolute(
+                ::style::values::specified::length::AbsoluteLength::Px(0.0),
+            )),
+        )),
+        _ => None,
     }
-    lp_from_number(val, unit).map(NonNegative)
 }
 
 /// Converts a token list to a Stylo `Size` (Raw fallback).

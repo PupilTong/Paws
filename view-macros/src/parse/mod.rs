@@ -1,4 +1,6 @@
-use paws_style_ir::{CssPropertyName, CssRuleIR, CssToken, CssUnit, PropertyDeclarationIR};
+use paws_style_ir::{
+    CssPropertyName, CssRuleIR, CssToken, CssUnit, HashType, PropertyDeclarationIR,
+};
 
 pub mod at_rule;
 pub mod decl_only;
@@ -34,10 +36,10 @@ pub fn partition_body_items(items: Vec<BodyItem>) -> (Vec<PropertyDeclarationIR>
     (decls, rules)
 }
 
-/// Recursively parses cssparser tokens into a list of [`CssToken`].
+/// Recursively parses cssparser tokens into a flat list of [`CssToken`].
 ///
-/// Maps each cssparser token to the corresponding IR variant. Function tokens
-/// are parsed recursively via `parse_nested_block`.
+/// Strictly follows CSS Syntax Level 3 token types.  Block/function contents
+/// are flattened into the token stream with matching open/close bracket tokens.
 fn parse_tokens<'i, 't>(input: &mut cssparser::Parser<'i, 't>) -> Vec<CssToken> {
     let mut tokens = Vec::new();
     loop {
@@ -46,47 +48,142 @@ fn parse_tokens<'i, 't>(input: &mut cssparser::Parser<'i, 't>) -> Vec<CssToken> 
             Err(_) => break,
         };
         match token {
+            // <ident-token>
             cssparser::Token::Ident(ref ident) => {
                 tokens.push(CssToken::Ident(ident.as_ref().to_string()));
             }
+            // <dimension-token>
             cssparser::Token::Dimension {
                 value, ref unit, ..
             } => {
                 if let Some(typed_unit) = CssUnit::parse(unit.as_ref()) {
-                    tokens.push(CssToken::Number(value, typed_unit));
+                    tokens.push(CssToken::Dimension(value, typed_unit));
                 } else {
-                    // Unknown unit: store as unparsed dimension text
-                    tokens.push(CssToken::Unparsed(format!("{}{}", value, unit)));
+                    // Unknown unit: store value + unit as separate tokens
+                    tokens.push(CssToken::Ident(format!("{}{}", value, unit)));
                 }
             }
+            // <percentage-token>
             cssparser::Token::Percentage { unit_value, .. } => {
-                tokens.push(CssToken::Number(unit_value * 100.0, CssUnit::Percent));
+                tokens.push(CssToken::Percentage(unit_value * 100.0));
             }
+            // <number-token>
             cssparser::Token::Number { value, .. } => {
-                tokens.push(CssToken::Number(value, CssUnit::Unitless));
+                tokens.push(CssToken::Number(value));
             }
+            // <string-token>
             cssparser::Token::QuotedString(ref s) => {
-                tokens.push(CssToken::QuotedString(s.as_ref().to_string()));
+                tokens.push(CssToken::String(s.as_ref().to_string()));
             }
-            cssparser::Token::Hash(ref s) | cssparser::Token::IDHash(ref s) => {
-                tokens.push(CssToken::Hash(s.as_ref().to_string()));
+            // <hash-token> (unrestricted)
+            cssparser::Token::Hash(ref s) => {
+                tokens.push(CssToken::Hash(
+                    s.as_ref().to_string(),
+                    HashType::Unrestricted,
+                ));
             }
+            // <hash-token> (id)
+            cssparser::Token::IDHash(ref s) => {
+                tokens.push(CssToken::Hash(s.as_ref().to_string(), HashType::Id));
+            }
+            // <comma-token>
             cssparser::Token::Comma => {
                 tokens.push(CssToken::Comma);
             }
-            cssparser::Token::Delim(c) => {
-                tokens.push(CssToken::Delimiter(c));
+            // <colon-token>
+            cssparser::Token::Colon => {
+                tokens.push(CssToken::Colon);
             }
+            // <semicolon-token>
+            cssparser::Token::Semicolon => {
+                tokens.push(CssToken::Semicolon);
+            }
+            // <delim-token>
+            cssparser::Token::Delim(c) => {
+                tokens.push(CssToken::Delim(c));
+            }
+            // <function-token> — emit name, then flat arguments, then CloseParen
             cssparser::Token::Function(ref name) => {
                 let fn_name = name.as_ref().to_string();
+                tokens.push(CssToken::Function(fn_name));
                 let args = input
                     .parse_nested_block(|nested| {
                         Ok::<_, cssparser::ParseError<'_, ()>>(parse_tokens(nested))
                     })
                     .unwrap_or_default();
-                tokens.push(CssToken::Function(fn_name, args));
+                tokens.extend(args);
+                tokens.push(CssToken::CloseParen);
             }
-            // Skip tokens that don't map to component values (whitespace is implicit)
+            // <at-keyword-token>
+            cssparser::Token::AtKeyword(ref name) => {
+                tokens.push(CssToken::AtKeyword(name.as_ref().to_string()));
+            }
+            // <bad-string-token>
+            cssparser::Token::BadString(_) => {
+                tokens.push(CssToken::BadString);
+            }
+            // <url-token>
+            cssparser::Token::UnquotedUrl(ref url) => {
+                tokens.push(CssToken::Url(url.as_ref().to_string()));
+            }
+            // <bad-url-token>
+            cssparser::Token::BadUrl(_) => {
+                tokens.push(CssToken::BadUrl);
+            }
+            // <whitespace-token>
+            cssparser::Token::WhiteSpace(_) => {
+                tokens.push(CssToken::Whitespace);
+            }
+            // <CDO-token>
+            cssparser::Token::CDO => {
+                tokens.push(CssToken::CDO);
+            }
+            // <CDC-token>
+            cssparser::Token::CDC => {
+                tokens.push(CssToken::CDC);
+            }
+            // Block tokens — flatten contents with matching brackets
+            cssparser::Token::ParenthesisBlock => {
+                tokens.push(CssToken::OpenParen);
+                let inner = input
+                    .parse_nested_block(|nested| {
+                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_tokens(nested))
+                    })
+                    .unwrap_or_default();
+                tokens.extend(inner);
+                tokens.push(CssToken::CloseParen);
+            }
+            cssparser::Token::SquareBracketBlock => {
+                tokens.push(CssToken::OpenSquare);
+                let inner = input
+                    .parse_nested_block(|nested| {
+                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_tokens(nested))
+                    })
+                    .unwrap_or_default();
+                tokens.extend(inner);
+                tokens.push(CssToken::CloseSquare);
+            }
+            cssparser::Token::CurlyBracketBlock => {
+                tokens.push(CssToken::OpenCurly);
+                let inner = input
+                    .parse_nested_block(|nested| {
+                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_tokens(nested))
+                    })
+                    .unwrap_or_default();
+                tokens.extend(inner);
+                tokens.push(CssToken::CloseCurly);
+            }
+            // Close tokens emitted by nested parsing — should not appear at top level
+            cssparser::Token::CloseParenthesis => {
+                tokens.push(CssToken::CloseParen);
+            }
+            cssparser::Token::CloseSquareBracket => {
+                tokens.push(CssToken::CloseSquare);
+            }
+            cssparser::Token::CloseCurlyBracket => {
+                tokens.push(CssToken::CloseCurly);
+            }
+            // Remaining tokens (includes match variants like ~= |= etc.)
             _ => {}
         }
     }
@@ -100,7 +197,7 @@ fn strip_important(tokens: &mut Vec<CssToken>) -> bool {
     let len = tokens.len();
     if len >= 2 {
         let is_important = matches!(&tokens[len - 1], CssToken::Ident(s) if s == "important")
-            && matches!(&tokens[len - 2], CssToken::Delimiter('!'));
+            && matches!(&tokens[len - 2], CssToken::Delim('!'));
         if is_important {
             tokens.truncate(len - 2);
             return true;

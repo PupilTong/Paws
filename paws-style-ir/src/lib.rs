@@ -16,8 +16,8 @@ pub use at_rule::{ArchivedAtRuleBlockIR, ArchivedAtRuleIR, AtRuleBlockIR, AtRule
 pub use css_rule::{ArchivedCssRuleIR, CssRuleIR};
 pub use property::{
     ArchivedCssPropertyName, ArchivedCssToken, ArchivedCssUnit, ArchivedCssWideKeyword,
-    ArchivedPropertyDeclarationIR, CssPropertyName, CssToken, CssUnit, CssWideKeyword,
-    PropertyDeclarationIR,
+    ArchivedHashType, ArchivedPropertyDeclarationIR, CssPropertyName, CssToken, CssUnit,
+    CssWideKeyword, HashType, PropertyDeclarationIR,
 };
 pub use property_value::{ArchivedPropertyValueIR, PropertyValueIR};
 pub use style_rule::{ArchivedStyleRuleIR, StyleRuleIR};
