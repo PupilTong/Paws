@@ -11,11 +11,11 @@ path = "src/lib.rs"
 taffy = "0.4"
 # Note: Stylo is a complex crate from Mozilla; this is a light-weight usage surface.
 # The crate name is `style` in Gecko; here we use `stylo` when available on crates.io.
-stylo = "0.11"
-stylo_traits = { version = "0.11", package = "stylo_traits" }
-stylo_dom = { version = "0.11", package = "stylo_dom" }
-stylo_atoms = { version = "0.11", package = "stylo_atoms" }
-selectors = "0.35"
+stylo = "0.13"
+stylo_traits = { version = "0.13", package = "stylo_traits" }
+stylo_dom = { version = "0.13", package = "stylo_dom" }
+stylo_atoms = { version = "0.13", package = "stylo_atoms" }
+selectors = "0.36"
 url = "2.5"
 euclid = "0.22"
 atomic_refcell = "0.1"

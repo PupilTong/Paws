@@ -193,20 +193,22 @@ impl From<TypedValue> for CSSStyleValue {
     fn from(tv: TypedValue) -> Self {
         match tv {
             TypedValue::Keyword(s) => CSSStyleValue::Keyword(CSSKeywordValue { value: s }),
-            TypedValue::Numeric(NumericValue::Unit { value, unit }) => {
-                CSSStyleValue::Unit(CSSUnitValue { value, unit })
-            }
-            TypedValue::Numeric(NumericValue::Sum { values }) => {
-                let units: Vec<CSSUnitValue> = values
+            TypedValue::Numeric(NumericValue::Unit(uv)) => CSSStyleValue::Unit(CSSUnitValue {
+                value: uv.value,
+                unit: uv.unit.clone(),
+            }),
+            TypedValue::Numeric(NumericValue::Sum(sum)) => {
+                let units: Vec<CSSUnitValue> = sum
+                    .values
                     .iter()
                     .filter_map(|v| match v {
-                        NumericValue::Unit { value, unit } => Some(CSSUnitValue {
-                            value: *value,
-                            unit: unit.clone(),
+                        NumericValue::Unit(uv) => Some(CSSUnitValue {
+                            value: uv.value,
+                            unit: uv.unit.clone(),
                         }),
                         // Nested sums are flattened — this shouldn't occur in practice
                         // for computed values, but we skip them defensively.
-                        NumericValue::Sum { .. } => None,
+                        NumericValue::Sum(..) => None,
                     })
                     .collect();
                 CSSStyleValue::Sum(units)
@@ -280,6 +282,7 @@ impl fmt::Display for CSSStyleValue {
 mod tests {
     use super::*;
     use crate::runtime::RuntimeState;
+    use stylo_traits::{MathSum, UnitValue};
 
     fn make_runtime() -> RuntimeState {
         RuntimeState::new("https://example.com".to_string())
@@ -299,10 +302,10 @@ mod tests {
 
     #[test]
     fn test_from_typed_value_unit() {
-        let tv = TypedValue::Numeric(NumericValue::Unit {
+        let tv = TypedValue::Numeric(NumericValue::Unit(UnitValue {
             value: 16.0,
             unit: "px".to_string(),
-        });
+        }));
         let result: CSSStyleValue = tv.into();
         assert_eq!(
             result,
@@ -316,18 +319,18 @@ mod tests {
     #[test]
     fn test_from_typed_value_sum() {
         use thin_vec::thin_vec;
-        let tv = TypedValue::Numeric(NumericValue::Sum {
+        let tv = TypedValue::Numeric(NumericValue::Sum(MathSum {
             values: thin_vec![
-                NumericValue::Unit {
+                NumericValue::Unit(UnitValue {
                     value: 10.0,
                     unit: "px".to_string()
-                },
-                NumericValue::Unit {
+                }),
+                NumericValue::Unit(UnitValue {
                     value: 2.0,
                     unit: "em".to_string()
-                },
+                }),
             ],
-        });
+        }));
         let result: CSSStyleValue = tv.into();
         assert_eq!(
             result,

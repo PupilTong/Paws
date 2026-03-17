@@ -1,5 +1,5 @@
-use atomic_refcell::{AtomicRef, AtomicRefMut};
 use style::context::SharedStyleContext;
+use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
 use style::dom::AttributeProvider;
 use style::dom::{LayoutIterator, OpaqueNode};
 use style::dom::{NodeInfo, TDocument, TElement, TNode, TShadowRoot};
@@ -322,34 +322,37 @@ impl<'a> TElement for &'a PawsElement {
         true
     }
     unsafe fn set_handled_snapshot(&self) {}
-    unsafe fn ensure_data(&self) -> AtomicRefMut<'_, style::data::ElementData> {
-        let mut borrow = self.stylo_element_data.borrow_mut();
-        if borrow.is_none() {
-            *borrow = Some(style::data::ElementData::default());
-        }
-        AtomicRefMut::map(borrow, |opt| opt.as_mut().unwrap())
+    unsafe fn ensure_data(&self) -> ElementDataMut<'_> {
+        // SAFETY: Caller guarantees exclusive access to this element's data.
+        // UnsafeCell provides the interior mutability needed here.
+        let slot = &mut *self.stylo_element_data.get();
+        slot.get_or_insert_with(ElementDataWrapper::default)
+            .borrow_mut()
     }
     unsafe fn clear_data(&self) {
-        *self.stylo_element_data.borrow_mut() = None;
+        // SAFETY: Caller guarantees exclusive access.
+        *self.stylo_element_data.get() = None;
         *self.selector_flags.borrow_mut() = ElementSelectorFlags::empty();
     }
     fn has_data(&self) -> bool {
-        self.stylo_element_data.borrow().is_some()
+        // SAFETY: We only read the Option discriminant; no concurrent mutation
+        // can occur while we hold a shared reference to the element.
+        unsafe { (*self.stylo_element_data.get()).is_some() }
     }
-    fn borrow_data(&self) -> Option<AtomicRef<'_, style::data::ElementData>> {
-        let borrow = self.stylo_element_data.borrow();
-        if borrow.is_some() {
-            Some(AtomicRef::map(borrow, |o| o.as_ref().unwrap()))
-        } else {
-            None
+    fn borrow_data(&self) -> Option<ElementDataRef<'_>> {
+        // SAFETY: Read-only access; ElementDataWrapper handles interior borrow tracking.
+        unsafe {
+            (*self.stylo_element_data.get())
+                .as_ref()
+                .map(|w| w.borrow())
         }
     }
-    fn mutate_data(&self) -> Option<AtomicRefMut<'_, style::data::ElementData>> {
-        let borrow = self.stylo_element_data.borrow_mut();
-        if borrow.is_some() {
-            Some(AtomicRefMut::map(borrow, |o| o.as_mut().unwrap()))
-        } else {
-            None
+    fn mutate_data(&self) -> Option<ElementDataMut<'_>> {
+        // SAFETY: ElementDataWrapper uses AtomicRefCell internally for borrow tracking.
+        unsafe {
+            (*self.stylo_element_data.get())
+                .as_ref()
+                .map(|w| w.borrow_mut())
         }
     }
     fn skip_item_display_fixup(&self) -> bool {
@@ -502,7 +505,7 @@ impl selectors::Element for &PawsElement {
         local_name: &LocalName,
         msg: &AttrSelectorOperation<&AtomString>,
     ) -> bool {
-        match self.get_attr(local_name) {
+        match self.get_attr(local_name, &Namespace::default()) {
             Some(val) => msg.eval_str(&val),
             None => false,
         }
@@ -594,7 +597,7 @@ impl selectors::Element for &PawsElement {
 }
 
 impl AttributeProvider for &PawsElement {
-    fn get_attr(&self, name: &LocalName) -> Option<String> {
+    fn get_attr(&self, name: &LocalName, _namespace: &Namespace) -> Option<String> {
         let key = Atom::from(name.0.as_ref());
         self.attrs.get(&key).cloned()
     }
