@@ -16,6 +16,7 @@ This repository supports LLM-based assistants. The working language is English.
 - Use cargo workspace conventions.
 - Update or add tests when relevant.
 - Agents should always run tests.
+- **Test behavior, not implementation.** Tests should exercise real-world CSS scenarios end-to-end (e.g., compile a stylesheet with `css!()`, feed it through the pipeline, and assert on computed style values) rather than testing internal helper functions or matching on intermediate data structures. Coverage must come from realistic usage paths.
 - Ensure error handling returns specific ErrorCodes where applicable (avoid string errors).
 - Ensure operations are transactional/atomic where possible (check preconditions before mutation).
 - For non-thread-safe non-cryptographic keys (like integers), use `FnvHashMap` instead of `HashMap`.
