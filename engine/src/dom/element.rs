@@ -3,9 +3,10 @@ use bitflags::bitflags;
 use markup5ever::QualName;
 use selectors::matching::ElementSelectorFlags;
 use slab::Slab;
+use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use style::data::ElementData as StyloElementData;
+use style::data::ElementDataWrapper;
 use style::properties::PropertyDeclarationBlock;
 use style::servo_arc::Arc;
 use style::shared_lock::{Locked, SharedRwLock};
@@ -34,7 +35,7 @@ pub(crate) enum NodeType {
 /// A node in the Paws DOM tree, stored in a slab arena.
 ///
 /// Integrates with Stylo for CSS style computation via
-/// [`AtomicRefCell`]-wrapped element data and selector flags.
+/// [`ElementDataWrapper`]-managed element data and selector flags.
 pub struct PawsElement {
     /// Raw pointer to the slab containing this node.
     /// Only accessed via the safe `tree()` accessor or within the `engine` crate.
@@ -65,7 +66,10 @@ pub struct PawsElement {
     pub(crate) text_content: Option<String>,
 
     /// Stylo integration data.
-    pub(crate) stylo_element_data: AtomicRefCell<Option<StyloElementData>>,
+    ///
+    /// Wrapped in `UnsafeCell` because Stylo's `TElement` trait methods
+    /// (`ensure_data`, `clear_data`) require mutation through `&self`.
+    pub(crate) stylo_element_data: UnsafeCell<Option<ElementDataWrapper>>,
 
     /// Cached computed styles from the latest layout/style resolution pass.
     pub(crate) computed_values: Option<Arc<style::properties::ComputedValues>>,
@@ -105,7 +109,7 @@ impl PawsElement {
             shadow_root_id: None,
             text_content: None,
 
-            stylo_element_data: Default::default(),
+            stylo_element_data: UnsafeCell::new(None),
             computed_values: None,
             selector_flags: AtomicRefCell::new(ElementSelectorFlags::empty()),
             guard,

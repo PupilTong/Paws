@@ -252,7 +252,6 @@ impl StyleContext {
             author: &guard,
             ua_or_user: &guard,
         };
-        self.stylist
-            .flush(&guards, None::<&crate::dom::PawsElement>, None);
+        self.stylist.flush(&guards);
     }
 }

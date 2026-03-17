@@ -10,7 +10,7 @@ path = "src/lib.rs"
 [dependencies]
 engine = { path = "../engine" }
 anyhow = "1"
-wasmtime = "18"
+wasmtime = "26"
 
 
 [dev-dependencies]
