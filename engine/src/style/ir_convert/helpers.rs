@@ -1,172 +1,153 @@
-//! Shared IR → Stylo value conversion helpers.
+//! IR → Stylo value conversion helpers.
 //!
-//! These low-level primitives translate [`ArchivedCssComponentValue`] and
-//! [`ArchivedCssUnit`] values into the Stylo specified-value types consumed
-//! by [`PropertyDeclaration`] constructors.  They are `pub(crate)` so that
-//! sibling sub-modules (`keyword`, `numeric`) can import them directly.
+//! This module provides two categories of helpers:
+//!
+//! 1. **Typed IR converters** — infallible conversions from the validated IR
+//!    types (`ArchivedSizeIR`, `ArchivedMarginIR`, etc.) to Stylo specified
+//!    values.  These are the primary path.
+//!
+//! 2. **Raw token fallback helpers** — used only for `PropertyValueIR::Raw`
+//!    tokens that haven't been typed yet.  These retain the original
+//!    string-matching logic from before the typed IR refactor.
 
 use ::style::values::computed::Percentage;
 use ::style::values::generics::NonNegative;
-use ::style::values::specified::length::{
-    AbsoluteLength, ContainerRelativeLength, FontRelativeLength, LengthPercentage, NoCalcLength,
-    ViewportPercentageLength,
+use ::style::values::specified::length::LengthPercentage;
+use paws_style_ir::{
+    ArchivedCssToken, ArchivedGapIR, ArchivedInsetIR, ArchivedMarginIR, ArchivedMaxSizeIR,
+    ArchivedSizeIR,
 };
-use paws_style_ir::{ArchivedCssComponentValue, ArchivedCssUnit};
 
-// ─── Primitive extractors ────────────────────────────────────────────
+use super::length::{lp_ir_to_stylo, nn_lp_ir_to_stylo, no_calc_length};
 
-/// Extracts a keyword string from a single-value component list.
-///
-/// Returns `None` when the list does not contain exactly one `Ident` value.
-pub(crate) fn ir_keyword(values: &[ArchivedCssComponentValue]) -> Option<&str> {
+// ═════════════════════════════════════════════════════════════════════
+// Typed IR → Stylo converters (infallible)
+// ═════════════════════════════════════════════════════════════════════
+
+/// Converts an [`ArchivedSizeIR`] to a Stylo `Size`.
+pub(crate) fn size_ir_to_stylo(ir: &ArchivedSizeIR) -> ::style::values::specified::Size {
+    use ::style::values::specified::Size;
+    match ir {
+        ArchivedSizeIR::Auto => Size::Auto,
+        ArchivedSizeIR::LengthPercentage(ref lp) => Size::LengthPercentage(nn_lp_ir_to_stylo(lp)),
+    }
+}
+
+/// Converts an [`ArchivedMaxSizeIR`] to a Stylo `MaxSize`.
+pub(crate) fn max_size_ir_to_stylo(ir: &ArchivedMaxSizeIR) -> ::style::values::specified::MaxSize {
+    use ::style::values::specified::MaxSize;
+    match ir {
+        ArchivedMaxSizeIR::None => MaxSize::None,
+        ArchivedMaxSizeIR::LengthPercentage(ref lp) => {
+            MaxSize::LengthPercentage(nn_lp_ir_to_stylo(lp))
+        }
+    }
+}
+
+/// Converts an [`ArchivedMarginIR`] to a Stylo `Margin`.
+pub(crate) fn margin_ir_to_stylo(
+    ir: &ArchivedMarginIR,
+) -> ::style::values::specified::length::Margin {
+    use ::style::values::specified::length::Margin;
+    match ir {
+        ArchivedMarginIR::Auto => Margin::Auto,
+        ArchivedMarginIR::LengthPercentage(ref lp) => Margin::LengthPercentage(lp_ir_to_stylo(lp)),
+    }
+}
+
+/// Converts an [`ArchivedInsetIR`] to a Stylo `Inset`.
+pub(crate) fn inset_ir_to_stylo(ir: &ArchivedInsetIR) -> ::style::values::specified::Inset {
+    use ::style::values::specified::Inset;
+    match ir {
+        ArchivedInsetIR::Auto => Inset::Auto,
+        ArchivedInsetIR::LengthPercentage(ref lp) => Inset::LengthPercentage(lp_ir_to_stylo(lp)),
+    }
+}
+
+/// Converts an [`ArchivedGapIR`] to a Stylo `NonNegativeLengthPercentageOrNormal`.
+pub(crate) fn gap_ir_to_stylo(
+    ir: &ArchivedGapIR,
+) -> ::style::values::specified::length::NonNegativeLengthPercentageOrNormal {
+    use ::style::values::specified::length::NonNegativeLengthPercentageOrNormal;
+    match ir {
+        ArchivedGapIR::Normal => NonNegativeLengthPercentageOrNormal::Normal,
+        ArchivedGapIR::LengthPercentage(ref lp) => {
+            NonNegativeLengthPercentageOrNormal::LengthPercentage(nn_lp_ir_to_stylo(lp))
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Raw token fallback helpers (for PropertyValueIR::Raw)
+// ═════════════════════════════════════════════════════════════════════
+
+/// Extracts a keyword string from a single-value token list.
+pub(crate) fn ir_keyword(values: &[ArchivedCssToken]) -> Option<&str> {
     match values {
-        [ArchivedCssComponentValue::Ident(ref kw)] => Some(kw.as_str()),
+        [ArchivedCssToken::Ident(ref kw)] => Some(kw.as_str()),
         _ => None,
     }
 }
 
-/// Extracts a unitless numeric value from a single-value component list.
-///
-/// Returns `None` unless the list is exactly `[Number(_, Unitless)]`.
-pub(crate) fn ir_unitless(values: &[ArchivedCssComponentValue]) -> Option<f32> {
+/// Extracts a bare numeric value from a single `<number-token>`.
+pub(crate) fn ir_unitless(values: &[ArchivedCssToken]) -> Option<f32> {
     match values {
-        [ArchivedCssComponentValue::Number(val, ArchivedCssUnit::Unitless)] => Some((*val).into()),
+        [ArchivedCssToken::Number(val)] => Some((*val).into()),
         _ => None,
     }
 }
 
-/// Extracts the number and unit from a single `Number` component value.
-///
-/// Returns `None` unless the list is exactly one `Number` value.
-pub(crate) fn ir_single_number(
-    values: &[ArchivedCssComponentValue],
-) -> Option<(f32, &ArchivedCssUnit)> {
+/// Converts a single-value token list to a Stylo [`LengthPercentage`] (Raw fallback).
+pub(crate) fn ir_to_lp(values: &[ArchivedCssToken]) -> Option<LengthPercentage> {
     match values {
-        [ArchivedCssComponentValue::Number(val, ref unit)] => Some(((*val).into(), unit)),
+        [ArchivedCssToken::Percentage(val)] => {
+            let v: f32 = (*val).into();
+            Some(LengthPercentage::Percentage(Percentage(v / 100.0)))
+        }
+        [ArchivedCssToken::Dimension(val, ref unit)] => {
+            let v: f32 = (*val).into();
+            no_calc_length(v, unit).map(LengthPercentage::Length)
+        }
+        // Bare zero is a valid zero-length.
+        [ArchivedCssToken::Number(val)] if Into::<f32>::into(*val) == 0.0 => Some(
+            LengthPercentage::Length(::style::values::specified::length::NoCalcLength::Absolute(
+                ::style::values::specified::length::AbsoluteLength::Px(0.0),
+            )),
+        ),
         _ => None,
     }
 }
 
-// ─── Length conversion ───────────────────────────────────────────────
-
-/// Converts an IR `(value, unit)` pair to a Stylo [`NoCalcLength`].
-///
-/// Handles absolute, font-relative, viewport-relative, and
-/// container-relative units.  Returns `None` for non-length units
-/// (e.g. percentage, angle, time, or unitless).
-pub(crate) fn ir_to_no_calc_length(val: f32, unit: &ArchivedCssUnit) -> Option<NoCalcLength> {
-    match unit {
-        // Absolute lengths
-        ArchivedCssUnit::Px => Some(NoCalcLength::Absolute(AbsoluteLength::Px(val))),
-        ArchivedCssUnit::Cm => Some(NoCalcLength::Absolute(AbsoluteLength::Cm(val))),
-        ArchivedCssUnit::Mm => Some(NoCalcLength::Absolute(AbsoluteLength::Mm(val))),
-        ArchivedCssUnit::In => Some(NoCalcLength::Absolute(AbsoluteLength::In(val))),
-        ArchivedCssUnit::Pt => Some(NoCalcLength::Absolute(AbsoluteLength::Pt(val))),
-        ArchivedCssUnit::Pc => Some(NoCalcLength::Absolute(AbsoluteLength::Pc(val))),
-        ArchivedCssUnit::Q => Some(NoCalcLength::Absolute(AbsoluteLength::Q(val))),
-        // Font-relative lengths
-        ArchivedCssUnit::Em => Some(NoCalcLength::FontRelative(FontRelativeLength::Em(val))),
-        ArchivedCssUnit::Rem => Some(NoCalcLength::FontRelative(FontRelativeLength::Rem(val))),
-        ArchivedCssUnit::Ex => Some(NoCalcLength::FontRelative(FontRelativeLength::Ex(val))),
-        ArchivedCssUnit::Ch => Some(NoCalcLength::FontRelative(FontRelativeLength::Ch(val))),
-        // Viewport-relative lengths
-        ArchivedCssUnit::Vw => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Vw(val),
+/// Converts a single-value token list to a `NonNegative<LengthPercentage>` (Raw fallback).
+pub(crate) fn ir_to_nn_lp(values: &[ArchivedCssToken]) -> Option<NonNegative<LengthPercentage>> {
+    match values {
+        [ArchivedCssToken::Percentage(val)] => {
+            let v: f32 = (*val).into();
+            if v < 0.0 {
+                return None;
+            }
+            Some(NonNegative(LengthPercentage::Percentage(Percentage(
+                v / 100.0,
+            ))))
+        }
+        [ArchivedCssToken::Dimension(val, ref unit)] => {
+            let v: f32 = (*val).into();
+            if v < 0.0 {
+                return None;
+            }
+            no_calc_length(v, unit).map(|l| NonNegative(LengthPercentage::Length(l)))
+        }
+        [ArchivedCssToken::Number(val)] if Into::<f32>::into(*val) == 0.0 => Some(NonNegative(
+            LengthPercentage::Length(::style::values::specified::length::NoCalcLength::Absolute(
+                ::style::values::specified::length::AbsoluteLength::Px(0.0),
+            )),
         )),
-        ArchivedCssUnit::Vh => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Vh(val),
-        )),
-        ArchivedCssUnit::Vmin => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Vmin(val),
-        )),
-        ArchivedCssUnit::Vmax => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Vmax(val),
-        )),
-        ArchivedCssUnit::Svw => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Svw(val),
-        )),
-        ArchivedCssUnit::Svh => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Svh(val),
-        )),
-        ArchivedCssUnit::Lvw => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Lvw(val),
-        )),
-        ArchivedCssUnit::Lvh => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Lvh(val),
-        )),
-        ArchivedCssUnit::Dvw => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Dvw(val),
-        )),
-        ArchivedCssUnit::Dvh => Some(NoCalcLength::ViewportPercentage(
-            ViewportPercentageLength::Dvh(val),
-        )),
-        // Container-relative lengths
-        ArchivedCssUnit::Cqw => Some(NoCalcLength::ContainerRelative(
-            ContainerRelativeLength::Cqw(val),
-        )),
-        ArchivedCssUnit::Cqh => Some(NoCalcLength::ContainerRelative(
-            ContainerRelativeLength::Cqh(val),
-        )),
-        ArchivedCssUnit::Cqi => Some(NoCalcLength::ContainerRelative(
-            ContainerRelativeLength::Cqi(val),
-        )),
-        ArchivedCssUnit::Cqb => Some(NoCalcLength::ContainerRelative(
-            ContainerRelativeLength::Cqb(val),
-        )),
-        ArchivedCssUnit::Cqmin => Some(NoCalcLength::ContainerRelative(
-            ContainerRelativeLength::Cqmin(val),
-        )),
-        ArchivedCssUnit::Cqmax => Some(NoCalcLength::ContainerRelative(
-            ContainerRelativeLength::Cqmax(val),
-        )),
-        // Not a length unit (percent, fr, angle, time, resolution, unitless)
         _ => None,
     }
 }
 
-/// Converts a pre-extracted numeric value and unit to a Stylo [`LengthPercentage`].
-///
-/// This is the shared implementation used by both [`ir_to_lp`] and [`ir_to_nn_lp`]
-/// to avoid redundant `ir_single_number` calls.
-fn lp_from_number(val: f32, unit: &ArchivedCssUnit) -> Option<LengthPercentage> {
-    if matches!(unit, ArchivedCssUnit::Percent) {
-        Some(LengthPercentage::Percentage(Percentage(val / 100.0)))
-    } else {
-        ir_to_no_calc_length(val, unit).map(LengthPercentage::Length)
-    }
-}
-
-/// Converts a single-value component list to a Stylo [`LengthPercentage`].
-///
-/// Accepts `Number(_, Px|Em|Rem|…)` for lengths and `Number(_, Percent)` for
-/// percentages.  Returns `None` for keywords or multi-value lists.
-pub(crate) fn ir_to_lp(values: &[ArchivedCssComponentValue]) -> Option<LengthPercentage> {
-    let (val, unit) = ir_single_number(values)?;
-    lp_from_number(val, unit)
-}
-
-/// Converts a single-value component list to a `NonNegative<LengthPercentage>`.
-///
-/// Returns `None` for negative values so the fallback parser can
-/// correctly reject them per the CSS spec.
-pub(crate) fn ir_to_nn_lp(
-    values: &[ArchivedCssComponentValue],
-) -> Option<NonNegative<LengthPercentage>> {
-    let (val, unit) = ir_single_number(values)?;
-    if val < 0.0 {
-        return None;
-    }
-    lp_from_number(val, unit).map(NonNegative)
-}
-
-// ─── Typed dimension helpers ─────────────────────────────────────────
-
-/// Converts a component value list to a Stylo `Size` (used by `width`, `height`, `min-*`).
-///
-/// Handles the `auto` keyword and non-negative length-percentage values.
-pub(crate) fn ir_to_size(
-    values: &[ArchivedCssComponentValue],
-) -> Option<::style::values::specified::Size> {
+/// Converts a token list to a Stylo `Size` (Raw fallback).
+pub(crate) fn ir_to_size(values: &[ArchivedCssToken]) -> Option<::style::values::specified::Size> {
     use ::style::values::specified::Size;
     if ir_keyword(values) == Some("auto") {
         Some(Size::Auto)
@@ -175,11 +156,9 @@ pub(crate) fn ir_to_size(
     }
 }
 
-/// Converts a component value list to a Stylo `MaxSize` (used by `max-width`, `max-height`).
-///
-/// Handles the `none` keyword and non-negative length-percentage values.
+/// Converts a token list to a Stylo `MaxSize` (Raw fallback).
 pub(crate) fn ir_to_max_size(
-    values: &[ArchivedCssComponentValue],
+    values: &[ArchivedCssToken],
 ) -> Option<::style::values::specified::MaxSize> {
     use ::style::values::specified::MaxSize;
     if ir_keyword(values) == Some("none") {
@@ -189,9 +168,9 @@ pub(crate) fn ir_to_max_size(
     }
 }
 
-/// Converts a component value list to a Stylo `Margin` (`auto` or length-percentage).
+/// Converts a token list to a Stylo `Margin` (Raw fallback).
 pub(crate) fn ir_to_margin(
-    values: &[ArchivedCssComponentValue],
+    values: &[ArchivedCssToken],
 ) -> Option<::style::values::specified::length::Margin> {
     use ::style::values::specified::length::Margin;
     if ir_keyword(values) == Some("auto") {
@@ -201,9 +180,9 @@ pub(crate) fn ir_to_margin(
     }
 }
 
-/// Converts a component value list to a Stylo `Inset` (`auto` or length-percentage).
+/// Converts a token list to a Stylo `Inset` (Raw fallback).
 pub(crate) fn ir_to_inset(
-    values: &[ArchivedCssComponentValue],
+    values: &[ArchivedCssToken],
 ) -> Option<::style::values::specified::Inset> {
     use ::style::values::specified::Inset;
     if ir_keyword(values) == Some("auto") {
@@ -213,9 +192,9 @@ pub(crate) fn ir_to_inset(
     }
 }
 
-/// Converts a keyword component value list to a Stylo `BorderStyle`.
+/// Converts a keyword token list to a Stylo `BorderStyle` (Raw fallback).
 pub(crate) fn ir_to_border_style(
-    values: &[ArchivedCssComponentValue],
+    values: &[ArchivedCssToken],
 ) -> Option<::style::values::specified::BorderStyle> {
     use ::style::values::specified::BorderStyle;
     match ir_keyword(values)? {
@@ -233,13 +212,9 @@ pub(crate) fn ir_to_border_style(
     }
 }
 
-/// Converts a keyword component value list to a Stylo `BorderSideWidth`.
-///
-/// Supports the `medium` keyword only.  `thin` and `thick` are not
-/// constructable from outside Stylo because `BorderSideWidth`'s inner
-/// `LineWidth` field is module-private.
+/// Converts a keyword token list to a Stylo `BorderSideWidth` (Raw fallback).
 pub(crate) fn ir_to_border_width(
-    values: &[ArchivedCssComponentValue],
+    values: &[ArchivedCssToken],
 ) -> Option<::style::values::specified::BorderSideWidth> {
     use ::style::values::specified::BorderSideWidth;
     if ir_keyword(values)? == "medium" {
@@ -249,10 +224,9 @@ pub(crate) fn ir_to_border_width(
     }
 }
 
-/// Converts a component value list to a `NonNegativeLengthPercentageOrNormal`
-/// (used by `column-gap` and `row-gap`).
+/// Converts a token list to a `NonNegativeLengthPercentageOrNormal` (Raw fallback).
 pub(crate) fn ir_to_gap(
-    values: &[ArchivedCssComponentValue],
+    values: &[ArchivedCssToken],
 ) -> Option<::style::values::specified::length::NonNegativeLengthPercentageOrNormal> {
     use ::style::values::specified::length::NonNegativeLengthPercentageOrNormal;
     if ir_keyword(values) == Some("normal") {

@@ -1,10 +1,11 @@
 use paws_style_ir::{
-    CssComponentValue, CssPropertyName, CssRuleIR, CssUnit, CssWideKeyword, PropertyDeclarationIR,
+    CssPropertyName, CssRuleIR, CssToken, CssUnit, HashType, PropertyDeclarationIR,
 };
 
 pub mod at_rule;
 pub mod decl_only;
 pub mod nested_body;
+mod resolve;
 pub mod stylesheet;
 
 pub enum BodyItem {
@@ -35,83 +36,170 @@ pub fn partition_body_items(items: Vec<BodyItem>) -> (Vec<PropertyDeclarationIR>
     (decls, rules)
 }
 
-/// Recursively parses cssparser tokens into a list of `CssComponentValue`.
+/// Recursively parses cssparser tokens into a flat list of [`CssToken`].
 ///
-/// Maps each cssparser token to the corresponding IR variant. Function tokens
-/// are parsed recursively via `parse_nested_block`.
-fn parse_component_values<'i, 't>(input: &mut cssparser::Parser<'i, 't>) -> Vec<CssComponentValue> {
-    let mut values = Vec::new();
+/// Strictly follows CSS Syntax Level 3 token types.  Block/function contents
+/// are flattened into the token stream with matching open/close bracket tokens.
+fn parse_tokens<'i, 't>(input: &mut cssparser::Parser<'i, 't>) -> Vec<CssToken> {
+    let mut tokens = Vec::new();
     loop {
         let token = match input.next() {
             Ok(t) => t.clone(),
             Err(_) => break,
         };
         match token {
+            // <ident-token>
             cssparser::Token::Ident(ref ident) => {
-                let s = ident.as_ref();
-                if let Some(wide) = CssWideKeyword::parse(s) {
-                    values.push(CssComponentValue::CssWide(wide));
-                } else {
-                    values.push(CssComponentValue::Ident(s.to_string()));
-                }
+                tokens.push(CssToken::Ident(ident.as_ref().to_string()));
             }
+            // <dimension-token>
             cssparser::Token::Dimension {
                 value, ref unit, ..
             } => {
                 if let Some(typed_unit) = CssUnit::parse(unit.as_ref()) {
-                    values.push(CssComponentValue::Number(value, typed_unit));
+                    tokens.push(CssToken::Dimension(value, typed_unit));
                 } else {
-                    // Unknown unit: store as unparsed dimension text
-                    values.push(CssComponentValue::Unparsed(format!("{}{}", value, unit)));
+                    // Unknown unit: store value + unit as separate tokens
+                    tokens.push(CssToken::Ident(format!("{}{}", value, unit)));
                 }
             }
+            // <percentage-token>
             cssparser::Token::Percentage { unit_value, .. } => {
-                values.push(CssComponentValue::Number(
-                    unit_value * 100.0,
-                    CssUnit::Percent,
+                tokens.push(CssToken::Percentage(unit_value * 100.0));
+            }
+            // <number-token>
+            cssparser::Token::Number { value, .. } => {
+                tokens.push(CssToken::Number(value));
+            }
+            // <string-token>
+            cssparser::Token::QuotedString(ref s) => {
+                tokens.push(CssToken::String(s.as_ref().to_string()));
+            }
+            // <hash-token> (unrestricted)
+            cssparser::Token::Hash(ref s) => {
+                tokens.push(CssToken::Hash(
+                    s.as_ref().to_string(),
+                    HashType::Unrestricted,
                 ));
             }
-            cssparser::Token::Number { value, .. } => {
-                values.push(CssComponentValue::Number(value, CssUnit::Unitless));
+            // <hash-token> (id)
+            cssparser::Token::IDHash(ref s) => {
+                tokens.push(CssToken::Hash(s.as_ref().to_string(), HashType::Id));
             }
-            cssparser::Token::QuotedString(ref s) => {
-                values.push(CssComponentValue::QuotedString(s.as_ref().to_string()));
-            }
-            cssparser::Token::Hash(ref s) | cssparser::Token::IDHash(ref s) => {
-                values.push(CssComponentValue::Hash(s.as_ref().to_string()));
-            }
+            // <comma-token>
             cssparser::Token::Comma => {
-                values.push(CssComponentValue::Comma);
+                tokens.push(CssToken::Comma);
             }
+            // <colon-token>
+            cssparser::Token::Colon => {
+                tokens.push(CssToken::Colon);
+            }
+            // <semicolon-token>
+            cssparser::Token::Semicolon => {
+                tokens.push(CssToken::Semicolon);
+            }
+            // <delim-token>
             cssparser::Token::Delim(c) => {
-                values.push(CssComponentValue::Delimiter(c));
+                tokens.push(CssToken::Delim(c));
             }
+            // <function-token> — emit name, then flat arguments, then CloseParen
             cssparser::Token::Function(ref name) => {
                 let fn_name = name.as_ref().to_string();
+                tokens.push(CssToken::Function(fn_name));
                 let args = input
                     .parse_nested_block(|nested| {
-                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_component_values(nested))
+                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_tokens(nested))
                     })
                     .unwrap_or_default();
-                values.push(CssComponentValue::Function(fn_name, args));
+                tokens.extend(args);
+                tokens.push(CssToken::CloseParen);
             }
-            // Skip tokens that don't map to component values (whitespace is implicit)
+            // <at-keyword-token>
+            cssparser::Token::AtKeyword(ref name) => {
+                tokens.push(CssToken::AtKeyword(name.as_ref().to_string()));
+            }
+            // <bad-string-token>
+            cssparser::Token::BadString(_) => {
+                tokens.push(CssToken::BadString);
+            }
+            // <url-token>
+            cssparser::Token::UnquotedUrl(ref url) => {
+                tokens.push(CssToken::Url(url.as_ref().to_string()));
+            }
+            // <bad-url-token>
+            cssparser::Token::BadUrl(_) => {
+                tokens.push(CssToken::BadUrl);
+            }
+            // <whitespace-token>
+            cssparser::Token::WhiteSpace(_) => {
+                tokens.push(CssToken::Whitespace);
+            }
+            // <CDO-token>
+            cssparser::Token::CDO => {
+                tokens.push(CssToken::CDO);
+            }
+            // <CDC-token>
+            cssparser::Token::CDC => {
+                tokens.push(CssToken::CDC);
+            }
+            // Block tokens — flatten contents with matching brackets
+            cssparser::Token::ParenthesisBlock => {
+                tokens.push(CssToken::OpenParen);
+                let inner = input
+                    .parse_nested_block(|nested| {
+                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_tokens(nested))
+                    })
+                    .unwrap_or_default();
+                tokens.extend(inner);
+                tokens.push(CssToken::CloseParen);
+            }
+            cssparser::Token::SquareBracketBlock => {
+                tokens.push(CssToken::OpenSquare);
+                let inner = input
+                    .parse_nested_block(|nested| {
+                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_tokens(nested))
+                    })
+                    .unwrap_or_default();
+                tokens.extend(inner);
+                tokens.push(CssToken::CloseSquare);
+            }
+            cssparser::Token::CurlyBracketBlock => {
+                tokens.push(CssToken::OpenCurly);
+                let inner = input
+                    .parse_nested_block(|nested| {
+                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_tokens(nested))
+                    })
+                    .unwrap_or_default();
+                tokens.extend(inner);
+                tokens.push(CssToken::CloseCurly);
+            }
+            // Close tokens emitted by nested parsing — should not appear at top level
+            cssparser::Token::CloseParenthesis => {
+                tokens.push(CssToken::CloseParen);
+            }
+            cssparser::Token::CloseSquareBracket => {
+                tokens.push(CssToken::CloseSquare);
+            }
+            cssparser::Token::CloseCurlyBracket => {
+                tokens.push(CssToken::CloseCurly);
+            }
+            // Remaining tokens (includes match variants like ~= |= etc.)
             _ => {}
         }
     }
-    values
+    tokens
 }
 
-/// Strips a trailing `! important` from the component value list.
+/// Strips a trailing `! important` from the token list.
 ///
 /// Returns `true` if `!important` was found and removed.
-fn strip_important(values: &mut Vec<CssComponentValue>) -> bool {
-    let len = values.len();
+fn strip_important(tokens: &mut Vec<CssToken>) -> bool {
+    let len = tokens.len();
     if len >= 2 {
-        let is_important = matches!(&values[len - 1], CssComponentValue::Ident(s) if s == "important")
-            && matches!(&values[len - 2], CssComponentValue::Delimiter('!'));
+        let is_important = matches!(&tokens[len - 1], CssToken::Ident(s) if s == "important")
+            && matches!(&tokens[len - 2], CssToken::Delim('!'));
         if is_important {
-            values.truncate(len - 2);
+            tokens.truncate(len - 2);
             return true;
         }
     }
@@ -120,18 +208,20 @@ fn strip_important(values: &mut Vec<CssComponentValue>) -> bool {
 
 /// Creates a `PropertyDeclarationIR` from a name and parser input.
 ///
-/// Parses all tokens into structured component values and extracts
-/// `!important` into a separate flag.
+/// Parses all tokens into structured component values, extracts `!important`,
+/// then resolves into a typed [`PropertyValueIR`] when possible.
 pub fn parse_declaration<'i, 't>(
     name: cssparser::CowRcStr<'i>,
     input: &mut cssparser::Parser<'i, 't>,
 ) -> PropertyDeclarationIR {
     let name_str = name.as_ref();
-    let mut values = parse_component_values(input);
-    let important = strip_important(&mut values);
+    let mut tokens = parse_tokens(input);
+    let important = strip_important(&mut tokens);
+    let prop_name = CssPropertyName::parse(name_str);
+    let value = resolve::resolve_typed_value(&prop_name, tokens);
     PropertyDeclarationIR {
-        name: CssPropertyName::parse(name_str),
-        value: values,
+        name: prop_name,
+        value,
         important,
     }
 }

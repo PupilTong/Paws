@@ -30,3 +30,4 @@ paws-style-ir = { path = "../paws-style-ir" }
 
 [dev-dependencies]
 thin-vec = "0.2"
+view-macros = { path = "../view-macros" }

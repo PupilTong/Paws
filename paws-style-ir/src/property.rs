@@ -1,11 +1,11 @@
 use alloc::string::String;
-use alloc::vec::Vec;
 use rkyv::{Archive, Deserialize, Serialize};
 
 /// CSS unit types for numeric values.
 ///
 /// Uses `#[repr(u8)]` for compact rkyv serialization (1 byte vs heap-allocated String).
-/// Unrecognized units at parse time cause the value to fall back to `CssComponentValue::Unparsed`.
+/// Only covers dimension units; percentages and bare numbers are separate
+/// token types (`CssToken::Percentage` and `CssToken::Number`).
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 #[rkyv(
     bytecheck(bounds(__C: rkyv::validation::ArchiveContext, __C::Error: rkyv::rancor::Source)),
@@ -45,8 +45,6 @@ pub enum CssUnit {
     Cqb,
     Cqmin,
     Cqmax,
-    // Percentage
-    Percent,
     // Grid
     Fr,
     // Angles
@@ -61,15 +59,12 @@ pub enum CssUnit {
     Dpi,
     Dpcm,
     Dppx,
-    // Unitless (bare number like `0` or line-height `1.5`)
-    Unitless,
 }
 
 impl CssUnit {
-    /// Converts a CSS unit string to a typed `CssUnit`.
+    /// Converts a CSS dimension unit string to a typed `CssUnit`.
     ///
-    /// Returns `None` for unrecognized units, which should cause the
-    /// declaration to fall back to `CssComponentValue::Unparsed`.
+    /// Returns `None` for unrecognized units.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "px" => Some(CssUnit::Px),
@@ -99,7 +94,6 @@ impl CssUnit {
             "cqb" => Some(CssUnit::Cqb),
             "cqmin" => Some(CssUnit::Cqmin),
             "cqmax" => Some(CssUnit::Cqmax),
-            "%" => Some(CssUnit::Percent),
             "fr" => Some(CssUnit::Fr),
             "deg" => Some(CssUnit::Deg),
             "rad" => Some(CssUnit::Rad),
@@ -110,7 +104,6 @@ impl CssUnit {
             "dpi" => Some(CssUnit::Dpi),
             "dpcm" => Some(CssUnit::Dpcm),
             "dppx" | "x" => Some(CssUnit::Dppx),
-            "" => Some(CssUnit::Unitless),
             _ => None,
         }
     }
@@ -145,7 +138,6 @@ impl CssUnit {
             CssUnit::Cqb => "cqb",
             CssUnit::Cqmin => "cqmin",
             CssUnit::Cqmax => "cqmax",
-            CssUnit::Percent => "%",
             CssUnit::Fr => "fr",
             CssUnit::Deg => "deg",
             CssUnit::Rad => "rad",
@@ -156,7 +148,6 @@ impl CssUnit {
             CssUnit::Dpi => "dpi",
             CssUnit::Dpcm => "dpcm",
             CssUnit::Dppx => "dppx",
-            CssUnit::Unitless => "",
         }
     }
 }
@@ -512,38 +503,88 @@ impl CssPropertyName {
     }
 }
 
-/// A CSS component value — the building block of CSS property values.
+/// Hash token type flag per CSS Syntax Level 3 §4.2.
 ///
-/// Follows the CSS Syntax specification's component value model. A property
-/// value is a list of component values that may include functions (which
-/// recursively contain component values).
+/// Distinguishes `<hash-token>` produced from an `id` selector (`#foo`) vs.
+/// unrestricted contexts (e.g., hex color `#ff0000`).
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
+#[rkyv(
+    bytecheck(bounds(__C: rkyv::validation::ArchiveContext, __C::Error: rkyv::rancor::Source)),
+    serialize_bounds(__S: rkyv::ser::Writer, __S: rkyv::ser::Allocator, __S::Error: rkyv::rancor::Source),
+    deserialize_bounds(__D::Error: rkyv::rancor::Source)
+)]
+#[repr(u8)]
+pub enum HashType {
+    /// Would form a valid identifier — corresponds to cssparser `IDHash`.
+    Id,
+    /// Does not form a valid identifier — corresponds to cssparser `Hash`.
+    Unrestricted,
+}
+
+/// A CSS token — strictly follows the CSS Syntax Level 3 token types.
+///
+/// See <https://drafts.csswg.org/css-syntax/#tokenization> for the full list.
+/// Used inside [`PropertyValueIR::Raw`] for properties that have not yet been
+/// typed or could not be resolved at compile time.
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Clone)]
 #[rkyv(
     bytecheck(bounds(__C: rkyv::validation::ArchiveContext, __C::Error: rkyv::rancor::Source)),
     serialize_bounds(__S: rkyv::ser::Writer, __S: rkyv::ser::Allocator, __S::Error: rkyv::rancor::Source),
     deserialize_bounds(__D::Error: rkyv::rancor::Source)
 )]
-pub enum CssComponentValue {
-    /// A CSS-wide keyword (inherit, initial, unset, revert, revert-layer).
-    CssWide(CssWideKeyword),
-    /// An identifier token (e.g., "red", "auto", "flex", "block").
+pub enum CssToken {
+    /// `<ident-token>` — an identifier (e.g., "red", "auto", "flex").
     Ident(String),
-    /// A numeric value with a typed unit (includes bare numbers as `Unitless`).
-    Number(f32, CssUnit),
-    /// A quoted string value (e.g., `"Helvetica Neue"`).
-    QuotedString(String),
-    /// A hash token without the leading `#` (e.g., `ff0000` from `#ff0000`).
-    Hash(String),
-    /// A delimiter character (e.g., `+`, `-`, `*`, `/`).
-    Delimiter(char),
-    /// A comma separator.
+    /// `<function-token>` — a function name; arguments follow as tokens
+    /// until the matching `CloseParen`.
+    Function(String),
+    /// `<at-keyword-token>` — an at-keyword (e.g., "media", "import").
+    AtKeyword(String),
+    /// `<hash-token>` — value without the leading `#`, plus type flag.
+    Hash(String, HashType),
+    /// `<string-token>` — a quoted string value.
+    String(String),
+    /// `<bad-string-token>` — a string with an unescaped newline.
+    BadString,
+    /// `<url-token>` — an unquoted URL value.
+    Url(String),
+    /// `<bad-url-token>` — a malformed URL.
+    BadUrl,
+    /// `<delim-token>` — a single delimiter character.
+    Delim(char),
+    /// `<number-token>` — a bare numeric value without a unit.
+    Number(f32),
+    /// `<percentage-token>` — a numeric value followed by `%`.
+    /// Stored as the authored value (e.g., `50%` → `50.0`).
+    Percentage(f32),
+    /// `<dimension-token>` — a numeric value with a dimension unit.
+    Dimension(f32, CssUnit),
+    /// `<unicode-range-token>` — a Unicode range (start, end) codepoints.
+    UnicodeRange(u32, u32),
+    /// `<whitespace-token>`.
+    Whitespace,
+    /// `<CDO-token>` — `<!--`.
+    CDO,
+    /// `<CDC-token>` — `-->`.
+    CDC,
+    /// `<colon-token>`.
+    Colon,
+    /// `<semicolon-token>`.
+    Semicolon,
+    /// `<comma-token>`.
     Comma,
-    /// A function call with its name and argument component values.
-    ///
-    /// Examples: `rgb(255, 0, 0)`, `calc(100% - 20px)`, `var(--x)`.
-    Function(String, #[rkyv(omit_bounds)] Vec<CssComponentValue>),
-    /// Fallback for values that could not be parsed into structured form.
-    Unparsed(String),
+    /// `<[-token>`.
+    OpenSquare,
+    /// `<]-token>`.
+    CloseSquare,
+    /// `<(-token>`.
+    OpenParen,
+    /// `<)-token>`.
+    CloseParen,
+    /// `<{-token>`.
+    OpenCurly,
+    /// `<}-token>`.
+    CloseCurly,
 }
 
 /// A single CSS property declaration in the intermediate representation.
@@ -556,7 +597,7 @@ pub enum CssComponentValue {
 pub struct PropertyDeclarationIR {
     pub name: CssPropertyName,
     #[rkyv(omit_bounds)]
-    pub value: Vec<CssComponentValue>,
+    pub value: crate::PropertyValueIR,
     pub important: bool,
 }
 
