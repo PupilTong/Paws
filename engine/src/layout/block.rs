@@ -3,6 +3,7 @@ use crate::layout::text::TextMeasurer;
 use crate::style::to_taffy_style;
 use style::values::specified::font::FONT_MEDIUM_PX;
 use taffy::prelude::*;
+use taffy::style_helpers::length;
 
 /// The result of a layout computation, containing the final dimensions.
 pub struct LayoutBox {
@@ -91,8 +92,8 @@ fn build_subtree(
             let text = node.text_content.as_deref().unwrap_or("");
             let (width, height) = text_measurer.measure_text(text, font_size, None);
 
-            style.size.width = Dimension::Length(width);
-            style.size.height = Dimension::Length(height);
+            style.size.width = length(width);
+            style.size.height = length(height);
 
             taffy.new_leaf(style).ok()
         }

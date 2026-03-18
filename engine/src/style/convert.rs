@@ -1,20 +1,20 @@
 //! Direct conversion from Stylo [`ComputedValues`] to [`taffy::Style`].
 //!
 //! Vendored and adapted from [stylo_taffy](https://github.com/nicell/nicell/blitz/packages/stylo_taffy)
-//! (`convert.rs`), targeting **stylo 0.11 + taffy 0.4** (the original targets stylo ^0.8 + taffy ^0.9).
+//! (`convert.rs`), targeting **stylo 0.11 + taffy 0.9.2**.
 //!
-//! Key adaptations:
-//! - Taffy 0.4 uses simple enum constructors (`Dimension::Auto`, `LengthPercentage::Length(f32)`)
-//!   instead of compact representations and `style_helpers`.
-//! - `calc()` values are resolved to their length component (best-effort) since taffy 0.4 has no
-//!   `CompactLength`.
-//! - Features absent from taffy 0.4 are omitted: `BoxSizing`, `TextAlign`, `Float`, `Clear`,
-//!   grid named lines / template areas.
+//! Key design choices:
+//! - `calc()` values are passed through as raw pointers to Taffy's `CompactLength`, preserving
+//!   percentage terms for layout-time resolution (rather than resolving against zero).
+//! - `Style` is parameterised over `stylo_atoms::Atom` for named grid lines and areas.
+//! - Uses `taffy::style_helpers` constructors which compile to efficient tagged-pointer creation.
 
 /// Private module of type aliases for cleaner references to Stylo types.
 pub(crate) mod stylo_types {
+    pub(crate) use style::properties::generated::longhands::box_sizing::computed_value::T as BoxSizing;
     pub(crate) use style::properties::longhands::position::computed_value::T as Position;
     pub(crate) use style::properties::ComputedValues;
+    pub(crate) use style::values::computed::length_percentage::CalcLengthPercentage;
     pub(crate) use style::values::computed::length_percentage::Unpacked as UnpackedLP;
     pub(crate) use style::values::computed::{BorderSideWidth, LengthPercentage};
     pub(crate) use style::values::generics::length::{GenericMargin, GenericMaxSize, GenericSize};
@@ -25,6 +25,9 @@ pub(crate) mod stylo_types {
     pub(crate) use style::values::specified::box_::{
         Display, DisplayInside, DisplayOutside, Overflow,
     };
+
+    pub(crate) use style::values::computed::text::TextAlign;
+    pub(crate) use style::values::specified::position::GridTemplateAreas;
 
     pub(crate) type MarginVal = GenericMargin<LengthPercentage>;
     pub(crate) type InsetVal = GenericInset<style::values::computed::Percentage, LengthPercentage>;
@@ -50,20 +53,24 @@ pub(crate) mod stylo_types {
 }
 
 use stylo_types as st;
+use taffy::style_helpers::*;
+use taffy::CompactLength;
 
 // ─── Primitive converters ────────────────────────────────────────────
 
 /// Converts a Stylo `LengthPercentage` to a Taffy `LengthPercentage`.
+///
+/// `calc()` values are passed through as raw pointers, preserving percentage
+/// terms for layout-time resolution.
 #[inline]
 pub fn length_percentage(val: &st::LengthPercentage) -> taffy::LengthPercentage {
     match val.unpack() {
-        st::UnpackedLP::Length(len) => taffy::LengthPercentage::Length(len.px()),
-        st::UnpackedLP::Percentage(pct) => taffy::LengthPercentage::Percent(pct.0),
-        st::UnpackedLP::Calc(calc) => {
-            // Best-effort: resolve calc() against a zero basis (drops percentage terms).
-            // Taffy 0.4 has no calc representation; full support would need layout-time resolution.
-            let resolved = calc.resolve(style::values::computed::Length::new(0.0));
-            taffy::LengthPercentage::Length(resolved.px())
+        st::UnpackedLP::Length(len) => length(len.px()),
+        st::UnpackedLP::Percentage(pct) => percent(pct.0),
+        st::UnpackedLP::Calc(calc_ptr) => {
+            let val = CompactLength::calc(calc_ptr as *const st::CalcLengthPercentage as *const ());
+            // SAFETY: calc is a valid value for LengthPercentage
+            unsafe { taffy::LengthPercentage::from_raw(val) }
         }
     }
 }
@@ -72,18 +79,18 @@ pub fn length_percentage(val: &st::LengthPercentage) -> taffy::LengthPercentage 
 #[inline]
 pub fn dimension(val: &st::Size) -> taffy::Dimension {
     match val {
-        st::Size::LengthPercentage(val) => lp_to_dimension(&val.0),
-        st::Size::Auto => taffy::Dimension::Auto,
-        // Taffy 0.4 lacks intrinsic sizing keywords; fall back to Auto.
+        st::Size::LengthPercentage(val) => length_percentage(&val.0).into(),
+        st::Size::Auto => taffy::Dimension::AUTO,
+        // Taffy lacks intrinsic sizing keywords; fall back to Auto.
         st::Size::MaxContent
         | st::Size::MinContent
         | st::Size::FitContent
         | st::Size::FitContentFunction(_)
         | st::Size::Stretch
-        | st::Size::WebkitFillAvailable => taffy::Dimension::Auto,
+        | st::Size::WebkitFillAvailable => taffy::Dimension::AUTO,
         // Anchor positioning is not supported.
         st::Size::AnchorSizeFunction(_) | st::Size::AnchorContainingCalcFunction(_) => {
-            taffy::Dimension::Auto
+            taffy::Dimension::AUTO
         }
     }
 }
@@ -92,29 +99,29 @@ pub fn dimension(val: &st::Size) -> taffy::Dimension {
 #[inline]
 pub fn max_size_dimension(val: &st::MaxSize) -> taffy::Dimension {
     match val {
-        st::MaxSize::LengthPercentage(val) => lp_to_dimension(&val.0),
-        st::MaxSize::None => taffy::Dimension::Auto,
+        st::MaxSize::LengthPercentage(val) => length_percentage(&val.0).into(),
+        st::MaxSize::None => taffy::Dimension::AUTO,
         st::MaxSize::MaxContent
         | st::MaxSize::MinContent
         | st::MaxSize::FitContent
         | st::MaxSize::FitContentFunction(_)
         | st::MaxSize::Stretch
-        | st::MaxSize::WebkitFillAvailable => taffy::Dimension::Auto,
+        | st::MaxSize::WebkitFillAvailable => taffy::Dimension::AUTO,
         st::MaxSize::AnchorSizeFunction(_) | st::MaxSize::AnchorContainingCalcFunction(_) => {
-            taffy::Dimension::Auto
+            taffy::Dimension::AUTO
         }
     }
 }
 
 /// Converts a Stylo margin value to a Taffy `LengthPercentageAuto`.
 #[inline]
-pub fn margin(val: &st::MarginVal) -> taffy::prelude::LengthPercentageAuto {
+pub fn margin(val: &st::MarginVal) -> taffy::LengthPercentageAuto {
     match val {
-        st::MarginVal::Auto => taffy::prelude::LengthPercentageAuto::Auto,
-        st::MarginVal::LengthPercentage(val) => lp_to_lpa(val),
+        st::MarginVal::Auto => taffy::LengthPercentageAuto::AUTO,
+        st::MarginVal::LengthPercentage(val) => length_percentage(val).into(),
         // Anchor positioning not supported.
         st::MarginVal::AnchorSizeFunction(_) | st::MarginVal::AnchorContainingCalcFunction(_) => {
-            taffy::prelude::LengthPercentageAuto::Auto
+            taffy::LengthPercentageAuto::AUTO
         }
     }
 }
@@ -125,23 +132,21 @@ pub fn margin(val: &st::MarginVal) -> taffy::prelude::LengthPercentageAuto {
 #[inline]
 pub fn border(width: &st::BorderSideWidth, style: st::BorderStyle) -> taffy::LengthPercentage {
     if style.none_or_hidden() {
-        return taffy::LengthPercentage::Length(0.0);
+        return zero();
     }
-    taffy::LengthPercentage::Length(width.0.to_f32_px())
+    length(width.0.to_f32_px())
 }
 
 /// Converts a Stylo inset (top/right/bottom/left) to Taffy `LengthPercentageAuto`.
 #[inline]
-pub fn inset(val: &st::InsetVal) -> taffy::prelude::LengthPercentageAuto {
+pub fn inset(val: &st::InsetVal) -> taffy::LengthPercentageAuto {
     match val {
-        st::InsetVal::Auto => taffy::prelude::LengthPercentageAuto::Auto,
-        st::InsetVal::LengthPercentage(val) => lp_to_lpa(val),
+        st::InsetVal::Auto => taffy::LengthPercentageAuto::AUTO,
+        st::InsetVal::LengthPercentage(val) => length_percentage(val).into(),
         // Anchor positioning not supported.
         st::InsetVal::AnchorSizeFunction(_)
         | st::InsetVal::AnchorFunction(_)
-        | st::InsetVal::AnchorContainingCalcFunction(_) => {
-            taffy::prelude::LengthPercentageAuto::Auto
-        }
+        | st::InsetVal::AnchorContainingCalcFunction(_) => taffy::LengthPercentageAuto::AUTO,
     }
 }
 
@@ -155,7 +160,8 @@ pub fn display(input: st::Display) -> taffy::Display {
         st::DisplayInside::Flex => taffy::Display::Flex,
         st::DisplayInside::Grid => taffy::Display::Grid,
         st::DisplayInside::Flow | st::DisplayInside::FlowRoot => taffy::Display::Block,
-        _ => taffy::Display::Block,
+        st::DisplayInside::Table => taffy::Display::Grid,
+        _ => taffy::Display::DEFAULT,
     };
 
     if matches!(input.outside(), st::DisplayOutside::None) {
@@ -163,6 +169,15 @@ pub fn display(input: st::Display) -> taffy::Display {
     }
 
     display
+}
+
+/// Converts a Stylo `BoxSizing` to a Taffy `BoxSizing`.
+#[inline]
+pub fn box_sizing(input: st::BoxSizing) -> taffy::BoxSizing {
+    match input {
+        st::BoxSizing::BorderBox => taffy::BoxSizing::BorderBox,
+        st::BoxSizing::ContentBox => taffy::BoxSizing::ContentBox,
+    }
 }
 
 /// Converts a Stylo `Position` to a Taffy `Position`.
@@ -194,7 +209,6 @@ pub fn aspect_ratio(input: st::GenericAspectRatio<st::NonNegative<f32>>) -> Opti
     use style::values::generics::position::PreferredRatio;
     match input.ratio {
         PreferredRatio::None => None,
-        // Ratio<NonNegative<f32>>(width, height) → width.0 / height.0
         PreferredRatio::Ratio(val) => {
             let w = (val.0).0;
             let h = (val.1).0;
@@ -249,8 +263,19 @@ pub fn item_alignment(input: st::AlignFlags) -> Option<taffy::AlignItems> {
 #[inline]
 pub fn gap(input: &st::Gap) -> taffy::LengthPercentage {
     match input {
-        st::Gap::Normal => taffy::LengthPercentage::Length(0.0),
+        st::Gap::Normal => taffy::LengthPercentage::ZERO,
         st::Gap::LengthPercentage(val) => length_percentage(&val.0),
+    }
+}
+
+/// Converts a Stylo `TextAlign` to Taffy.
+#[inline]
+pub fn text_align(input: st::TextAlign) -> taffy::TextAlign {
+    match input {
+        st::TextAlign::MozLeft => taffy::TextAlign::LegacyLeft,
+        st::TextAlign::MozRight => taffy::TextAlign::LegacyRight,
+        st::TextAlign::MozCenter => taffy::TextAlign::LegacyCenter,
+        _ => taffy::TextAlign::Auto,
     }
 }
 
@@ -281,7 +306,7 @@ pub fn flex_wrap(input: st::FlexWrap) -> taffy::FlexWrap {
 #[inline]
 pub fn flex_basis(input: &st::FlexBasis) -> taffy::Dimension {
     match input {
-        st::FlexBasis::Content => taffy::Dimension::Auto,
+        st::FlexBasis::Content => taffy::Dimension::AUTO,
         st::FlexBasis::Size(size) => dimension(size),
     }
 }
@@ -304,24 +329,34 @@ pub fn grid_auto_flow(input: st::GridAutoFlow) -> taffy::GridAutoFlow {
 
 /// Converts a Stylo `GridLine` to a Taffy `GridPlacement`.
 ///
-/// Taffy 0.4 does not support named grid lines, so named values fall back to `Auto`.
+/// Taffy 0.9 supports named grid lines via the `Atom` string type.
 #[inline]
-pub fn grid_line(input: &st::GridLine) -> taffy::prelude::GridPlacement {
-    use taffy::prelude::GridPlacement;
+pub fn grid_line(input: &st::GridLine) -> taffy::GridPlacement {
     if input.is_auto() {
-        GridPlacement::Auto
+        taffy::GridPlacement::Auto
     } else if input.is_span {
-        GridPlacement::Span(input.line_num as u16)
+        if input.ident.0 != stylo_atoms::atom!("") {
+            taffy::GridPlacement::NamedSpan(
+                input.ident.0.to_string(),
+                input.line_num.try_into().unwrap_or(1),
+            )
+        } else {
+            taffy::GridPlacement::Span(input.line_num as u16)
+        }
+    } else if input.ident.0 != stylo_atoms::atom!("") {
+        taffy::GridPlacement::NamedLine(input.ident.0.to_string(), input.line_num as i16)
     } else if input.line_num != 0 {
-        GridPlacement::Line((input.line_num as i16).into())
+        line(input.line_num as i16)
     } else {
-        GridPlacement::Auto
+        taffy::GridPlacement::Auto
     }
 }
 
-/// Converts a Stylo `GridTemplateComponent` to a Vec of Taffy `TrackSizingFunction`.
+/// Converts a Stylo `GridTemplateComponent` to a Vec of Taffy `GridTemplateComponent`.
 #[inline]
-pub fn grid_template_tracks(input: &st::GridTemplateComponent) -> Vec<taffy::TrackSizingFunction> {
+pub fn grid_template_tracks(
+    input: &st::GridTemplateComponent,
+) -> Vec<taffy::GridTemplateComponent<String>> {
     match input {
         st::GenericGridTemplateComponent::None => Vec::new(),
         st::GenericGridTemplateComponent::TrackList(list) => list
@@ -329,12 +364,24 @@ pub fn grid_template_tracks(input: &st::GridTemplateComponent) -> Vec<taffy::Tra
             .iter()
             .map(|track| match track {
                 st::TrackListValue::TrackSize(size) => {
-                    taffy::TrackSizingFunction::Single(track_size(size))
+                    taffy::GridTemplateComponent::Single(track_size(size))
                 }
-                st::TrackListValue::TrackRepeat(repeat) => taffy::TrackSizingFunction::Repeat(
-                    track_repeat(repeat.count),
-                    repeat.track_sizes.iter().map(track_size).collect(),
-                ),
+                st::TrackListValue::TrackRepeat(repeat) => {
+                    taffy::GridTemplateComponent::Repeat(taffy::GridTemplateRepetition {
+                        count: track_repeat(repeat.count),
+                        tracks: repeat.track_sizes.iter().map(track_size).collect(),
+                        line_names: repeat
+                            .line_names
+                            .iter()
+                            .map(|line_name_set| {
+                                line_name_set
+                                    .iter()
+                                    .map(|ident| ident.0.to_string())
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>(),
+                    })
+                }
             })
             .collect(),
         st::GenericGridTemplateComponent::Subgrid(_)
@@ -342,31 +389,65 @@ pub fn grid_template_tracks(input: &st::GridTemplateComponent) -> Vec<taffy::Tra
     }
 }
 
-/// Converts Stylo implicit grid tracks to a Vec of Taffy `NonRepeatedTrackSizingFunction`.
+/// Extracts grid template line names from a Stylo `GridTemplateComponent`.
 #[inline]
-pub fn grid_auto_tracks(
-    input: &st::ImplicitGridTracks,
-) -> Vec<taffy::NonRepeatedTrackSizingFunction> {
-    input.0.iter().map(track_size).collect()
-}
-
-/// Converts a Stylo `RepeatCount` to a Taffy `GridTrackRepetition`.
-#[inline]
-fn track_repeat(input: st::RepeatCount<i32>) -> taffy::GridTrackRepetition {
+pub fn grid_template_line_names(input: &st::GridTemplateComponent) -> Vec<Vec<String>> {
     match input {
-        st::RepeatCount::Number(val) => {
-            taffy::GridTrackRepetition::Count(val.try_into().unwrap_or(1))
-        }
-        st::RepeatCount::AutoFill => taffy::GridTrackRepetition::AutoFill,
-        st::RepeatCount::AutoFit => taffy::GridTrackRepetition::AutoFit,
+        st::GenericGridTemplateComponent::None => Vec::new(),
+        st::GenericGridTemplateComponent::TrackList(list) => list
+            .line_names
+            .iter()
+            .map(|line_name_set| {
+                line_name_set
+                    .iter()
+                    .map(|ident| ident.0.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+        st::GenericGridTemplateComponent::Subgrid(_)
+        | st::GenericGridTemplateComponent::Masonry => Vec::new(),
     }
 }
 
-/// Converts a Stylo `TrackSize` to a Taffy `NonRepeatedTrackSizingFunction` (= `MinMax<Min, Max>`).
+/// Converts Stylo grid template areas to Taffy `GridTemplateArea`.
 #[inline]
-fn track_size(
-    input: &st::TrackSize<st::LengthPercentage>,
-) -> taffy::NonRepeatedTrackSizingFunction {
+fn grid_template_areas(input: &st::GridTemplateAreas) -> Vec<taffy::GridTemplateArea<String>> {
+    match input {
+        st::GridTemplateAreas::None => Vec::new(),
+        st::GridTemplateAreas::Areas(template_areas_arc) => template_areas_arc
+            .0
+            .areas
+            .iter()
+            .map(|area| taffy::GridTemplateArea {
+                name: area.name.to_string(),
+                row_start: area.rows.start as u16,
+                row_end: area.rows.end as u16,
+                column_start: area.columns.start as u16,
+                column_end: area.columns.end as u16,
+            })
+            .collect(),
+    }
+}
+
+/// Converts Stylo implicit grid tracks to a Vec of Taffy `TrackSizingFunction`.
+#[inline]
+pub fn grid_auto_tracks(input: &st::ImplicitGridTracks) -> Vec<taffy::TrackSizingFunction> {
+    input.0.iter().map(track_size).collect()
+}
+
+/// Converts a Stylo `RepeatCount` to a Taffy `RepetitionCount`.
+#[inline]
+fn track_repeat(input: st::RepeatCount<i32>) -> taffy::RepetitionCount {
+    match input {
+        st::RepeatCount::Number(val) => taffy::RepetitionCount::Count(val.try_into().unwrap_or(1)),
+        st::RepeatCount::AutoFill => taffy::RepetitionCount::AutoFill,
+        st::RepeatCount::AutoFit => taffy::RepetitionCount::AutoFit,
+    }
+}
+
+/// Converts a Stylo `TrackSize` to a Taffy `TrackSizingFunction` (= `MinMax<Min, Max>`).
+#[inline]
+fn track_size(input: &st::TrackSize<st::LengthPercentage>) -> taffy::TrackSizingFunction {
     match input {
         st::TrackSize::Breadth(breadth) => taffy::MinMax {
             min: min_track(breadth),
@@ -377,12 +458,12 @@ fn track_size(
             max: max_track(max),
         },
         st::TrackSize::FitContent(limit) => taffy::MinMax {
-            min: taffy::MinTrackSizingFunction::Auto,
+            min: taffy::MinTrackSizingFunction::AUTO,
             max: match limit {
                 st::TrackBreadth::Breadth(lp) => {
-                    taffy::MaxTrackSizingFunction::FitContent(length_percentage(lp))
+                    taffy::MaxTrackSizingFunction::fit_content(length_percentage(lp))
                 }
-                _ => taffy::MaxTrackSizingFunction::Auto,
+                _ => taffy::MaxTrackSizingFunction::AUTO,
             },
         },
     }
@@ -392,12 +473,10 @@ fn track_size(
 #[inline]
 fn min_track(input: &st::TrackBreadth<st::LengthPercentage>) -> taffy::MinTrackSizingFunction {
     match input {
-        st::TrackBreadth::Breadth(lp) => {
-            taffy::MinTrackSizingFunction::Fixed(length_percentage(lp))
-        }
-        st::TrackBreadth::Fr(_) | st::TrackBreadth::Auto => taffy::MinTrackSizingFunction::Auto,
-        st::TrackBreadth::MinContent => taffy::MinTrackSizingFunction::MinContent,
-        st::TrackBreadth::MaxContent => taffy::MinTrackSizingFunction::MaxContent,
+        st::TrackBreadth::Breadth(lp) => taffy::MinTrackSizingFunction::from(length_percentage(lp)),
+        st::TrackBreadth::Fr(_) | st::TrackBreadth::Auto => taffy::MinTrackSizingFunction::AUTO,
+        st::TrackBreadth::MinContent => taffy::MinTrackSizingFunction::MIN_CONTENT,
+        st::TrackBreadth::MaxContent => taffy::MinTrackSizingFunction::MAX_CONTENT,
     }
 }
 
@@ -405,13 +484,11 @@ fn min_track(input: &st::TrackBreadth<st::LengthPercentage>) -> taffy::MinTrackS
 #[inline]
 fn max_track(input: &st::TrackBreadth<st::LengthPercentage>) -> taffy::MaxTrackSizingFunction {
     match input {
-        st::TrackBreadth::Breadth(lp) => {
-            taffy::MaxTrackSizingFunction::Fixed(length_percentage(lp))
-        }
-        st::TrackBreadth::Fr(val) => taffy::MaxTrackSizingFunction::Fraction(*val),
-        st::TrackBreadth::Auto => taffy::MaxTrackSizingFunction::Auto,
-        st::TrackBreadth::MinContent => taffy::MaxTrackSizingFunction::MinContent,
-        st::TrackBreadth::MaxContent => taffy::MaxTrackSizingFunction::MaxContent,
+        st::TrackBreadth::Breadth(lp) => taffy::MaxTrackSizingFunction::from(length_percentage(lp)),
+        st::TrackBreadth::Fr(val) => taffy::MaxTrackSizingFunction::from_fr(*val),
+        st::TrackBreadth::Auto => taffy::MaxTrackSizingFunction::AUTO,
+        st::TrackBreadth::MinContent => taffy::MaxTrackSizingFunction::MIN_CONTENT,
+        st::TrackBreadth::MaxContent => taffy::MaxTrackSizingFunction::MAX_CONTENT,
     }
 }
 
@@ -422,13 +499,18 @@ fn max_track(input: &st::TrackBreadth<st::LengthPercentage>) -> taffy::MaxTrackS
 /// This replaces the string round-trip (`ComputedValues → CSS string → parse → taffy`)
 /// with direct type-level conversion, handling percentages, calc(), and all layout properties.
 pub fn to_taffy_style(style: &st::ComputedValues) -> taffy::Style {
+    let d = style.clone_display();
     let pos = style.get_position();
     let margin_s = style.get_margin();
     let padding_s = style.get_padding();
     let border_s = style.get_border();
 
     taffy::Style {
-        display: self::display(style.clone_display()),
+        dummy: core::marker::PhantomData,
+        display: self::display(d),
+        box_sizing: self::box_sizing(style.clone_box_sizing()),
+        item_is_table: d.inside() == st::DisplayInside::Table,
+        item_is_replaced: false,
         position: self::position(style.clone_position()),
         overflow: taffy::Point {
             x: self::overflow(style.clone_overflow_x()),
@@ -492,6 +574,7 @@ pub fn to_taffy_style(style: &st::ComputedValues) -> taffy::Style {
         align_self: self::item_alignment(pos.align_self.0),
         justify_items: self::item_alignment((pos.justify_items.computed.0).0),
         justify_self: self::item_alignment(pos.justify_self.0),
+        text_align: self::text_align(style.clone_text_align()),
 
         // Flexbox
         flex_direction: self::flex_direction(pos.flex_direction),
@@ -504,6 +587,9 @@ pub fn to_taffy_style(style: &st::ComputedValues) -> taffy::Style {
         grid_auto_flow: self::grid_auto_flow(pos.grid_auto_flow),
         grid_template_rows: self::grid_template_tracks(&pos.grid_template_rows),
         grid_template_columns: self::grid_template_tracks(&pos.grid_template_columns),
+        grid_template_row_names: self::grid_template_line_names(&pos.grid_template_rows),
+        grid_template_column_names: self::grid_template_line_names(&pos.grid_template_columns),
+        grid_template_areas: self::grid_template_areas(&pos.grid_template_areas),
         grid_auto_rows: self::grid_auto_tracks(&pos.grid_auto_rows),
         grid_auto_columns: self::grid_auto_tracks(&pos.grid_auto_columns),
 
@@ -516,33 +602,5 @@ pub fn to_taffy_style(style: &st::ComputedValues) -> taffy::Style {
             start: self::grid_line(&pos.grid_column_start),
             end: self::grid_line(&pos.grid_column_end),
         },
-    }
-}
-
-// ─── Internal helpers ────────────────────────────────────────────────
-
-/// Converts a Stylo `LengthPercentage` to a Taffy `Dimension`.
-#[inline]
-fn lp_to_dimension(val: &st::LengthPercentage) -> taffy::Dimension {
-    match val.unpack() {
-        st::UnpackedLP::Length(len) => taffy::Dimension::Length(len.px()),
-        st::UnpackedLP::Percentage(pct) => taffy::Dimension::Percent(pct.0),
-        st::UnpackedLP::Calc(calc) => {
-            let resolved = calc.resolve(style::values::computed::Length::new(0.0));
-            taffy::Dimension::Length(resolved.px())
-        }
-    }
-}
-
-/// Converts a Stylo `LengthPercentage` to a Taffy `LengthPercentageAuto`.
-#[inline]
-fn lp_to_lpa(val: &st::LengthPercentage) -> taffy::prelude::LengthPercentageAuto {
-    match val.unpack() {
-        st::UnpackedLP::Length(len) => taffy::prelude::LengthPercentageAuto::Length(len.px()),
-        st::UnpackedLP::Percentage(pct) => taffy::prelude::LengthPercentageAuto::Percent(pct.0),
-        st::UnpackedLP::Calc(calc) => {
-            let resolved = calc.resolve(style::values::computed::Length::new(0.0));
-            taffy::prelude::LengthPercentageAuto::Length(resolved.px())
-        }
     }
 }
