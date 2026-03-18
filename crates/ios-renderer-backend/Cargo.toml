@@ -1,0 +1,18 @@
+[package]
+name = "ios-renderer-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+rayon = "1.10"
+fnv = "1.0"
+
+[build-dependencies]
+cbindgen = "0.26"
+
+[dev-dependencies]
+dhat = "0.3.3"
