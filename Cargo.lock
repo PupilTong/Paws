@@ -1181,6 +1181,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ios-example"
+version = "0.1.0"
+dependencies = [
+ "cbindgen",
+ "ios-renderer-backend",
+]
+
+[[package]]
 name = "ios-renderer-backend"
 version = "0.1.0"
 dependencies = [

@@ -151,7 +151,7 @@ pub(crate) fn run_layerize<'a>(
     // requiring the output type to be Send (it borrows non-Send CullNode refs).
     let mut temp = take_temp_vec();
     if temp.capacity() < cull.children.len() {
-        temp.reserve(cull.children.len() - temp.capacity());
+        temp.reserve(cull.children.len());
     }
     // SAFETY: We are setting the length to match the number of children we
     // will initialize in the rayon scope below. Each slot is written to
