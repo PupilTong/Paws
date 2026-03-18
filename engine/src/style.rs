@@ -157,13 +157,14 @@ pub(crate) fn compute_style_for_node(
     let default_parent = ComputedValues::initial_values_with_font_override(Font::initial_values());
     let effective_parent = parent_style.unwrap_or(&default_parent);
 
-    // Cache conditions need to be tracked
-    let bloom_filter = selectors::bloom::BloomFilter::new();
     let mut selector_caches = selectors::matching::SelectorCaches::default();
 
+    // Pass `None` for bloom filter so Stylo always walks the DOM for ancestor-
+    // based combinators (descendant, child). An empty bloom filter would reject
+    // all ancestor checks as false negatives.
     let mut matching_context = MatchingContext::new(
         MatchingMode::Normal,
-        Some(&bloom_filter),
+        None,
         &mut selector_caches,
         QuirksMode::NoQuirks,
         NeedsSelectorFlags::No,

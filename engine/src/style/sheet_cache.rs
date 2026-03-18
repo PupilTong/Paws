@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use fnv::FnvHashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::RwLock;
 
@@ -12,14 +12,14 @@ use style::stylesheets::{AllowImportRules, Origin, Stylesheet, StylesheetContent
 ///
 /// Uses double-checked locking: read lock for cache hits, write lock only on miss.
 pub struct StylesheetCache {
-    cache: RwLock<HashMap<String, Arc<StylesheetContents>>>,
+    cache: RwLock<FnvHashMap<String, Arc<StylesheetContents>>>,
     lock: SharedRwLock,
 }
 
 impl StylesheetCache {
     pub(crate) fn new(lock: SharedRwLock) -> Self {
         Self {
-            cache: RwLock::new(HashMap::new()),
+            cache: RwLock::new(FnvHashMap::default()),
             lock,
         }
     }
