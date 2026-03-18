@@ -1,4 +1,4 @@
-//! Enum-to-enum converters for display, position, overflow, and alignment.
+//! Enum-to-enum converters for display, position, overflow, alignment, and box-sizing.
 
 use super::stylo_types as st;
 
@@ -10,7 +10,8 @@ pub fn display(input: st::Display) -> taffy::Display {
         st::DisplayInside::Flex => taffy::Display::Flex,
         st::DisplayInside::Grid => taffy::Display::Grid,
         st::DisplayInside::Flow | st::DisplayInside::FlowRoot => taffy::Display::Block,
-        _ => taffy::Display::Block,
+        st::DisplayInside::Table => taffy::Display::Grid,
+        _ => taffy::Display::DEFAULT,
     };
 
     if matches!(input.outside(), st::DisplayOutside::None) {
@@ -18,6 +19,15 @@ pub fn display(input: st::Display) -> taffy::Display {
     }
 
     display
+}
+
+/// Converts a Stylo `BoxSizing` to a Taffy `BoxSizing`.
+#[inline]
+pub fn box_sizing(input: st::BoxSizing) -> taffy::BoxSizing {
+    match input {
+        st::BoxSizing::BorderBox => taffy::BoxSizing::BorderBox,
+        st::BoxSizing::ContentBox => taffy::BoxSizing::ContentBox,
+    }
 }
 
 /// Converts a Stylo `Position` to a Taffy `Position`.
@@ -49,7 +59,6 @@ pub fn aspect_ratio(input: st::GenericAspectRatio<st::NonNegative<f32>>) -> Opti
     use style::values::generics::position::PreferredRatio;
     match input.ratio {
         PreferredRatio::None => None,
-        // Ratio<NonNegative<f32>>(width, height) → width.0 / height.0
         PreferredRatio::Ratio(val) => {
             let w = (val.0).0;
             let h = (val.1).0;
@@ -97,5 +106,16 @@ pub fn item_alignment(input: st::AlignFlags) -> Option<taffy::AlignItems> {
         st::AlignFlags::CENTER => Some(taffy::AlignItems::Center),
         st::AlignFlags::BASELINE => Some(taffy::AlignItems::Baseline),
         _ => None,
+    }
+}
+
+/// Converts a Stylo `TextAlign` to a Taffy `TextAlign`.
+#[inline]
+pub fn text_align(input: st::TextAlign) -> taffy::TextAlign {
+    match input {
+        st::TextAlign::MozLeft => taffy::TextAlign::LegacyLeft,
+        st::TextAlign::MozRight => taffy::TextAlign::LegacyRight,
+        st::TextAlign::MozCenter => taffy::TextAlign::LegacyCenter,
+        _ => taffy::TextAlign::Auto,
     }
 }

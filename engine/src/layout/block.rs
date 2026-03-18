@@ -91,8 +91,10 @@ fn build_subtree(
             let text = node.text_content.as_deref().unwrap_or("");
             let (width, height) = text_measurer.measure_text(text, font_size, None);
 
-            style.size.width = Dimension::Length(width);
-            style.size.height = Dimension::Length(height);
+            let w_lp: taffy::LengthPercentage = taffy::style_helpers::length(width);
+            let h_lp: taffy::LengthPercentage = taffy::style_helpers::length(height);
+            style.size.width = w_lp.into();
+            style.size.height = h_lp.into();
 
             taffy.new_leaf(style).ok()
         }
