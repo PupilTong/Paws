@@ -2,6 +2,7 @@
 
 use super::length::dimension;
 use super::stylo_types as st;
+use taffy::prelude::*;
 
 /// Converts Stylo `FlexDirection` to Taffy.
 #[inline]
@@ -28,7 +29,7 @@ pub fn flex_wrap(input: st::FlexWrap) -> taffy::FlexWrap {
 #[inline]
 pub fn flex_basis(input: &st::FlexBasis) -> taffy::Dimension {
     match input {
-        st::FlexBasis::Content => taffy::Dimension::Auto,
+        st::FlexBasis::Content => taffy::Dimension::AUTO,
         st::FlexBasis::Size(size) => dimension(size),
     }
 }
