@@ -120,14 +120,10 @@ impl StylePropertyMapReadOnly {
             entries.push((name.to_owned(), value));
         }
 
-        entries.sort_by(|a, b| {
-            let a_vendor = a.0.starts_with('-');
-            let b_vendor = b.0.starts_with('-');
-            match (a_vendor, b_vendor) {
-                (false, true) => std::cmp::Ordering::Less,
-                (true, false) => std::cmp::Ordering::Greater,
-                _ => a.0.cmp(&b.0),
-            }
+        entries.sort_unstable_by(|a, b| {
+            a.0.starts_with('-')
+                .cmp(&b.0.starts_with('-'))
+                .then_with(|| a.0.cmp(&b.0))
         });
 
         entries

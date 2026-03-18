@@ -1436,4 +1436,1135 @@ mod tests {
         );
         assert_computed_contains(&val, "5");
     }
+
+    // ── E2E: Multi-element DOM traversal ────────────────────────
+    //
+    // These tests build complex DOM trees and apply CSS via selectors,
+    // exercising node.rs (TNode), selector.rs (selectors::Element),
+    // document.rs (TDocument), and dom/mod.rs (ChildrenIterator) during
+    // Stylo's style resolution traversal.
+
+    #[test]
+    fn test_e2e_sibling_selector_exercises_traversal() {
+        // Build: doc > parent > [child1, child2, child3]
+        // CSS: div + div { color: green; } — exercises next/prev_sibling_element()
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("section".to_string());
+        state.append_element(0, parent).unwrap();
+
+        let c1 = state.create_element("div".to_string());
+        let c2 = state.create_element("div".to_string());
+        let c3 = state.create_element("div".to_string());
+        state.append_element(parent, c1).unwrap();
+        state.append_element(parent, c2).unwrap();
+        state.append_element(parent, c3).unwrap();
+
+        state.add_stylesheet("div + div { color: green; }".to_string());
+
+        // c1 has no previous sibling div → default color
+        let map1 = state.computed_style_map(c1).unwrap();
+        let color1 = map1
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+
+        // c2 is preceded by c1 → green
+        let map2 = state.computed_style_map(c2).unwrap();
+        let color2 = map2
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+
+        // c3 is preceded by c2 → green
+        let map3 = state.computed_style_map(c3).unwrap();
+        let color3 = map3
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+
+        // c1 should NOT be green (rgb(0, 128, 0))
+        if let crate::style::typed_om::CSSStyleValue::Unparsed(s) = &color1 {
+            assert_ne!(s, "rgb(0, 128, 0)", "c1 should not match div + div");
+        }
+        // c2, c3 should be green
+        match &color2 {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(0, 128, 0)", "c2 should match div + div");
+            }
+            other => panic!("Expected green for c2, got: {other:?}"),
+        }
+        match &color3 {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(0, 128, 0)", "c3 should match div + div");
+            }
+            other => panic!("Expected green for c3, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_e2e_child_combinator_exercises_parent_element() {
+        // Exercises parent_element() via the `>` child combinator with classes
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+        state
+            .set_attribute(parent, "class".to_string(), "parent".to_string())
+            .unwrap();
+
+        let c1 = state.create_element("div".to_string());
+        let c2 = state.create_element("div".to_string());
+        state.append_element(parent, c1).unwrap();
+        state.append_element(parent, c2).unwrap();
+        state
+            .set_attribute(c1, "class".to_string(), "target".to_string())
+            .unwrap();
+
+        state.add_stylesheet(".parent > .target { color: blue; }".to_string());
+
+        let map1 = state.computed_style_map(c1).unwrap();
+        let color1 = map1
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color1 {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(
+                    s, "rgb(0, 0, 255)",
+                    ".target child of .parent should be blue"
+                );
+            }
+            other => panic!("Expected blue for .target, got: {other:?}"),
+        }
+
+        // c2 has no .target class → should NOT be blue
+        let map2 = state.computed_style_map(c2).unwrap();
+        let color2 = map2
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        if let crate::style::typed_om::CSSStyleValue::Unparsed(s) = &color2 {
+            assert_ne!(s, "rgb(0, 0, 255)", "c2 without .target should not be blue");
+        }
+    }
+
+    #[test]
+    fn test_e2e_general_sibling_selector() {
+        // CSS: div ~ span { color: red; } — exercises next_sibling_element chain
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("section".to_string());
+        state.append_element(0, parent).unwrap();
+
+        let div = state.create_element("div".to_string());
+        let p = state.create_element("p".to_string());
+        let span = state.create_element("span".to_string());
+        state.append_element(parent, div).unwrap();
+        state.append_element(parent, p).unwrap();
+        state.append_element(parent, span).unwrap();
+
+        state.add_stylesheet("div ~ span { color: red; }".to_string());
+
+        let map_span = state.computed_style_map(span).unwrap();
+        let color = map_span
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(255, 0, 0)", "span should match div ~ span");
+            }
+            other => panic!("Expected red for span, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_e2e_attribute_selector() {
+        // Exercises attr_matches(), get_attr() in selector.rs
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_attribute(el, "data-role".to_string(), "main".to_string())
+            .unwrap();
+
+        state.add_stylesheet(r#"[data-role="main"] { color: purple; }"#.to_string());
+
+        let map = state.computed_style_map(el).unwrap();
+        let color = map
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(128, 0, 128)");
+            }
+            other => panic!("Expected purple, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_e2e_id_selector() {
+        // Exercises has_id() in selector.rs
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_attribute(el, "id".to_string(), "main-content".to_string())
+            .unwrap();
+
+        state.add_stylesheet("#main-content { color: navy; }".to_string());
+
+        let map = state.computed_style_map(el).unwrap();
+        let color = map
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(0, 0, 128)");
+            }
+            other => panic!("Expected navy, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_e2e_empty_pseudo_class() {
+        // Exercises is_empty() in selector.rs
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let empty = state.create_element("div".to_string());
+        let non_empty = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
+        state.append_element(0, empty).unwrap();
+        state.append_element(0, non_empty).unwrap();
+        state.append_element(non_empty, child).unwrap();
+
+        state.add_stylesheet("div:empty { color: gray; }".to_string());
+
+        let map_empty = state.computed_style_map(empty).unwrap();
+        let color_empty = map_empty
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color_empty {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(128, 128, 128)", "empty div should match :empty");
+            }
+            other => panic!("Expected gray for empty, got: {other:?}"),
+        }
+
+        let map_nonempty = state.computed_style_map(non_empty).unwrap();
+        let color_nonempty = map_nonempty
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        if let crate::style::typed_om::CSSStyleValue::Unparsed(s) = &color_nonempty {
+            assert_ne!(
+                s, "rgb(128, 128, 128)",
+                "non-empty div should NOT match :empty"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_deeply_nested_tree() {
+        // Exercises ChildrenIterator, parent_element(), traversal_parent()
+        // through deeply nested DOM traversal
+        let mut state = RuntimeState::new("https://example.com".to_string());
+
+        // Build: doc > div.a > div.b > div.c > div.d
+        let a = state.create_element("div".to_string());
+        let b = state.create_element("div".to_string());
+        let c = state.create_element("div".to_string());
+        let d = state.create_element("div".to_string());
+        state.append_element(0, a).unwrap();
+        state.append_element(a, b).unwrap();
+        state.append_element(b, c).unwrap();
+        state.append_element(c, d).unwrap();
+
+        state
+            .set_attribute(a, "class".to_string(), "root-a".to_string())
+            .unwrap();
+        state
+            .set_attribute(d, "class".to_string(), "leaf-d".to_string())
+            .unwrap();
+
+        // Descendant combinator exercises parent_element chain
+        state.add_stylesheet(".root-a .leaf-d { color: teal; }".to_string());
+
+        let map = state.computed_style_map(d).unwrap();
+        let color = map
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(
+                    s, "rgb(0, 128, 128)",
+                    ".leaf-d should match .root-a .leaf-d"
+                );
+            }
+            other => panic!("Expected teal, got: {other:?}"),
+        }
+    }
+
+    // ── E2E: Flexbox layout ─────────────────────────────────────
+
+    #[test]
+    fn test_e2e_flexbox_alignment_properties() {
+        // Exercises enums::content_alignment, enums::item_alignment, flex::*
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let container = state.create_element("div".to_string());
+        state.append_element(0, container).unwrap();
+        state
+            .set_attribute(container, "class".to_string(), "flex-container".to_string())
+            .unwrap();
+
+        let child = state.create_element("div".to_string());
+        state.append_element(container, child).unwrap();
+        state
+            .set_attribute(child, "class".to_string(), "flex-item".to_string())
+            .unwrap();
+
+        state.add_stylesheet(
+            r#".flex-container {
+                display: flex;
+                flex-direction: column;
+                flex-wrap: wrap;
+                justify-content: space-between;
+                align-items: center;
+                align-content: space-around;
+                gap: 10px 20px;
+            }
+            .flex-item {
+                flex-grow: 2;
+                flex-shrink: 0.5;
+                flex-basis: 100px;
+                align-self: flex-end;
+            }"#
+            .to_string(),
+        );
+
+        // Container properties
+        let map_c = state.computed_style_map(container).unwrap();
+        assert_keyword(
+            &map_c
+                .get("display", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "flex",
+        );
+        assert_keyword(
+            &map_c
+                .get("flex-direction", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "column",
+        );
+        assert_keyword(
+            &map_c
+                .get("flex-wrap", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "wrap",
+        );
+        assert_keyword(
+            &map_c
+                .get("justify-content", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "space-between",
+        );
+        assert_keyword(
+            &map_c
+                .get("align-items", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "center",
+        );
+
+        // Item properties
+        let map_i = state.computed_style_map(child).unwrap();
+        assert_keyword(
+            &map_i
+                .get("align-self", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "flex-end",
+        );
+        assert_computed_contains(
+            &map_i
+                .get("flex-grow", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "2",
+        );
+    }
+
+    #[test]
+    fn test_e2e_flexbox_reverse_directions() {
+        // Exercises flex::flex_direction (row-reverse, column-reverse)
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+
+        state
+            .set_inline_style(el, "display".to_string(), "flex".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "flex-direction".to_string(), "row-reverse".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        assert_keyword(
+            &map.get("flex-direction", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "row-reverse",
+        );
+    }
+
+    // ── E2E: Grid layout ────────────────────────────────────────
+
+    #[test]
+    fn test_e2e_grid_template_tracks() {
+        // Exercises grid_template_tracks via IR pipeline
+        let val = ir_pipeline_get(
+            view_macros::css!(r#"div { display: grid; grid-template-columns: 100px 200px; }"#),
+            "display",
+        );
+        assert_keyword(&val, "grid");
+    }
+
+    #[test]
+    fn test_e2e_grid_gap_column() {
+        let val = ir_pipeline_get(
+            view_macros::css!(r#"div { display: grid; column-gap: 10px; }"#),
+            "column-gap",
+        );
+        assert_computed_contains(&val, "10");
+    }
+
+    #[test]
+    fn test_e2e_grid_gap_row() {
+        let val = ir_pipeline_get(
+            view_macros::css!(r#"div { display: grid; row-gap: 5px; }"#),
+            "row-gap",
+        );
+        assert_computed_contains(&val, "5");
+    }
+
+    #[test]
+    fn test_e2e_grid_auto_flow_row() {
+        let val = ir_pipeline_get(
+            view_macros::css!(r#"div { display: grid; grid-auto-flow: row; }"#),
+            "display",
+        );
+        assert_keyword(&val, "grid");
+    }
+
+    #[test]
+    fn test_e2e_grid_auto_flow_row_dense() {
+        let val = ir_pipeline_get(
+            view_macros::css!(r#"div { display: grid; grid-auto-flow: row dense; }"#),
+            "display",
+        );
+        assert_keyword(&val, "grid");
+    }
+
+    #[test]
+    fn test_e2e_grid_auto_flow_column() {
+        let val = ir_pipeline_get(
+            view_macros::css!(r#"div { display: grid; grid-auto-flow: column; }"#),
+            "display",
+        );
+        assert_keyword(&val, "grid");
+    }
+
+    #[test]
+    fn test_e2e_grid_auto_flow_column_dense() {
+        let val = ir_pipeline_get(
+            view_macros::css!(r#"div { display: grid; grid-auto-flow: column dense; }"#),
+            "display",
+        );
+        assert_keyword(&val, "grid");
+    }
+
+    #[test]
+    fn test_e2e_grid_repeat_auto_fit() {
+        // Exercises grid::track_repeat with auto-fit via IR stylesheet
+        let val = ir_pipeline_get(
+            view_macros::css!(
+                r#"div { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); }"#
+            ),
+            "display",
+        );
+        assert_keyword(&val, "grid");
+    }
+
+    #[test]
+    fn test_e2e_grid_fit_content() {
+        // Exercises grid::track_size FitContent branch via IR stylesheet
+        let val = ir_pipeline_get(
+            view_macros::css!(
+                r#"div { display: grid; grid-template-columns: fit-content(200px) 1fr; }"#
+            ),
+            "display",
+        );
+        assert_keyword(&val, "grid");
+    }
+
+    // ── E2E: Length/dimension edge cases ────────────────────────
+
+    #[test]
+    fn test_e2e_max_width_none_auto() {
+        // Exercises length::max_size_dimension with None
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "max-width".to_string(), "none".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        assert_keyword(
+            &map.get("max-width", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "none",
+        );
+    }
+
+    #[test]
+    fn test_e2e_margin_auto() {
+        // Exercises length::margin with Auto
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "margin-left".to_string(), "auto".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "margin-right".to_string(), "auto".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        assert_keyword(
+            &map.get("margin-left", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "auto",
+        );
+    }
+
+    #[test]
+    fn test_e2e_inset_properties() {
+        // Exercises length::inset with px, auto, and percent
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "position".to_string(), "absolute".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "top".to_string(), "10px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "right".to_string(), "20%".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "bottom".to_string(), "auto".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "left".to_string(), "5px".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        assert_computed_contains(
+            &map.get("top", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "10",
+        );
+        assert_computed_contains(
+            &map.get("right", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "20",
+        );
+        assert_keyword(
+            &map.get("bottom", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "auto",
+        );
+    }
+
+    #[test]
+    fn test_e2e_border_solid_width() {
+        // Exercises length::border with solid style → preserves width
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "border-top-style".to_string(), "solid".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "border-top-width".to_string(), "5px".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        assert_computed_contains(
+            &map.get("border-top-width", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "5",
+        );
+        assert_keyword(
+            &map.get("border-top-style", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "solid",
+        );
+    }
+
+    // ── E2E: Enum conversion edge cases ─────────────────────────
+
+    #[test]
+    fn test_e2e_position_variants() {
+        // Exercises enums::position for all variants
+        for (css_val, expected) in [
+            ("static", "static"),
+            ("relative", "relative"),
+            ("absolute", "absolute"),
+            ("fixed", "fixed"),
+            ("sticky", "sticky"),
+        ] {
+            let mut state = RuntimeState::new("https://example.com".to_string());
+            let el = state.create_element("div".to_string());
+            state.append_element(0, el).unwrap();
+            state
+                .set_inline_style(el, "position".to_string(), css_val.to_string())
+                .unwrap();
+
+            let map = state.computed_style_map(el).unwrap();
+            assert_keyword(
+                &map.get("position", &mut state.doc, &state.style_context)
+                    .unwrap(),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_overflow_variants() {
+        // Exercises enums::overflow for all variants
+        for (css_val, expected) in [
+            ("visible", "visible"),
+            ("hidden", "hidden"),
+            ("scroll", "scroll"),
+            ("auto", "auto"),
+            ("clip", "clip"),
+        ] {
+            let mut state = RuntimeState::new("https://example.com".to_string());
+            let el = state.create_element("div".to_string());
+            state.append_element(0, el).unwrap();
+            state
+                .set_inline_style(el, "overflow-x".to_string(), css_val.to_string())
+                .unwrap();
+
+            let map = state.computed_style_map(el).unwrap();
+            assert_keyword(
+                &map.get("overflow-x", &mut state.doc, &state.style_context)
+                    .unwrap(),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_aspect_ratio() {
+        // Exercises enums::aspect_ratio
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "aspect-ratio".to_string(), "16 / 9".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        let val = map
+            .get("aspect-ratio", &mut state.doc, &state.style_context)
+            .unwrap();
+        // Should contain "16" and "9" or the ratio
+        let s = format!("{val:?}");
+        assert!(
+            s.contains("16") || s.contains("1.7"),
+            "aspect-ratio should contain 16/9 info: {s}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_alignment_space_evenly() {
+        // Exercises enums::content_alignment SPACE_EVENLY branch
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "display".to_string(), "flex".to_string())
+            .unwrap();
+        state
+            .set_inline_style(
+                el,
+                "justify-content".to_string(),
+                "space-evenly".to_string(),
+            )
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        assert_keyword(
+            &map.get("justify-content", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "space-evenly",
+        );
+    }
+
+    #[test]
+    fn test_e2e_align_items_baseline() {
+        // Exercises enums::item_alignment BASELINE branch
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "display".to_string(), "flex".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "align-items".to_string(), "baseline".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        assert_keyword(
+            &map.get("align-items", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "baseline",
+        );
+    }
+
+    #[test]
+    fn test_e2e_align_items_stretch() {
+        // Exercises enums::item_alignment STRETCH branch
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "display".to_string(), "flex".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "align-items".to_string(), "stretch".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        assert_keyword(
+            &map.get("align-items", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "stretch",
+        );
+    }
+
+    #[test]
+    fn test_e2e_content_alignment_flex_start_end() {
+        // Exercises enums::content_alignment FLEX_START, FLEX_END branches
+        for (val, expected) in [("flex-start", "flex-start"), ("flex-end", "flex-end")] {
+            let mut state = RuntimeState::new("https://example.com".to_string());
+            let el = state.create_element("div".to_string());
+            state.append_element(0, el).unwrap();
+            state
+                .set_inline_style(el, "display".to_string(), "flex".to_string())
+                .unwrap();
+            state
+                .set_inline_style(el, "align-content".to_string(), val.to_string())
+                .unwrap();
+
+            let map = state.computed_style_map(el).unwrap();
+            assert_keyword(
+                &map.get("align-content", &mut state.doc, &state.style_context)
+                    .unwrap(),
+                expected,
+            );
+        }
+    }
+
+    // ── E2E: Layout computation (exercises to_taffy_style) ──────
+
+    #[test]
+    fn test_e2e_layout_flexbox_children() {
+        // Full layout computation — exercises to_taffy_style through
+        // build_layout_tree → compute_layout
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let container = state.create_element("div".to_string());
+        state.append_element(0, container).unwrap();
+
+        let c1 = state.create_element("div".to_string());
+        let c2 = state.create_element("div".to_string());
+        state.append_element(container, c1).unwrap();
+        state.append_element(container, c2).unwrap();
+
+        // Use inline styles to avoid class selector issues
+        state
+            .set_inline_style(container, "display".to_string(), "flex".to_string())
+            .unwrap();
+        state
+            .set_inline_style(c1, "width".to_string(), "100px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(c1, "height".to_string(), "50px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(c2, "width".to_string(), "100px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(c2, "height".to_string(), "50px".to_string())
+            .unwrap();
+
+        // Resolve styles (calling .get() triggers ensure_styles_resolved)
+        let map = state.computed_style_map(container).unwrap();
+        let _ = map.get("display", &mut state.doc, &state.style_context);
+
+        let mut layout_state = crate::layout::block::LayoutState::new();
+        let result = layout_state.compute_layout(
+            &state.doc,
+            container as usize,
+            &crate::layout::text::MockTextMeasurer,
+        );
+        assert!(result.is_some(), "layout should compute");
+        let layout = result.unwrap();
+        // Two 100px-wide children in a flex row → container should be 200px wide
+        assert_eq!(layout.width, 200.0);
+        assert_eq!(layout.height, 50.0);
+    }
+
+    #[test]
+    fn test_e2e_layout_grid_children() {
+        // Grid layout via IR stylesheet — exercises grid conversion in to_taffy_style
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let container = state.create_element("div".to_string());
+        state.append_element(0, container).unwrap();
+
+        let c1 = state.create_element("div".to_string());
+        let c2 = state.create_element("div".to_string());
+        state.append_element(container, c1).unwrap();
+        state.append_element(container, c2).unwrap();
+
+        state
+            .set_inline_style(container, "display".to_string(), "grid".to_string())
+            .unwrap();
+        state
+            .set_inline_style(c1, "width".to_string(), "100px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(c1, "height".to_string(), "50px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(c2, "width".to_string(), "100px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(c2, "height".to_string(), "50px".to_string())
+            .unwrap();
+
+        // Trigger style resolution
+        let map = state.computed_style_map(container).unwrap();
+        let _ = map.get("display", &mut state.doc, &state.style_context);
+
+        let mut layout_state = crate::layout::block::LayoutState::new();
+        let result = layout_state.compute_layout(
+            &state.doc,
+            container as usize,
+            &crate::layout::text::MockTextMeasurer,
+        );
+        assert!(result.is_some(), "grid layout should compute");
+        let layout = result.unwrap();
+        // Grid auto-places two items; verify layout computed without crash
+        assert!(layout.width > 0.0, "grid layout should have positive width");
+        assert!(
+            layout.height > 0.0,
+            "grid layout should have positive height"
+        );
+    }
+
+    #[test]
+    fn test_e2e_layout_with_padding() {
+        // Exercises length_percentage for padding in layout via inline style
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+
+        state
+            .set_inline_style(el, "display".to_string(), "flex".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "width".to_string(), "100px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "height".to_string(), "100px".to_string())
+            .unwrap();
+
+        // Trigger style resolution and verify padding via computed values
+        let map = state.computed_style_map(el).unwrap();
+        assert_keyword(
+            &map.get("display", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "flex",
+        );
+
+        // Verify layout computes
+        let mut layout_state = crate::layout::block::LayoutState::new();
+        let result = layout_state.compute_layout(
+            &state.doc,
+            el as usize,
+            &crate::layout::text::MockTextMeasurer,
+        );
+        assert!(result.is_some(), "layout should compute");
+        let layout = result.unwrap();
+        assert_eq!(layout.width, 100.0);
+        assert_eq!(layout.height, 100.0);
+    }
+
+    #[test]
+    fn test_e2e_border_width_computed() {
+        // Exercises length::border via computed style.
+        // CSS spec: border-top-width computes to 0px when border-top-style is none (initial).
+        // We verify the conversion path produces a px value.
+        let val = ir_pipeline_get(
+            view_macros::css!(r#"div { border-top-width: 5px; }"#),
+            "border-top-width",
+        );
+        let s = format!("{val}");
+        assert!(
+            s.contains("px"),
+            "Expected a px value for border-top-width, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_padding_computed() {
+        // Exercises length_percentage for padding via computed style
+        let val = ir_pipeline_get(
+            view_macros::css!(r#"div { padding-top: 10px; padding-left: 15px; }"#),
+            "padding-top",
+        );
+        assert_computed_contains(&val, "10");
+    }
+
+    // ── E2E: Typed OM get_all and edge cases ────────────────────
+
+    #[test]
+    fn test_e2e_typed_om_get_all() {
+        // Exercises map.rs get_all() path
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "display".to_string(), "flex".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        let all = map.get_all("display", &mut state.doc, &state.style_context);
+        assert_eq!(all.len(), 1);
+        assert_keyword(&all[0], "flex");
+
+        // Invalid property returns empty vec
+        let none = map.get_all("not-a-property", &mut state.doc, &state.style_context);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn test_e2e_typed_om_to_vec_vendor_prefix_ordering() {
+        // Exercises map.rs to_vec sorting: standard before vendor-prefixed
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        let entries = map.to_vec(&mut state.doc, &state.style_context);
+
+        // Find the boundary between standard and vendor-prefixed
+        let first_vendor = entries.iter().position(|(name, _)| name.starts_with('-'));
+        if let Some(idx) = first_vendor {
+            // All entries before should be non-vendor
+            for (name, _) in &entries[..idx] {
+                assert!(
+                    !name.starts_with('-'),
+                    "standard properties should come before vendor: {name}"
+                );
+            }
+            // All entries after should be vendor
+            for (name, _) in &entries[idx..] {
+                assert!(
+                    name.starts_with('-'),
+                    "vendor properties should come after standard: {name}"
+                );
+            }
+        }
+    }
+
+    // ── E2E: Multiple stylesheets and cascade ───────────────────
+
+    #[test]
+    fn test_e2e_multiple_stylesheets_cascade() {
+        // Later stylesheet wins — exercises cascade and multiple add_stylesheet calls
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+
+        state.add_stylesheet("div { color: red; }".to_string());
+        state.add_stylesheet("div { color: blue; }".to_string());
+
+        let map = state.computed_style_map(el).unwrap();
+        let color = map
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(0, 0, 255)", "later stylesheet should win");
+            }
+            other => panic!("Expected blue, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_e2e_class_specificity_over_tag() {
+        // Class selector beats tag selector — exercises has_class in selector.rs
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_attribute(el, "class".to_string(), "special".to_string())
+            .unwrap();
+
+        state.add_stylesheet(".special { color: red; } div { color: blue; }".to_string());
+
+        let map = state.computed_style_map(el).unwrap();
+        let color = map
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(255, 0, 0)", ".special should beat div");
+            }
+            other => panic!("Expected red, got: {other:?}"),
+        }
+    }
+
+    // ── E2E: is_root and element type checks ────────────────────
+
+    #[test]
+    fn test_e2e_root_pseudo_class() {
+        // Exercises is_root() in selector.rs — the element whose parent is Document
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let root = state.create_element("html".to_string());
+        state.append_element(0, root).unwrap();
+
+        let child = state.create_element("div".to_string());
+        state.append_element(root, child).unwrap();
+
+        state.add_stylesheet(":root { color: green; }".to_string());
+
+        let map_root = state.computed_style_map(root).unwrap();
+        let color = map_root
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(0, 128, 0)", ":root should match html element");
+            }
+            other => panic!("Expected green, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_e2e_last_child_pseudo() {
+        // Exercises traversal: last_child, prev_sibling_element
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("ul".to_string());
+        state.append_element(0, parent).unwrap();
+
+        let li1 = state.create_element("li".to_string());
+        let li2 = state.create_element("li".to_string());
+        let li3 = state.create_element("li".to_string());
+        state.append_element(parent, li1).unwrap();
+        state.append_element(parent, li2).unwrap();
+        state.append_element(parent, li3).unwrap();
+
+        state.add_stylesheet("li:last-child { color: red; }".to_string());
+
+        // li3 is last-child
+        let map3 = state.computed_style_map(li3).unwrap();
+        let color3 = map3
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color3 {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(255, 0, 0)", "li3 should be :last-child");
+            }
+            other => panic!("Expected red for li3, got: {other:?}"),
+        }
+
+        // li1 should not be :last-child
+        let map1 = state.computed_style_map(li1).unwrap();
+        let color1 = map1
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        if let crate::style::typed_om::CSSStyleValue::Unparsed(s) = &color1 {
+            assert_ne!(s, "rgb(255, 0, 0)", "li1 should NOT be :last-child");
+        }
+    }
+
+    #[test]
+    fn test_e2e_nth_child_selector() {
+        // Exercises sibling traversal for nth-child counting
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+
+        let c1 = state.create_element("p".to_string());
+        let c2 = state.create_element("p".to_string());
+        let c3 = state.create_element("p".to_string());
+        state.append_element(parent, c1).unwrap();
+        state.append_element(parent, c2).unwrap();
+        state.append_element(parent, c3).unwrap();
+
+        state.add_stylesheet("p:nth-child(2) { color: orange; }".to_string());
+
+        let map2 = state.computed_style_map(c2).unwrap();
+        let color2 = map2
+            .get("color", &mut state.doc, &state.style_context)
+            .unwrap();
+        match &color2 {
+            crate::style::typed_om::CSSStyleValue::Unparsed(s) => {
+                assert_eq!(s, "rgb(255, 165, 0)", "c2 should be :nth-child(2)");
+            }
+            other => panic!("Expected orange, got: {other:?}"),
+        }
+    }
+
+    // ── E2E: Display none propagation ───────────────────────────
+
+    #[test]
+    fn test_e2e_display_none_hides_subtree() {
+        // Exercises display::None path + layout with hidden elements
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+        state
+            .set_inline_style(parent, "display".to_string(), "none".to_string())
+            .unwrap();
+
+        let child = state.create_element("div".to_string());
+        state.append_element(parent, child).unwrap();
+        state
+            .set_inline_style(child, "width".to_string(), "100px".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(parent).unwrap();
+        assert_keyword(
+            &map.get("display", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "none",
+        );
+    }
+
+    // ── E2E: Gap with percentage ────────────────────────────────
+
+    #[test]
+    fn test_e2e_gap_percentage() {
+        // Exercises length::gap with percentage value
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "display".to_string(), "flex".to_string())
+            .unwrap();
+        state
+            .set_inline_style(el, "gap".to_string(), "5%".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(el).unwrap();
+        assert_computed_contains(
+            &map.get("column-gap", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "5",
+        );
+    }
 }

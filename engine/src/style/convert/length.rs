@@ -7,18 +7,24 @@ use super::stylo_types as st;
 
 // ─── Core LP resolution ─────────────────────────────────────────────
 
-/// Resolves a Stylo `LengthPercentage` to a raw `(value, is_percent)` pair.
+/// An intermediate representation for a resolved `LengthPercentage`.
+pub(crate) enum ResolvedLP {
+    Length(f32),
+    Percent(f32),
+}
+
+/// Resolves a Stylo `LengthPercentage` to a [`ResolvedLP`].
 ///
 /// Calc values are resolved against a zero basis (best-effort — drops
 /// percentage terms since Taffy 0.4 has no calc representation).
 #[inline]
-fn resolve_lp(val: &st::LengthPercentage) -> (f32, bool) {
+fn resolve_lp(val: &st::LengthPercentage) -> ResolvedLP {
     match val.unpack() {
-        st::UnpackedLP::Length(len) => (len.px(), false),
-        st::UnpackedLP::Percentage(pct) => (pct.0, true),
+        st::UnpackedLP::Length(len) => ResolvedLP::Length(len.px()),
+        st::UnpackedLP::Percentage(pct) => ResolvedLP::Percent(pct.0),
         st::UnpackedLP::Calc(calc) => {
             let resolved = calc.resolve(style::values::computed::Length::new(0.0));
-            (resolved.px(), false)
+            ResolvedLP::Length(resolved.px())
         }
     }
 }
@@ -28,33 +34,27 @@ fn resolve_lp(val: &st::LengthPercentage) -> (f32, bool) {
 /// Converts a Stylo `LengthPercentage` to a Taffy `LengthPercentage`.
 #[inline]
 pub fn length_percentage(val: &st::LengthPercentage) -> taffy::LengthPercentage {
-    let (v, is_pct) = resolve_lp(val);
-    if is_pct {
-        taffy::LengthPercentage::Percent(v)
-    } else {
-        taffy::LengthPercentage::Length(v)
+    match resolve_lp(val) {
+        ResolvedLP::Percent(v) => taffy::LengthPercentage::Percent(v),
+        ResolvedLP::Length(v) => taffy::LengthPercentage::Length(v),
     }
 }
 
 /// Converts a Stylo `LengthPercentage` to a Taffy `Dimension`.
 #[inline]
 fn lp_to_dimension(val: &st::LengthPercentage) -> taffy::Dimension {
-    let (v, is_pct) = resolve_lp(val);
-    if is_pct {
-        taffy::Dimension::Percent(v)
-    } else {
-        taffy::Dimension::Length(v)
+    match resolve_lp(val) {
+        ResolvedLP::Percent(v) => taffy::Dimension::Percent(v),
+        ResolvedLP::Length(v) => taffy::Dimension::Length(v),
     }
 }
 
 /// Converts a Stylo `LengthPercentage` to a Taffy `LengthPercentageAuto`.
 #[inline]
 fn lp_to_lpa(val: &st::LengthPercentage) -> taffy::prelude::LengthPercentageAuto {
-    let (v, is_pct) = resolve_lp(val);
-    if is_pct {
-        taffy::prelude::LengthPercentageAuto::Percent(v)
-    } else {
-        taffy::prelude::LengthPercentageAuto::Length(v)
+    match resolve_lp(val) {
+        ResolvedLP::Percent(v) => taffy::prelude::LengthPercentageAuto::Percent(v),
+        ResolvedLP::Length(v) => taffy::prelude::LengthPercentageAuto::Length(v),
     }
 }
 
