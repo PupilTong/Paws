@@ -14,7 +14,7 @@ final class RendererViewController: UIViewController, UIScrollViewDelegate {
         super.viewDidLoad()
         view.backgroundColor = .white
 
-        bridge = RendererBridge()
+        bridge = RendererBridge(viewportSize: view.bounds.size)
         applicator = LayerApplicator(rootView: view)
         applicator.scrollDelegate = self
 
@@ -47,6 +47,10 @@ final class RendererViewController: UIViewController, UIScrollViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         let offset = scrollView.contentOffset
-        bridge.updateScroll(x: Float(offset.x), y: Float(offset.y))
+        bridge.updateScroll(
+            scrollId: RendererBridge.mainScrollId,
+            x: Float(offset.x),
+            y: Float(offset.y)
+        )
     }
 }

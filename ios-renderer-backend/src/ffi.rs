@@ -167,6 +167,136 @@ pub unsafe extern "C" fn rb_submit_layout(handle: u64, root: *const LayoutNode, 
     }
 }
 
+/// Submit a built-in demo layout tree: a scrollable list of colored rows.
+///
+/// Useful for verifying the Swift rendering pipeline without needing a
+/// separate WASM module or Rust crate to construct layout trees.
+///
+/// `viewport_w` / `viewport_h` are the screen dimensions in points.
+/// `row_count` controls how many rows appear in the scrollable list.
+#[no_mangle]
+pub extern "C" fn rb_submit_demo_layout(
+    handle: u64,
+    viewport_w: f32,
+    viewport_h: f32,
+    row_count: u32,
+) {
+    if handle == 0 {
+        return;
+    }
+    // SAFETY: Caller guarantees handle is valid and we have exclusive
+    // main-thread access.
+    let instance = unsafe { &mut *(handle as *mut RendererInstance) };
+
+    let row_height: f32 = 80.0;
+    let total_content_h = row_count as f32 * row_height;
+
+    let rows: Vec<LayoutNode> = (0..row_count as u64)
+        .map(|i| {
+            let hue = (i as f32) / (row_count as f32);
+            let (r, g, b) = hue_to_rgb(hue);
+
+            LayoutNode {
+                id: 100 + i,
+                frame: Rect {
+                    x: 0.0,
+                    y: i as f32 * row_height,
+                    width: viewport_w,
+                    height: row_height,
+                },
+                children: vec![],
+                scroll: None,
+                style: ComputedStyle {
+                    opacity: 1.0,
+                    transform: None,
+                    clip: None,
+                    background: Color { r, g, b, a: 1.0 },
+                    border_radius: 8.0,
+                    will_change: false,
+                },
+                generation: 1,
+            }
+        })
+        .collect();
+
+    let scroll_container = LayoutNode {
+        id: 2,
+        frame: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: viewport_w,
+            height: viewport_h,
+        },
+        children: rows,
+        scroll: Some(ScrollProps {
+            content_size: Size {
+                width: viewport_w,
+                height: total_content_h,
+            },
+            overflow_x: Overflow::Hidden,
+            overflow_y: Overflow::Scroll,
+        }),
+        style: ComputedStyle {
+            opacity: 1.0,
+            transform: None,
+            clip: None,
+            background: Color {
+                r: 0.95,
+                g: 0.95,
+                b: 0.97,
+                a: 1.0,
+            },
+            border_radius: 0.0,
+            will_change: false,
+        },
+        generation: 1,
+    };
+
+    let root = LayoutNode {
+        id: 1,
+        frame: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: viewport_w,
+            height: viewport_h,
+        },
+        children: vec![scroll_container],
+        scroll: None,
+        style: ComputedStyle {
+            opacity: 1.0,
+            transform: None,
+            clip: None,
+            background: Color {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            border_radius: 0.0,
+            will_change: false,
+        },
+        generation: 1,
+    };
+
+    instance.layout_root = Some(root);
+}
+
+/// Convert a hue value `[0.0, 1.0]` to an RGB triple.
+fn hue_to_rgb(h: f32) -> (f32, f32, f32) {
+    let h6 = h * 6.0;
+    let sector = h6 as u32;
+    let frac = h6 - sector as f32;
+
+    match sector % 6 {
+        0 => (1.0, frac, 0.0),
+        1 => (1.0 - frac, 1.0, 0.0),
+        2 => (0.0, 1.0, frac),
+        3 => (0.0, 1.0 - frac, 1.0),
+        4 => (frac, 0.0, 1.0),
+        _ => (1.0, 0.0, 1.0 - frac),
+    }
+}
+
 /// Change the command buffer capacity for future frames.
 #[no_mangle]
 pub extern "C" fn rb_set_pool_capacity(handle: u64, capacity: u32) {

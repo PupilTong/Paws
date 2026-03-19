@@ -1,3 +1,6 @@
+#ifndef IOS_RENDERER_BACKEND_H
+#define IOS_RENDERER_BACKEND_H
+
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,7 +21,7 @@ typedef enum LayerKind {
  */
 typedef enum ParentKind {
   Layer,
-  ScrollView,
+  ScrollContent,
 } ParentKind;
 
 /**
@@ -37,22 +40,22 @@ typedef uint64_t LayerId;
 /**
  * Axis-aligned rectangle in screen-space coordinates.
  */
-typedef struct Rect {
+typedef struct RBRect {
   float x;
   float y;
   float width;
   float height;
-} Rect;
+} RBRect;
 
 /**
  * RGBA color with premultiplied alpha, components in `[0.0, 1.0]`.
  */
-typedef struct Color {
+typedef struct RBColor {
   float r;
   float g;
   float b;
   float a;
-} Color;
+} RBColor;
 
 /**
  * Column-major 4×4 affine transform (matches `CATransform3D` layout).
@@ -69,23 +72,23 @@ typedef struct Transform3D {
  * `#[repr(C)]`.
  */
 typedef struct LayerProps {
-  struct Rect frame;
+  struct RBRect frame;
   float opacity;
-  struct Color background;
+  struct RBColor background;
   float border_radius;
   bool has_transform;
   struct Transform3D transform;
   bool has_clip;
-  struct Rect clip;
+  struct RBRect clip;
 } LayerProps;
 
 /**
  * Two-dimensional size.
  */
-typedef struct Size {
+typedef struct RBSize {
   float width;
   float height;
-} Size;
+} RBSize;
 
 /**
  * A single command that mutates the native layer tree on the Swift side.
@@ -119,7 +122,7 @@ typedef struct RemoveLayer_Body {
 typedef struct AttachScroll_Body {
   LayerId id;
   LayerId parent_id;
-  struct Size content_size;
+  struct RBSize content_size;
 } AttachScroll_Body;
 
 typedef struct SetZOrder_Body {
@@ -208,6 +211,19 @@ void rb_update_scroll_offset(uint64_t handle, uint64_t scroll_id, float offset_x
 void rb_submit_layout(uint64_t handle, const struct LayoutNode *root, uint32_t _node_count);
 
 /**
+ * Submit a built-in demo layout tree: a scrollable list of colored rows.
+ *
+ * Useful for verifying the Swift rendering pipeline without needing a
+ * separate WASM module or Rust crate to construct layout trees.
+ *
+ * `viewport_w` / `viewport_h` are the screen dimensions in points.
+ * `row_count` controls how many rows appear in the scrollable list.
+ */
+void rb_submit_demo_layout(uint64_t handle, float viewport_w, float viewport_h, uint32_t row_count);
+
+/**
  * Change the command buffer capacity for future frames.
  */
 void rb_set_pool_capacity(uint64_t handle, uint32_t capacity);
+
+#endif /* IOS_RENDERER_BACKEND_H */

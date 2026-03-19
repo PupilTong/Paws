@@ -177,7 +177,7 @@ pub enum LayerKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParentKind {
     Layer,
-    ScrollView,
+    ScrollContent,
 }
 
 // ── Diff ──────────────────────────────────────────────────────────────

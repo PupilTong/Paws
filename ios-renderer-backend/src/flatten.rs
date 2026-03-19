@@ -77,7 +77,7 @@ fn flatten_bottom_up(node: &LayerizeNode) -> FlattenPassResult {
     };
 
     let parent_kind_for_children = if kind == LayerKind::ScrollView {
-        ParentKind::ScrollView
+        ParentKind::ScrollContent
     } else {
         ParentKind::Layer
     };

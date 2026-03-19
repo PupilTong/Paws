@@ -6,6 +6,19 @@ fn main() {
 
     let mut config = cbindgen::Config::default();
     config.language = cbindgen::Language::C;
+    config.include_guard = Some("IOS_RENDERER_BACKEND_H".to_string());
+    config
+        .export
+        .rename
+        .insert("Rect".to_string(), "RBRect".to_string());
+    config
+        .export
+        .rename
+        .insert("Size".to_string(), "RBSize".to_string());
+    config
+        .export
+        .rename
+        .insert("Color".to_string(), "RBColor".to_string());
 
     let out_dir = PathBuf::from(&crate_dir);
 

@@ -4,8 +4,7 @@ members = [
     "engine",
     "wasm-bridge",
     "view", "paws-style-ir", "view-macros",
-    "crates/ios-renderer-backend",
-    "crates/ios-example",
+    "ios-renderer-backend",
 ]
 
 [workspace.package]
