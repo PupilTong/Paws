@@ -8,7 +8,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-taffy = "0.4"
+taffy = { version = "0.9.2", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "calc"] }
 # Note: Stylo is a complex crate from Mozilla; this is a light-weight usage surface.
 # The crate name is `style` in Gecko; here we use `stylo` when available on crates.io.
 stylo = "0.13"

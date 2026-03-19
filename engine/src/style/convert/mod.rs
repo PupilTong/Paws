@@ -1,15 +1,14 @@
 //! Direct conversion from Stylo [`ComputedValues`] to [`taffy::Style`].
 //!
-//! Vendored and adapted from [stylo_taffy](https://github.com/nicell/nicell/blitz/packages/stylo_taffy)
-//! (`convert.rs`), targeting **stylo 0.11 + taffy 0.4** (the original targets stylo ^0.8 + taffy ^0.9).
+//! Targeting **stylo 0.13 + taffy 0.9.2**.
 //!
-//! Key adaptations:
-//! - Taffy 0.4 uses simple enum constructors (`Dimension::Auto`, `LengthPercentage::Length(f32)`)
-//!   instead of compact representations and `style_helpers`.
-//! - `calc()` values are resolved to their length component (best-effort) since taffy 0.4 has no
-//!   `CompactLength`.
-//! - Features absent from taffy 0.4 are omitted: `BoxSizing`, `TextAlign`, `Float`, `Clear`,
-//!   grid named lines / template areas.
+//! Key design choices:
+//! - `calc()` values passed through as raw pointers to `CompactLength` for
+//!   layout-time resolution (no lossy zero-basis resolve).
+//! - Uses `taffy::style_helpers` constructors for efficient tagged-pointer
+//!   `CompactLength` construction.
+//! - `Style` is `Style<String>` (the `TaffyTree` default); named grid
+//!   identifiers are converted via `.to_string()`.
 
 mod enums;
 mod flex;
@@ -18,9 +17,12 @@ pub(crate) mod length;
 
 /// Private module of type aliases for cleaner references to Stylo types.
 pub(crate) mod stylo_types {
+    pub(crate) use style::properties::generated::longhands::box_sizing::computed_value::T as BoxSizing;
     pub(crate) use style::properties::longhands::position::computed_value::T as Position;
     pub(crate) use style::properties::ComputedValues;
+    pub(crate) use style::values::computed::length_percentage::CalcLengthPercentage;
     pub(crate) use style::values::computed::length_percentage::Unpacked as UnpackedLP;
+    pub(crate) use style::values::computed::text::TextAlign;
     pub(crate) use style::values::computed::{BorderSideWidth, LengthPercentage};
     pub(crate) use style::values::generics::length::{GenericMargin, GenericMaxSize, GenericSize};
     pub(crate) use style::values::generics::position::{GenericAspectRatio, Inset as GenericInset};
@@ -30,6 +32,7 @@ pub(crate) mod stylo_types {
     pub(crate) use style::values::specified::box_::{
         Display, DisplayInside, DisplayOutside, Overflow,
     };
+    pub(crate) use style::values::specified::position::GridTemplateAreas;
 
     pub(crate) type MarginVal = GenericMargin<LengthPercentage>;
     pub(crate) type InsetVal = GenericInset<style::values::computed::Percentage, LengthPercentage>;
@@ -63,19 +66,25 @@ use stylo_types as st;
 /// This replaces the string round-trip (`ComputedValues → CSS string → parse → taffy`)
 /// with direct type-level conversion, handling percentages, calc(), and all layout properties.
 pub fn to_taffy_style(style: &st::ComputedValues) -> taffy::Style {
+    let d = style.clone_display();
     let pos = style.get_position();
     let margin_s = style.get_margin();
     let padding_s = style.get_padding();
     let border_s = style.get_border();
 
     taffy::Style {
-        display: enums::display(style.clone_display()),
+        dummy: core::marker::PhantomData,
+        display: enums::display(d),
+        box_sizing: enums::box_sizing(style.clone_box_sizing()),
+        item_is_table: d.inside() == st::DisplayInside::Table,
+        item_is_replaced: false,
         position: enums::position(style.clone_position()),
         overflow: taffy::Point {
             x: enums::overflow(style.clone_overflow_x()),
             y: enums::overflow(style.clone_overflow_y()),
         },
         scrollbar_width: 0.0,
+        text_align: enums::text_align(style.clone_text_align()),
 
         // Sizing
         size: sizing(&pos.width, &pos.height),
@@ -136,6 +145,9 @@ pub fn to_taffy_style(style: &st::ComputedValues) -> taffy::Style {
         grid_auto_flow: grid::grid_auto_flow(pos.grid_auto_flow),
         grid_template_rows: grid::grid_template_tracks(&pos.grid_template_rows),
         grid_template_columns: grid::grid_template_tracks(&pos.grid_template_columns),
+        grid_template_row_names: grid::grid_template_line_names(&pos.grid_template_rows),
+        grid_template_column_names: grid::grid_template_line_names(&pos.grid_template_columns),
+        grid_template_areas: grid::grid_template_areas(&pos.grid_template_areas),
         grid_auto_rows: grid::grid_auto_tracks(&pos.grid_auto_rows),
         grid_auto_columns: grid::grid_auto_tracks(&pos.grid_auto_columns),
 
