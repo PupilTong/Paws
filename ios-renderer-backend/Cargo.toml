@@ -1,0 +1,33 @@
+[package]
+name = "ios-renderer-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = ["wasm"]
+wasm = ["dep:wasm-bridge", "dep:wasmtime", "dep:anyhow"]
+
+[dependencies]
+rayon = "1.10"
+fnv = "1.0"
+engine = { path = "../engine" }
+wasm-bridge = { path = "../wasm-bridge", optional = true }
+anyhow = { version = "1", optional = true }
+stylo = "0.13"
+
+# Cranelift compiles WASM → Pulley bytecode on iOS (no native JIT).
+[dependencies.wasmtime]
+version = "30"
+default-features = false
+features = ["cranelift", "pulley", "runtime", "std", "wat"]
+optional = true
+
+[build-dependencies]
+cbindgen = "0.26"
+
+[dev-dependencies]
+dhat = "0.3.3"
