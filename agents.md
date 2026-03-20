@@ -31,6 +31,8 @@ This repository supports LLM-based assistants. The working language is English.
 - `view/`: UI/view layer. Exposes the frontend APIs.
 - `view-macros/`: Contains the `css!` proc-macro for compile-time CSS evaluation.
 - `paws-style-ir/`: Zero-copy intermediate representations (`rkyv`) for styles shared between the macro and runtime.
+- `ios-renderer-backend/`: iOS rendering pipeline — consumes `LayoutNode` trees, produces incremental `LayerCmd` streams via FFI. Includes a Swift Package (`PawsRendererCore`) with push-model API and `LayerApplicator`. Depends on `engine` and `wasm-bridge` for WASM-driven layout.
+- `ios-example-app/`: Example iOS app (Xcode project) demonstrating WASM → engine → renderer → UIKit pipeline.
 
 ## Project Design Overview
 

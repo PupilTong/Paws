@@ -273,6 +273,54 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
 
     linker
         .func_wrap(
+            "env",
+            "__SetAttribute",
+            |mut caller: Caller<'_, RuntimeState>,
+             id: i32,
+             name_ptr: i32,
+             value_ptr: i32|
+             -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                let name = match read_cstr(&mut caller, name_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                let value = match read_cstr(&mut caller, value_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+
+                match caller.data_mut().set_attribute(id as u32, name, value) {
+                    Ok(()) => {
+                        caller.data_mut().clear_error();
+                        Ok(0)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __SetAttribute");
+
+    linker
+        .func_wrap(
             "paws",
             "paws_add_parsed_stylesheet",
             |mut caller: Caller<'_, RuntimeState>, ptr: i32, len: i32| -> Result<()> {
