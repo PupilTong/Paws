@@ -7,6 +7,7 @@
 (module
   (import "env" "__CreateElement" (func $create (param i32) (result i32)))
   (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
+  (import "env" "__SetAttribute" (func $set_attr (param i32 i32 i32) (result i32)))
   (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
   (import "env" "__AddStylesheet" (func $add_css (param i32) (result i32)))
   (memory (export "memory") 1)
@@ -18,7 +19,7 @@
   ;; CSS stylesheet — defines the layout for root, container, and rows.
   (data (i32.const 16)  ".root { display: block; width: 390px; height: 844px; } .container { display: block; width: 390px; height: 1600px; overflow-y: scroll; } .row { display: block; width: 50px; height: 50px; }\00")
 
-  ;; Style property names and values
+  ;; Attribute names and class values
   (data (i32.const 512) "class\00")
   (data (i32.const 528) "root\00")
   (data (i32.const 544) "container\00")
@@ -43,36 +44,48 @@
     (call $add_css (i32.const 16))
     (drop)
 
-    ;; Create root div.
+    ;; Create root div and set class="root".
     (local.set $root (call $create (i32.const 0)))
+    (call $set_attr (local.get $root) (i32.const 512) (i32.const 528))
+    (drop)
     (call $append (i32.const 0) (local.get $root))
     (drop)
 
-    ;; Create scroll container.
+    ;; Create scroll container and set class="container".
     (local.set $container (call $create (i32.const 0)))
+    (call $set_attr (local.get $container) (i32.const 512) (i32.const 544))
+    (drop)
     (call $append (local.get $root) (local.get $container))
     (drop)
 
-    ;; Create 4 colored rows.
+    ;; Create 4 colored rows, each with class="row".
     (local.set $row1 (call $create (i32.const 0)))
+    (call $set_attr (local.get $row1) (i32.const 512) (i32.const 560))
+    (drop)
     (call $set_style (local.get $row1) (i32.const 576) (i32.const 600))
     (drop)
     (call $append (local.get $container) (local.get $row1))
     (drop)
 
     (local.set $row2 (call $create (i32.const 0)))
+    (call $set_attr (local.get $row2) (i32.const 512) (i32.const 560))
+    (drop)
     (call $set_style (local.get $row2) (i32.const 576) (i32.const 624))
     (drop)
     (call $append (local.get $container) (local.get $row2))
     (drop)
 
     (local.set $row3 (call $create (i32.const 0)))
+    (call $set_attr (local.get $row3) (i32.const 512) (i32.const 560))
+    (drop)
     (call $set_style (local.get $row3) (i32.const 576) (i32.const 648))
     (drop)
     (call $append (local.get $container) (local.get $row3))
     (drop)
 
     (local.set $row4 (call $create (i32.const 0)))
+    (call $set_attr (local.get $row4) (i32.const 512) (i32.const 560))
+    (drop)
     (call $set_style (local.get $row4) (i32.const 576) (i32.const 672))
     (drop)
     (call $append (local.get $container) (local.get $row4))

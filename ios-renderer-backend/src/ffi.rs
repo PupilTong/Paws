@@ -212,10 +212,10 @@ pub extern "C" fn rb_submit_demo_layout(handle: u64, viewport_w: f32, viewport_h
     // Matches demo.wat: rgb(255,100,100), rgb(100,255,100), rgb(100,100,255), rgb(255,255,100)
     const C: f32 = 100.0 / 255.0; // ≈ 0.392
     let colors: [(f32, f32, f32); 4] = [
-        (1.0, C, C),       // red
-        (C, 1.0, C),       // green
-        (C, C, 1.0),       // blue
-        (1.0, 1.0, C),     // yellow
+        (1.0, C, C),   // red
+        (C, 1.0, C),   // green
+        (C, C, 1.0),   // blue
+        (1.0, 1.0, C), // yellow
     ];
     let row_count = colors.len();
     let total_content_h = row_count as f32 * row_size;

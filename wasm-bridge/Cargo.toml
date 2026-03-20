@@ -10,14 +10,13 @@ path = "src/lib.rs"
 [dependencies]
 engine = { path = "../engine" }
 anyhow = "1"
-wasmtime = { version = "30", default-features = false, features = [
-    "cranelift",
-    "pulley",
-    "runtime",
-    "std",
-    "wat",
-] }
 
+# Cranelift compiles WASM → Pulley bytecode on iOS (no native JIT).
+# `config.target("pulley64")` in create_engine() prevents W+X pages.
+[dependencies.wasmtime]
+version = "30"
+default-features = false
+features = ["cranelift", "pulley", "runtime", "std", "wat"]
 
 [dev-dependencies]
 criterion = "0.5"
