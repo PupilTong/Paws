@@ -1,0 +1,370 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20001 /* AppDelegate.swift */; };
+		A10002 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20002 /* SceneDelegate.swift */; };
+		A10003 /* RendererBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20003 /* RendererBridge.swift */; };
+		A10004 /* LayerApplicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20004 /* LayerApplicator.swift */; };
+		A10005 /* RendererViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20005 /* RendererViewController.swift */; };
+		A10011 /* libios_renderer_backend.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A20011 /* libios_renderer_backend.a */; };
+		A10012 /* demo.wat in Resources */ = {isa = PBXBuildFile; fileRef = A20012 /* demo.wat */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A20002 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		A20003 /* RendererBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererBridge.swift; sourceTree = "<group>"; };
+		A20004 /* LayerApplicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerApplicator.swift; sourceTree = "<group>"; };
+		A20005 /* RendererViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererViewController.swift; sourceTree = "<group>"; };
+		A20006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A20007 /* ios-example-app-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "ios-example-app-Bridging-Header.h"; sourceTree = "<group>"; };
+		A20011 /* libios_renderer_backend.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libios_renderer_backend.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20012 /* demo.wat */ = {isa = PBXFileReference; lastKnownFileType = text; path = demo.wat; sourceTree = "<group>"; };
+		A20020 /* ios-example-app.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "ios-example-app.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10011 /* libios_renderer_backend.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000 = {
+			isa = PBXGroup;
+			children = (
+				A40001 /* src */,
+				A20012 /* demo.wat */,
+				A20007 /* ios-example-app-Bridging-Header.h */,
+				A40002 /* Products */,
+				A40003 /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		A40001 /* src */ = {
+			isa = PBXGroup;
+			children = (
+				A20001 /* AppDelegate.swift */,
+				A20002 /* SceneDelegate.swift */,
+				A20003 /* RendererBridge.swift */,
+				A20004 /* LayerApplicator.swift */,
+				A20005 /* RendererViewController.swift */,
+				A20006 /* Info.plist */,
+			);
+			path = src;
+			sourceTree = "<group>";
+		};
+		A40002 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20020 /* ios-example-app.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A40003 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A20011 /* libios_renderer_backend.a */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A30003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10012 /* demo.wat in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		A50001 /* ios-example-app */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A70001 /* Build configuration list for PBXNativeTarget "ios-example-app" */;
+			buildPhases = (
+				A60001 /* Build Rust Libraries */,
+				A30002 /* Sources */,
+				A30001 /* Frameworks */,
+				A30003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "ios-example-app";
+			productName = "ios-example-app";
+			productReference = A20020 /* ios-example-app.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1540;
+				LastUpgradeCheck = 2630;
+			};
+			buildConfigurationList = A70000 /* Build configuration list for PBXProject "ios-example-app" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A40000;
+			productRefGroup = A40002 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A50001 /* ios-example-app */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A60001 /* Build Rust Libraries */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Libraries";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Build Rust staticlibs for the current architecture.\n# Adjust RUST_TARGET based on the Xcode build destination.\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n  if [ \"$ARCHS\" = \"arm64\" ]; then\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n  else\n    RUST_TARGET=\"x86_64-apple-ios\"\n  fi\nelse\n  RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nPAWS_ROOT=\"${SRCROOT}/..\"\ncd \"$PAWS_ROOT\"\n\n# Build with default features (includes wasm support via wasmtime + pulley).\ncargo build -p ios-renderer-backend --target \"$RUST_TARGET\" --release\n\n# Copy staticlib to Xcode build dir so it is found by the linker.\ncp \"target/$RUST_TARGET/release/libios_renderer_backend.a\" \"$BUILT_PRODUCTS_DIR/\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A30002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10001 /* AppDelegate.swift in Sources */,
+				A10002 /* SceneDelegate.swift in Sources */,
+				A10003 /* RendererBridge.swift in Sources */,
+				A10004 /* LayerApplicator.swift in Sources */,
+				A10005 /* RendererViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A80001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A80002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A80003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = LF85SB74QR;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../ios-renderer-backend",
+				);
+				INFOPLIST_FILE = "src/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(BUILT_PRODUCTS_DIR)",
+				);
+				OTHER_LDFLAGS = (
+					"-lios_renderer_backend",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.pawsui.ios-example-app";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "ios-example-app-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A80004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = LF85SB74QR;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../ios-renderer-backend",
+				);
+				INFOPLIST_FILE = "src/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(BUILT_PRODUCTS_DIR)",
+				);
+				OTHER_LDFLAGS = (
+					"-lios_renderer_backend",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.pawsui.ios-example-app";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "ios-example-app-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A70000 /* Build configuration list for PBXProject "ios-example-app" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80001 /* Debug */,
+				A80002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A70001 /* Build configuration list for PBXNativeTarget "ios-example-app" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80003 /* Debug */,
+				A80004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A00001 /* Project object */;
+}
