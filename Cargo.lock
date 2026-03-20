@@ -1184,10 +1184,15 @@ dependencies = [
 name = "ios-renderer-backend"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cbindgen",
  "dhat",
+ "engine",
  "fnv",
  "rayon",
+ "stylo",
+ "wasm-bridge",
+ "wasmtime",
 ]
 
 [[package]]

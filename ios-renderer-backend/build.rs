@@ -22,10 +22,19 @@ fn main() {
 
     let out_dir = PathBuf::from(&crate_dir);
 
-    cbindgen::Builder::new()
+    let bindings = cbindgen::Builder::new()
         .with_crate(crate_dir)
         .with_config(config)
         .generate()
-        .expect("Unable to generate C bindings")
-        .write_to_file(out_dir.join("ios_renderer_backend.h"));
+        .expect("Unable to generate C bindings");
+
+    // Write to crate root (used by Xcode bridging header).
+    bindings.write_to_file(out_dir.join("ios_renderer_backend.h"));
+
+    // Also write to the SPM include directory so Swift Package Manager
+    // can find the header via the module.modulemap.
+    let spm_include = out_dir.join("Sources/PawsRendererCore/include");
+    if spm_include.exists() {
+        bindings.write_to_file(spm_include.join("ios_renderer_backend.h"));
+    }
 }

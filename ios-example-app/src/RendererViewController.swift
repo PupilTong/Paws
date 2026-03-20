@@ -1,45 +1,44 @@
 import UIKit
 
 /// Main view controller that drives the Rust rendering pipeline via
-/// `CADisplayLink` and applies the resulting `LayerCmd` stream to a
-/// live `UIView` hierarchy.
+/// the push model: submits a layout tree, which triggers the pipeline
+/// and pushes `LayerCmd` commands back to Swift via a callback.
 final class RendererViewController: UIViewController, UIScrollViewDelegate {
 
     private var bridge: RendererBridge!
     private var applicator: LayerApplicator!
-    private var displayLink: CADisplayLink?
-    private var frameCount: UInt64 = 0
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .white
 
-        bridge = RendererBridge(viewportSize: view.bounds.size)
+        bridge = RendererBridge()
         applicator = LayerApplicator(rootView: view)
         applicator.scrollDelegate = self
 
-        // Initial frame — produce all creation commands.
-        let (cmds, count) = bridge.tick(timestamp: 0)
-        applicator.apply(commands: cmds, count: count)
+        // Set up push-model callback.
+        bridge.setRenderCallback { [weak self] cmds, count in
+            guard let self else { return }
+            self.applicator.apply(commands: cmds, count: count)
+        }
 
-        // Start the display link for subsequent frames.
-        let link = CADisplayLink(target: self, selector: #selector(displayLinkFired(_:)))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-    }
+        // Try loading a WASM app first; fall back to the built-in demo layout.
+        var usedWasm = false
+        if let watURL = Bundle.main.url(forResource: "demo", withExtension: "wat"),
+           let watData = try? Data(contentsOf: watURL)
+        {
+            let status = bridge.runWasmApp(watData)
+            usedWasm = (status == 0)
+        }
 
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        displayLink?.invalidate()
-        displayLink = nil
-    }
-
-    @objc private func displayLinkFired(_ link: CADisplayLink) {
-        frameCount += 1
-        let timestampNs = UInt64(link.timestamp * 1_000_000_000)
-        let (cmds, count) = bridge.tick(timestamp: timestampNs)
-        if count > 0 {
-            applicator.apply(commands: cmds, count: count)
+        if !usedWasm {
+            // Use the built-in demo layout (always available).
+            bridge.submitDemoLayout(
+                viewportWidth: Float(view.bounds.width),
+                viewportHeight: Float(view.bounds.height),
+                rowCount: 20
+            )
+            bridge.triggerRender()
         }
     }
 
@@ -48,9 +47,10 @@ final class RendererViewController: UIViewController, UIScrollViewDelegate {
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         let offset = scrollView.contentOffset
         bridge.updateScroll(
-            scrollId: RendererBridge.mainScrollId,
+            scrollId: UInt64(scrollView.tag),
             x: Float(offset.x),
             y: Float(offset.y)
         )
+        bridge.triggerRender()
     }
 }

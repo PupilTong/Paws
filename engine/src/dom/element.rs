@@ -130,6 +130,13 @@ impl PawsElement {
         self.tree().get(id).expect("Node not found in slab")
     }
 
+    /// Returns the cached computed style values from the last style resolution.
+    ///
+    /// Available after [`Document::resolve_style`] has been called.
+    pub fn get_computed_values(&self) -> Option<&Arc<style::properties::ComputedValues>> {
+        self.computed_values.as_ref()
+    }
+
     pub fn is_element(&self) -> bool {
         self.node_type == NodeType::Element
     }

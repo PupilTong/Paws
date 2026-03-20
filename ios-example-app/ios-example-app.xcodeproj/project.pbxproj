@@ -143,7 +143,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Build Rust staticlibs for the current architecture.\n# Adjust RUST_TARGET based on the Xcode build destination.\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n  if [ \"$ARCHS\" = \"arm64\" ]; then\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n  else\n    RUST_TARGET=\"x86_64-apple-ios\"\n  fi\nelse\n  RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nPAWS_ROOT=\"${SRCROOT}/..\"\ncd \"$PAWS_ROOT\"\n\ncargo build -p ios-renderer-backend --target \"$RUST_TARGET\" --release\n\n# Copy staticlib to Xcode build dir so it is found by the linker.\ncp \"target/$RUST_TARGET/release/libios_renderer_backend.a\" \"$BUILT_PRODUCTS_DIR/\"\n";
+			shellScript = "# Build Rust staticlibs for the current architecture.\n# Adjust RUST_TARGET based on the Xcode build destination.\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n  if [ \"$ARCHS\" = \"arm64\" ]; then\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n  else\n    RUST_TARGET=\"x86_64-apple-ios\"\n  fi\nelse\n  RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nPAWS_ROOT=\"${SRCROOT}/..\"\ncd \"$PAWS_ROOT\"\n\n# Build without default features to exclude wasmtime (not supported on iOS).\ncargo build -p ios-renderer-backend --no-default-features --target \"$RUST_TARGET\" --release\n\n# Copy staticlib to Xcode build dir so it is found by the linker.\ncp \"target/$RUST_TARGET/release/libios_renderer_backend.a\" \"$BUILT_PRODUCTS_DIR/\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

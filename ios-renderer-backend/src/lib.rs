@@ -13,6 +13,7 @@
 //! 4. **Diff** — compare against previous frame, emit minimal delta
 //! 5. **Emit** — write commands into caller-allocated buffer
 
+pub(crate) mod convert;
 pub(crate) mod cull;
 pub(crate) mod diff;
 pub mod ffi;

@@ -104,12 +104,17 @@ pub(crate) struct LayerizeNode<'a> {
 
 /// Determine whether `node` must receive its own `CALayer` / `UIScrollView`.
 ///
-/// A node is promoted when any of these conditions hold:
+/// In a UIKit-based renderer every node with visual content needs its own
+/// `UIView`, so we promote aggressively. A node is promoted when any of
+/// these conditions hold:
+///
 /// 1. `scroll.is_some()` → becomes `UIScrollView`
 /// 2. Has a `clip` differing from parent bounds
 /// 3. Has a non-identity `transform`
 /// 4. Has `opacity < 1.0` (independent compositing)
 /// 5. `will_change == true`
+/// 6. Has a non-transparent background (UIKit needs a `UIView` to render it)
+/// 7. Has a non-zero border radius (needs its own `CALayer`)
 pub(crate) fn needs_layer(node: &LayoutNode, parent_frame: Option<Rect>) -> bool {
     if node.scroll.is_some() {
         return true;
@@ -127,7 +132,14 @@ pub(crate) fn needs_layer(node: &LayoutNode, parent_frame: Option<Rect>) -> bool
     if node.style.opacity < 1.0 {
         return true;
     }
-    node.style.will_change
+    if node.style.will_change {
+        return true;
+    }
+    // UIKit renderer: any node with visible content needs its own UIView.
+    if node.style.background.a > 0.0 {
+        return true;
+    }
+    node.style.border_radius > 0.0
 }
 
 /// Run the layerize pass, processing subtrees in parallel via rayon.
@@ -203,7 +215,7 @@ mod tests {
                 r: 0.0,
                 g: 0.0,
                 b: 0.0,
-                a: 1.0,
+                a: 0.0,
             },
             border_radius: 0.0,
             will_change: false,
