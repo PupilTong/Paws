@@ -7,12 +7,25 @@ pub use wasm::{build_linker, read_cstr};
 use engine::RuntimeState;
 use wasmtime::{Engine as WasmEngine, Module, Store};
 
+/// Create a [`wasmtime::Engine`] configured for the current platform.
+///
+/// On iOS, JIT compilation is forbidden (no W+X pages), so we target
+/// Pulley — wasmtime's portable interpreter. On all other platforms we
+/// use the default (Cranelift) configuration.
+pub fn create_engine() -> WasmEngine {
+    #[allow(unused_mut)]
+    let mut config = wasmtime::Config::new();
+    #[cfg(target_os = "ios")]
+    config.target("pulley64").expect("set pulley64 target");
+    WasmEngine::new(&config).expect("create wasmtime engine")
+}
+
 /// A tiny demo that wires wasm, layout, and style concepts together.
 ///
 /// Returns a human-readable summary string.
 pub fn hello_engine() -> String {
     // 1) Wasmtime: create an engine and compile a minimal module.
-    let wasm_engine = WasmEngine::default();
+    let wasm_engine = create_engine();
     let wasm_bytes = b"(module)";
     let _module = Module::new(&wasm_engine, wasm_bytes).expect("compile minimal wasm module");
     let _store = Store::new(&wasm_engine, ());

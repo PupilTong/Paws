@@ -50,9 +50,9 @@ final class RendererBridge {
         }
     }
 
-    /// Submit a built-in demo layout tree.
-    func submitDemoLayout(viewportWidth: Float, viewportHeight: Float, rowCount: UInt32) {
-        rb_submit_demo_layout(handle, viewportWidth, viewportHeight, rowCount)
+    /// Submit a built-in demo layout tree (mirrors demo.wat).
+    func submitDemoLayout(viewportWidth: Float, viewportHeight: Float) {
+        rb_submit_demo_layout(handle, viewportWidth, viewportHeight)
     }
 
     // MARK: - Scroll

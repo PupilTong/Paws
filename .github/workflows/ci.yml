@@ -54,4 +54,4 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build static library for iOS Simulator
-        run: cargo build -p ios-renderer-backend --no-default-features --target aarch64-apple-ios-sim --release
+        run: cargo build -p ios-renderer-backend --target aarch64-apple-ios-sim --release

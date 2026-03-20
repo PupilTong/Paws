@@ -13,6 +13,7 @@
 		A10004 /* LayerApplicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20004 /* LayerApplicator.swift */; };
 		A10005 /* RendererViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20005 /* RendererViewController.swift */; };
 		A10011 /* libios_renderer_backend.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A20011 /* libios_renderer_backend.a */; };
+		A10012 /* demo.wat in Resources */ = {isa = PBXBuildFile; fileRef = A20012 /* demo.wat */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 		A20006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A20007 /* ios-example-app-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "ios-example-app-Bridging-Header.h"; sourceTree = "<group>"; };
 		A20011 /* libios_renderer_backend.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libios_renderer_backend.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20012 /* demo.wat */ = {isa = PBXFileReference; lastKnownFileType = text; path = demo.wat; sourceTree = "<group>"; };
 		A20020 /* ios-example-app.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "ios-example-app.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -43,6 +45,7 @@
 			isa = PBXGroup;
 			children = (
 				A40001 /* src */,
+				A20012 /* demo.wat */,
 				A20007 /* ios-example-app-Bridging-Header.h */,
 				A40002 /* Products */,
 				A40003 /* Frameworks */,
@@ -80,6 +83,17 @@
 		};
 /* End PBXGroup section */
 
+/* Begin PBXResourcesBuildPhase section */
+		A30003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10012 /* demo.wat in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXNativeTarget section */
 		A50001 /* ios-example-app */ = {
 			isa = PBXNativeTarget;
@@ -88,6 +102,7 @@
 				A60001 /* Build Rust Libraries */,
 				A30002 /* Sources */,
 				A30001 /* Frameworks */,
+				A30003 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -143,7 +158,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Build Rust staticlibs for the current architecture.\n# Adjust RUST_TARGET based on the Xcode build destination.\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n  if [ \"$ARCHS\" = \"arm64\" ]; then\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n  else\n    RUST_TARGET=\"x86_64-apple-ios\"\n  fi\nelse\n  RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nPAWS_ROOT=\"${SRCROOT}/..\"\ncd \"$PAWS_ROOT\"\n\n# Build without default features to exclude wasmtime (not supported on iOS).\ncargo build -p ios-renderer-backend --no-default-features --target \"$RUST_TARGET\" --release\n\n# Copy staticlib to Xcode build dir so it is found by the linker.\ncp \"target/$RUST_TARGET/release/libios_renderer_backend.a\" \"$BUILT_PRODUCTS_DIR/\"\n";
+			shellScript = "# Build Rust staticlibs for the current architecture.\n# Adjust RUST_TARGET based on the Xcode build destination.\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n  if [ \"$ARCHS\" = \"arm64\" ]; then\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n  else\n    RUST_TARGET=\"x86_64-apple-ios\"\n  fi\nelse\n  RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nPAWS_ROOT=\"${SRCROOT}/..\"\ncd \"$PAWS_ROOT\"\n\n# Build with default features (includes wasm support via wasmtime + pulley).\ncargo build -p ios-renderer-backend --target \"$RUST_TARGET\" --release\n\n# Copy staticlib to Xcode build dir so it is found by the linker.\ncp \"target/$RUST_TARGET/release/libios_renderer_backend.a\" \"$BUILT_PRODUCTS_DIR/\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

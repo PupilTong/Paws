@@ -16,7 +16,7 @@
   (data (i32.const 0)   "div\00")
 
   ;; CSS stylesheet — defines the layout for root, container, and rows.
-  (data (i32.const 16)  ".root { display: block; width: 390px; height: 844px; } .container { display: block; width: 390px; height: 1600px; overflow-y: scroll; } .row { display: block; width: 390px; height: 80px; }\00")
+  (data (i32.const 16)  ".root { display: block; width: 390px; height: 844px; } .container { display: block; width: 390px; height: 1600px; overflow-y: scroll; } .row { display: block; width: 50px; height: 50px; }\00")
 
   ;; Style property names and values
   (data (i32.const 512) "class\00")

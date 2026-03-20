@@ -10,7 +10,13 @@ path = "src/lib.rs"
 [dependencies]
 engine = { path = "../engine" }
 anyhow = "1"
-wasmtime = "26"
+wasmtime = { version = "30", default-features = false, features = [
+    "cranelift",
+    "pulley",
+    "runtime",
+    "std",
+    "wat",
+] }
 
 
 [dev-dependencies]

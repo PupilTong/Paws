@@ -89,9 +89,9 @@ public final class PawsRenderer: @unchecked Sendable {
 
     // MARK: - Layout submission
 
-    /// Submit a demo layout tree (scrollable colored rows).
-    public func submitDemoLayout(viewportWidth: Float, viewportHeight: Float, rowCount: UInt32) {
-        rb_submit_demo_layout(handle, viewportWidth, viewportHeight, rowCount)
+    /// Submit a demo layout tree that mirrors `demo.wat` (4 colored rows).
+    public func submitDemoLayout(viewportWidth: Float, viewportHeight: Float) {
+        rb_submit_demo_layout(handle, viewportWidth, viewportHeight)
     }
 }
 

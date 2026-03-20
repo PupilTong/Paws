@@ -190,15 +190,17 @@ pub unsafe extern "C" fn rb_submit_layout(handle: u64, root: *const LayoutNode, 
 /// Useful for verifying the Swift rendering pipeline without needing a
 /// separate WASM module or Rust crate to construct layout trees.
 ///
-/// `viewport_w` / `viewport_h` are the screen dimensions in points.
-/// `row_count` controls how many rows appear in the scrollable list.
+/// Submit a demo layout that mirrors `demo.wat`:
+///
+/// - Root div (full viewport, transparent bg)
+/// - Container div (full viewport, scroll, content height = 4 × 50)
+/// - 4 rows (50×50pt) with colours from `demo.wat`:
+///   - `rgb(255,100,100)` — red
+///   - `rgb(100,255,100)` — green
+///   - `rgb(100,100,255)` — blue
+///   - `rgb(255,255,100)` — yellow
 #[no_mangle]
-pub extern "C" fn rb_submit_demo_layout(
-    handle: u64,
-    viewport_w: f32,
-    viewport_h: f32,
-    row_count: u32,
-) {
+pub extern "C" fn rb_submit_demo_layout(handle: u64, viewport_w: f32, viewport_h: f32) {
     if handle == 0 {
         return;
     }
@@ -206,34 +208,40 @@ pub extern "C" fn rb_submit_demo_layout(
     // main-thread access.
     let instance = unsafe { &mut *(handle as *mut RendererInstance) };
 
-    let row_height: f32 = 80.0;
-    let total_content_h = row_count as f32 * row_height;
+    let row_size: f32 = 50.0;
+    // Matches demo.wat: rgb(255,100,100), rgb(100,255,100), rgb(100,100,255), rgb(255,255,100)
+    const C: f32 = 100.0 / 255.0; // ≈ 0.392
+    let colors: [(f32, f32, f32); 4] = [
+        (1.0, C, C),       // red
+        (C, 1.0, C),       // green
+        (C, C, 1.0),       // blue
+        (1.0, 1.0, C),     // yellow
+    ];
+    let row_count = colors.len();
+    let total_content_h = row_count as f32 * row_size;
 
-    let rows: Vec<LayoutNode> = (0..row_count as u64)
-        .map(|i| {
-            let hue = (i as f32) / (row_count as f32);
-            let (r, g, b) = hue_to_rgb(hue);
-
-            LayoutNode {
-                id: 100 + i,
-                frame: Rect {
-                    x: 0.0,
-                    y: i as f32 * row_height,
-                    width: viewport_w,
-                    height: row_height,
-                },
-                children: vec![],
-                scroll: None,
-                style: ComputedStyle {
-                    opacity: 1.0,
-                    transform: None,
-                    clip: None,
-                    background: Color { r, g, b, a: 1.0 },
-                    border_radius: 8.0,
-                    will_change: false,
-                },
-                generation: 1,
-            }
+    let rows: Vec<LayoutNode> = colors
+        .iter()
+        .enumerate()
+        .map(|(i, &(r, g, b))| LayoutNode {
+            id: 100 + i as u64,
+            frame: Rect {
+                x: 0.0,
+                y: i as f32 * row_size,
+                width: row_size,
+                height: row_size,
+            },
+            children: vec![],
+            scroll: None,
+            style: ComputedStyle {
+                opacity: 1.0,
+                transform: None,
+                clip: None,
+                background: Color { r, g, b, a: 1.0 },
+                border_radius: 0.0,
+                will_change: false,
+            },
+            generation: 1,
         })
         .collect();
 
@@ -259,10 +267,10 @@ pub extern "C" fn rb_submit_demo_layout(
             transform: None,
             clip: None,
             background: Color {
-                r: 0.95,
-                g: 0.95,
-                b: 0.97,
-                a: 1.0,
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
             },
             border_radius: 0.0,
             will_change: false,
@@ -297,22 +305,6 @@ pub extern "C" fn rb_submit_demo_layout(
     };
 
     instance.layout_root = Some(root);
-}
-
-/// Convert a hue value `[0.0, 1.0]` to an RGB triple.
-fn hue_to_rgb(h: f32) -> (f32, f32, f32) {
-    let h6 = h * 6.0;
-    let sector = h6 as u32;
-    let frac = h6 - sector as f32;
-
-    match sector % 6 {
-        0 => (1.0, frac, 0.0),
-        1 => (1.0 - frac, 1.0, 0.0),
-        2 => (0.0, 1.0, frac),
-        3 => (0.0, 1.0 - frac, 1.0),
-        4 => (frac, 0.0, 1.0),
-        _ => (1.0, 0.0, 1.0 - frac),
-    }
 }
 
 /// Change the command buffer capacity for future frames.
@@ -460,10 +452,12 @@ pub unsafe extern "C" fn rb_run_wasm_app(
 #[cfg(feature = "wasm")]
 fn run_wasm_app_inner(instance: &mut RendererInstance, wasm_bytes: &[u8]) -> anyhow::Result<()> {
     use engine::RuntimeState;
-    use wasmtime::{Engine as WasmEngine, Module, Store};
+    use wasmtime::{Module, Store};
 
     // 1. Compile the WASM module.
-    let wasm_engine = WasmEngine::default();
+    //    `create_engine()` returns a Pulley-configured engine on iOS
+    //    (JIT is forbidden) and the default Cranelift engine elsewhere.
+    let wasm_engine = wasm_bridge::create_engine();
     let module = Module::new(&wasm_engine, wasm_bytes)?;
 
     // 2. Create runtime state and instantiate.

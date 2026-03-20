@@ -1,8 +1,8 @@
 import UIKit
 
 /// Main view controller that drives the Rust rendering pipeline via
-/// the push model: submits a layout tree, which triggers the pipeline
-/// and pushes `LayerCmd` commands back to Swift via a callback.
+/// the push model: loads `demo.wat`, executes it through the full
+/// WASM → DOM → Style → Layout → Renderer → UIKit pipeline.
 final class RendererViewController: UIViewController, UIScrollViewDelegate {
 
     private var bridge: RendererBridge!
@@ -22,23 +22,16 @@ final class RendererViewController: UIViewController, UIScrollViewDelegate {
             self.applicator.apply(commands: cmds, count: count)
         }
 
-        // Try loading a WASM app first; fall back to the built-in demo layout.
-        var usedWasm = false
-        if let watURL = Bundle.main.url(forResource: "demo", withExtension: "wat"),
-           let watData = try? Data(contentsOf: watURL)
-        {
-            let status = bridge.runWasmApp(watData)
-            usedWasm = (status == 0)
+        // Load and execute demo.wat through the real WASM pipeline.
+        guard let watURL = Bundle.main.url(forResource: "demo", withExtension: "wat"),
+              let watData = try? Data(contentsOf: watURL)
+        else {
+            fatalError("demo.wat not found in app bundle")
         }
 
-        if !usedWasm {
-            // Use the built-in demo layout (always available).
-            bridge.submitDemoLayout(
-                viewportWidth: Float(view.bounds.width),
-                viewportHeight: Float(view.bounds.height),
-                rowCount: 20
-            )
-            bridge.triggerRender()
+        let status = bridge.runWasmApp(watData)
+        if status != 0 {
+            fatalError("rb_run_wasm_app failed with status \(status)")
         }
     }
 
