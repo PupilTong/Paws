@@ -567,5 +567,11 @@ mod tests {
             engine::CSSStyleValue::Unparsed(s) => assert!(s.contains("150"), "expected 150 in {s}"),
             other => panic!("unexpected width value: {other:?}"),
         }
+
+        // Verify that commit also computed layout (re-commit is a no-op
+        // style-wise but returns the same layout tree)
+        let layout = store.data_mut().commit();
+        assert_eq!(layout.width, 150.0);
+        assert_eq!(layout.height, 75.0);
     }
 }

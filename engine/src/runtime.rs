@@ -225,26 +225,14 @@ impl RuntimeState {
         });
 
         let Some(root_element_id) = root_element else {
-            return LayoutBox {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-                children: Vec::new(),
-            };
+            return LayoutBox::default();
         };
 
         // 3. Layout from the root element
         let text_measurer = crate::layout::MockTextMeasurer;
         self.layout_state
             .compute_layout(&self.doc, root_element_id, &text_measurer)
-            .unwrap_or(LayoutBox {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-                children: Vec::new(),
-            })
+            .unwrap_or_default()
     }
 
     /// Sets a DOM attribute on an element (e.g. `id`, `class`).

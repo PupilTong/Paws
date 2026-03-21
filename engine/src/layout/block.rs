@@ -9,6 +9,7 @@ use taffy::prelude::*;
 ///
 /// Produced by [`LayoutState::compute_layout`] and consumed by
 /// the iOS renderer backend's conversion layer to build `LayoutNode` trees.
+#[derive(Default)]
 pub struct LayoutBox {
     /// X offset relative to the parent's content box.
     pub x: f32,
