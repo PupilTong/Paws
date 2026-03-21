@@ -444,4 +444,70 @@ mod tests {
             .expect("layout");
         assert_eq!(layout.height, 77.0);
     }
+
+    #[test]
+    fn wasm_set_attribute_success() {
+        let wat = r#"
+(module
+    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
+    (import "env" "__SetAttribute" (func $set_attr (param i32 i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (data (i32.const 16) "class\00")
+    (data (i32.const 32) "foo bar\00")
+    (func (export "run") (result i32)
+        (local $id i32)
+        (local.set $id (call $create (i32.const 0)))
+        (call $set_attr (local.get $id) (i32.const 16) (i32.const 32))
+    )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile wasm module");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate wasm module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run function");
+
+        let status = run.call(&mut store, ()).expect("run wasm");
+        assert_eq!(status, 0);
+    }
+
+    #[test]
+    fn wasm_set_attribute_invalid_child() {
+        let wat = r#"
+(module
+    (import "env" "__SetAttribute" (func $set_attr (param i32 i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "class\00")
+    (data (i32.const 16) "foo bar\00")
+    (func (export "run") (result i32)
+        (call $set_attr (i32.const -1) (i32.const 0) (i32.const 16))
+    )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile wasm module");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate wasm module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run function");
+
+        let status = run.call(&mut store, ()).expect("run wasm");
+        assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
+    }
 }

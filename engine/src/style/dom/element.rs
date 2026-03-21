@@ -242,3 +242,32 @@ impl<'a> TElement for &'a PawsElement {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dom::Document;
+    use url::Url;
+    use markup5ever::QualName;
+
+    #[test]
+    fn test_element_get_computed_values() {
+        // Create an element through document
+        let guard = style::shared_lock::SharedRwLock::new();
+        let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
+        
+        let id = doc.create_element(QualName::new(None, "".into(), "p".into()));
+        let elem = doc.get_node(id).unwrap();
+        
+        // Should initially be None
+        assert!(elem.get_computed_values().is_none());
+        
+        // After resolving styles, it should be Some
+        let url = Url::parse("http://test.com").unwrap();
+        let style_ctx = crate::style::StyleContext::new(url);
+        doc.resolve_style(&style_ctx);
+        
+        let elem = doc.get_node(id).unwrap();
+        assert!(elem.get_computed_values().is_some());
+    }
+}

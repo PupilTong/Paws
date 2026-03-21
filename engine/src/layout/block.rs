@@ -147,3 +147,39 @@ fn build_subtree(
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dom::Document;
+    use crate::style::shared_lock::SharedRwLock;
+    use url::Url;
+    use markup5ever::QualName;
+    use crate::layout::text::MockTextMeasurer;
+
+    #[test]
+    fn test_compute_layout_extract_tree() {
+        let guard = SharedRwLock::new();
+        let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
+        let mut state = LayoutState::new();
+        let measurer = MockTextMeasurer;
+        
+        let elem1 = doc.create_element(QualName::new(None, "".into(), "div".into()));
+        doc.append_child(0, elem1).unwrap();
+        
+        let elem2 = doc.create_element(QualName::new(None, "".into(), "span".into()));
+        doc.append_child(elem1, elem2).unwrap();
+        
+        // Ensure there's a computed values cache so to_taffy_style doesn't bail early. 
+        // Actually Document::resolve_style will ensure `computed_values` is Some(...)
+        let url = Url::parse("http://test.com").unwrap();
+        let style_ctx = crate::style::StyleContext::new(url);
+        // wait, we can just resolve style on the document
+        doc.resolve_style(&style_ctx);
+
+        let layout = state.compute_layout(&doc, elem1, &measurer);
+        assert!(layout.is_some());
+        let layout = layout.unwrap();
+        assert_eq!(layout.children.len(), 1);
+    }
+}
