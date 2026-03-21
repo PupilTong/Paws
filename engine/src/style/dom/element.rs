@@ -245,7 +245,6 @@ impl<'a> TElement for &'a PawsElement {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::dom::Document;
     use markup5ever::QualName;
     use url::Url;

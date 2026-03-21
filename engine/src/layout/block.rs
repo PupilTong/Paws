@@ -153,8 +153,8 @@ mod tests {
     use super::*;
     use crate::dom::Document;
     use crate::layout::text::MockTextMeasurer;
-    use crate::style::shared_lock::SharedRwLock;
     use markup5ever::QualName;
+    use style::shared_lock::SharedRwLock;
     use url::Url;
 
     #[test]
