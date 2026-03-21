@@ -5,26 +5,18 @@ use fnv::FnvHashMap;
 use style::values::specified::font::FONT_MEDIUM_PX;
 use taffy::prelude::*;
 
-/// The result of a layout computation, containing the final dimensions.
-pub struct LayoutBox {
-    pub width: f32,
-    pub height: f32,
-}
-
 /// A fully-resolved layout node with absolute position, size, and children.
 ///
-/// Produced by [`LayoutState::compute_layout_tree`] and consumed by
+/// Produced by [`LayoutState::compute_layout`] and consumed by
 /// the iOS renderer backend's conversion layer to build `LayoutNode` trees.
-pub struct LayoutBoxFull {
-    /// DOM node ID in the [`Document`] slab.
-    pub node_id: usize,
+pub struct LayoutBox {
     /// X offset relative to the parent's content box.
     pub x: f32,
     /// Y offset relative to the parent's content box.
     pub y: f32,
     pub width: f32,
     pub height: f32,
-    pub children: Vec<LayoutBoxFull>,
+    pub children: Vec<LayoutBox>,
 }
 
 pub struct LayoutState {
@@ -47,7 +39,7 @@ impl LayoutState {
         }
     }
 
-    /// Computes the layout for a subtree rooted at `id`, returning its dimensions.
+    /// Computes the layout for a subtree rooted at `id`, returning its full tree.
     /// Uses a persistent Taffy instance to reuse allocations.
     pub fn compute_layout(
         &mut self,
@@ -67,45 +59,14 @@ impl LayoutState {
         self.taffy
             .compute_layout(root_node, Size::MAX_CONTENT)
             .ok()?;
-        let layout = self.taffy.layout(root_node).ok()?;
-        Some(LayoutBox {
-            width: layout.size.width,
-            height: layout.size.height,
-        })
-    }
-
-    /// Computes layout and returns a full positioned tree with DOM node IDs.
-    ///
-    /// Unlike [`compute_layout`] which returns only root dimensions, this
-    /// walks the entire Taffy result tree and produces a [`LayoutBoxFull`]
-    /// for every node, including positions relative to their parent.
-    pub fn compute_layout_tree(
-        &mut self,
-        doc: &crate::dom::Document,
-        id: usize,
-        text_measurer: &dyn TextMeasurer,
-    ) -> Option<LayoutBoxFull> {
-        self.taffy.clear();
-        self.taffy_to_dom.clear();
-        let root_node = build_layout_tree(
-            doc,
-            id,
-            &mut self.taffy,
-            &mut self.taffy_to_dom,
-            text_measurer,
-        )?;
-        self.taffy
-            .compute_layout(root_node, Size::MAX_CONTENT)
-            .ok()?;
         self.extract_tree(root_node)
     }
 
     /// Recursively extracts the positioned layout tree from Taffy's results.
-    fn extract_tree(&self, taffy_node: NodeId) -> Option<LayoutBoxFull> {
+    fn extract_tree(&self, taffy_node: NodeId) -> Option<LayoutBox> {
         let layout = self.taffy.layout(taffy_node).ok()?;
-        let dom_id = *self.taffy_to_dom.get(&taffy_node)?;
 
-        let children: Vec<LayoutBoxFull> = self
+        let children: Vec<LayoutBox> = self
             .taffy
             .children(taffy_node)
             .ok()
@@ -114,8 +75,7 @@ impl LayoutState {
             .filter_map(|child| self.extract_tree(child))
             .collect();
 
-        Some(LayoutBoxFull {
-            node_id: dom_id,
+        Some(LayoutBox {
             x: layout.location.x,
             y: layout.location.y,
             width: layout.size.width,
