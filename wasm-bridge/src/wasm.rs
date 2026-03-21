@@ -321,6 +321,18 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
 
     linker
         .func_wrap(
+            "env",
+            "__Commit",
+            |mut caller: Caller<'_, RuntimeState>| -> Result<i32> {
+                caller.data_mut().commit();
+                caller.data_mut().clear_error();
+                Ok(0)
+            },
+        )
+        .expect("link __Commit");
+
+    linker
+        .func_wrap(
             "paws",
             "paws_add_parsed_stylesheet",
             |mut caller: Caller<'_, RuntimeState>, ptr: i32, len: i32| -> Result<()> {

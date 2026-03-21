@@ -510,4 +510,68 @@ mod tests {
         let status = run.call(&mut store, ()).expect("run wasm");
         assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
     }
+
+    #[test]
+    fn wasm_commit_triggers_style_and_layout() {
+        let wat = r#"
+(module
+    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
+    (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
+    (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+    (import "env" "__Commit" (func $commit (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (data (i32.const 16) "width\00")
+    (data (i32.const 32) "150px\00")
+    (data (i32.const 48) "height\00")
+    (data (i32.const 64) "75px\00")
+    (func (export "run") (result i32)
+        (local $id i32)
+        (local.set $id (call $create (i32.const 0)))
+        (call $append (i32.const 0) (local.get $id))
+        (drop)
+        (call $set_style (local.get $id) (i32.const 16) (i32.const 32))
+        (drop)
+        (call $set_style (local.get $id) (i32.const 48) (i32.const 64))
+        (drop)
+        (call $commit)
+    )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile wasm module");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate wasm module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run function");
+        let result = run.call(&mut store, ()).expect("run wasm");
+        assert_eq!(result, 0, "__Commit should return 0 on success");
+
+        // Verify that commit resolved styles by reading a computed property
+        let state = store.data_mut();
+        let map = state
+            .computed_style_map(1)
+            .expect("computed style map for div");
+        let width = map
+            .get("width", &mut state.doc, &state.style_context)
+            .expect("should have computed width");
+        match width {
+            engine::CSSStyleValue::Unit(u) => assert_eq!(u.value, 150.0),
+            engine::CSSStyleValue::Unparsed(s) => assert!(s.contains("150"), "expected 150 in {s}"),
+            other => panic!("unexpected width value: {other:?}"),
+        }
+
+        // Verify that commit also computed layout (re-commit is a no-op
+        // style-wise but returns the same layout tree)
+        let layout = store.data_mut().commit();
+        assert_eq!(layout.width, 150.0);
+        assert_eq!(layout.height, 75.0);
+    }
 }

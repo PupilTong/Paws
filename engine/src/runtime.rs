@@ -1,6 +1,7 @@
 use markup5ever::{LocalName, QualName};
 
 use crate::dom::{Document, DomError};
+use crate::layout::{LayoutBox, LayoutState};
 use crate::style::StyleContext;
 
 /// Error codes returned from host functions to WASM guests.
@@ -51,6 +52,7 @@ pub struct RuntimeState {
     pub last_error: Option<HostError>,
     pub style_context: StyleContext,
     pub(crate) stylesheet_cache: crate::style::StylesheetCache,
+    pub layout_state: LayoutState,
 }
 
 impl RuntimeState {
@@ -70,6 +72,7 @@ impl RuntimeState {
             last_error: None,
             style_context: context,
             stylesheet_cache,
+            layout_state: LayoutState::new(),
         }
     }
     /// Creates a new HTML element with the given tag name. Returns the node ID.
@@ -198,6 +201,38 @@ impl RuntimeState {
         self.doc.stylesheets.push(sheet);
         let added_sheet = self.doc.stylesheets.last().unwrap();
         self.style_context.add_stylesheet(added_sheet);
+    }
+
+    /// Runs the full rendering pipeline: style resolution followed by layout.
+    ///
+    /// This is the explicit commit model — unlike browsers where many APIs
+    /// trigger implicit reflow, only `commit()` triggers the pipeline.
+    /// In the future, animations will also trigger repaint, but generally
+    /// the pipeline should be driven explicitly by the user program.
+    ///
+    /// Computes layout starting from the first element child of the document
+    /// root, since the document node itself is not a styled element.
+    pub fn commit(&mut self) -> LayoutBox {
+        // 1. Style resolution (skipped if nothing is dirty)
+        self.doc.ensure_styles_resolved(&self.style_context);
+
+        // 2. Find the root element (first element child of the document node)
+        let root_element = self.doc.get_node(self.doc.root).and_then(|root| {
+            root.children
+                .iter()
+                .copied()
+                .find(|&id| self.doc.get_node(id).is_some_and(|n| n.is_element()))
+        });
+
+        let Some(root_element_id) = root_element else {
+            return LayoutBox::default();
+        };
+
+        // 3. Layout from the root element
+        let text_measurer = crate::layout::MockTextMeasurer;
+        self.layout_state
+            .compute_layout(&self.doc, root_element_id, &text_measurer)
+            .unwrap_or_default()
     }
 
     /// Sets a DOM attribute on an element (e.g. `id`, `class`).
@@ -2566,5 +2601,48 @@ mod tests {
                 .unwrap(),
             "5",
         );
+    }
+
+    #[test]
+    fn test_commit_resolves_styles_and_computes_layout() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state
+            .set_inline_style(div, "display".to_string(), "block".to_string())
+            .unwrap();
+        state
+            .set_inline_style(div, "width".to_string(), "200px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(div, "height".to_string(), "100px".to_string())
+            .unwrap();
+
+        let layout = state.commit();
+        assert_eq!(layout.width, 200.0);
+        assert_eq!(layout.height, 100.0);
+    }
+
+    #[test]
+    fn test_commit_skips_when_not_dirty() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state
+            .set_inline_style(div, "width".to_string(), "50px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(div, "height".to_string(), "50px".to_string())
+            .unwrap();
+
+        // First commit resolves styles
+        let layout1 = state.commit();
+        assert_eq!(layout1.width, 50.0);
+        assert_eq!(layout1.height, 50.0);
+
+        // Second commit without changes — should still produce correct layout
+        let layout2 = state.commit();
+        assert_eq!(layout2.width, 50.0);
+        assert_eq!(layout2.height, 50.0);
     }
 }
