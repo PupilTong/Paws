@@ -19,7 +19,7 @@ default-features = false
 features = ["cranelift", "pulley", "runtime", "std", "wat"]
 
 [dev-dependencies]
-criterion = "0.5"
+codspeed-criterion-compat = "4.4.1"
 
 [[bench]]
 name = "engine_bench"
