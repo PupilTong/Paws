@@ -7,12 +7,25 @@ pub use wasm::{build_linker, read_cstr};
 use engine::RuntimeState;
 use wasmtime::{Engine as WasmEngine, Module, Store};
 
+/// Create a [`wasmtime::Engine`] configured for the current platform.
+///
+/// On iOS, JIT compilation is forbidden (no W+X pages), so we target
+/// Pulley — wasmtime's portable interpreter. On all other platforms we
+/// use the default (Cranelift) configuration.
+pub fn create_engine() -> WasmEngine {
+    #[allow(unused_mut)]
+    let mut config = wasmtime::Config::new();
+    #[cfg(target_os = "ios")]
+    config.target("pulley64").expect("set pulley64 target");
+    WasmEngine::new(&config).expect("create wasmtime engine")
+}
+
 /// A tiny demo that wires wasm, layout, and style concepts together.
 ///
 /// Returns a human-readable summary string.
 pub fn hello_engine() -> String {
     // 1) Wasmtime: create an engine and compile a minimal module.
-    let wasm_engine = WasmEngine::default();
+    let wasm_engine = create_engine();
     let wasm_bytes = b"(module)";
     let _module = Module::new(&wasm_engine, wasm_bytes).expect("compile minimal wasm module");
     let _store = Store::new(&wasm_engine, ());
@@ -430,5 +443,71 @@ mod tests {
             .compute_layout(&state.doc, id as usize, &engine::layout::MockTextMeasurer)
             .expect("layout");
         assert_eq!(layout.height, 77.0);
+    }
+
+    #[test]
+    fn wasm_set_attribute_success() {
+        let wat = r#"
+(module
+    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
+    (import "env" "__SetAttribute" (func $set_attr (param i32 i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (data (i32.const 16) "class\00")
+    (data (i32.const 32) "foo bar\00")
+    (func (export "run") (result i32)
+        (local $id i32)
+        (local.set $id (call $create (i32.const 0)))
+        (call $set_attr (local.get $id) (i32.const 16) (i32.const 32))
+    )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile wasm module");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate wasm module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run function");
+
+        let status = run.call(&mut store, ()).expect("run wasm");
+        assert_eq!(status, 0);
+    }
+
+    #[test]
+    fn wasm_set_attribute_invalid_child() {
+        let wat = r#"
+(module
+    (import "env" "__SetAttribute" (func $set_attr (param i32 i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "class\00")
+    (data (i32.const 16) "foo bar\00")
+    (func (export "run") (result i32)
+        (call $set_attr (i32.const -1) (i32.const 0) (i32.const 16))
+    )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile wasm module");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate wasm module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run function");
+
+        let status = run.call(&mut store, ()).expect("run wasm");
+        assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
     }
 }
