@@ -88,8 +88,10 @@ impl ViewTree {
         let node_key = u64::from(node.node_id);
         visited.insert(node_key);
 
-        let needs_scroll_view =
-            node.overflow_x == Overflow::Scroll || node.overflow_y == Overflow::Scroll;
+        let needs_scroll_view = node.overflow_x == Overflow::Scroll
+            || node.overflow_x == Overflow::Auto
+            || node.overflow_y == Overflow::Scroll
+            || node.overflow_y == Overflow::Auto;
         let desired_kind = if needs_scroll_view {
             ViewKind::ScrollView
         } else {

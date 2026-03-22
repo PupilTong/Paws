@@ -1,22 +1,9 @@
 use crate::dom::NodeType;
 use crate::layout::text::TextMeasurer;
 use crate::style::to_taffy_style;
+use style::values::specified::box_::Overflow;
 use style::values::specified::font::FONT_MEDIUM_PX;
 use taffy::prelude::*;
-
-/// Overflow clipping behavior for a single axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Overflow {
-    /// Content is not clipped and may render outside the element's box.
-    #[default]
-    Visible,
-    /// Content is clipped; no scrolling UI is provided.
-    Hidden,
-    /// Content is clipped; a scrolling mechanism is provided.
-    Scroll,
-    /// Content is clipped at the element's overflow clip edge.
-    Clip,
-}
 
 /// A fully-resolved layout node with absolute position, size, and children.
 ///
@@ -113,13 +100,9 @@ impl LayoutState {
                     ZIndex::Integer(n) => Some(n),
                     ZIndex::Auto => None,
                 };
-                (
-                    z,
-                    stylo_overflow(cv.clone_overflow_x()),
-                    stylo_overflow(cv.clone_overflow_y()),
-                )
+                (z, cv.clone_overflow_x(), cv.clone_overflow_y())
             })
-            .unwrap_or_default();
+            .unwrap_or((None, Overflow::Visible, Overflow::Visible));
 
         Some(LayoutBox {
             node_id,
@@ -132,18 +115,6 @@ impl LayoutState {
             overflow_y,
             children,
         })
-    }
-}
-
-/// Converts a Stylo `Overflow` to the renderer-facing [`Overflow`] enum.
-fn stylo_overflow(input: style::values::specified::box_::Overflow) -> Overflow {
-    use style::values::specified::box_::Overflow as SO;
-    match input {
-        SO::Visible => Overflow::Visible,
-        SO::Hidden => Overflow::Hidden,
-        SO::Scroll => Overflow::Scroll,
-        SO::Auto => Overflow::Scroll,
-        SO::Clip => Overflow::Clip,
     }
 }
 
