@@ -41,7 +41,7 @@ pub struct Document {
     pub(crate) guard: SharedRwLock,
 
     /// Root node ID
-    pub(crate) root: usize,
+    pub(crate) root: taffy::NodeId,
 
     /// Document stylesheets
     pub(crate) stylesheets: Vec<crate::style::CSSStyleSheet>,
@@ -58,7 +58,8 @@ impl Document {
 
         // Create root node (Document)
         let root_entry = nodes.vacant_entry();
-        let root_id = root_entry.key();
+        let root_index = root_entry.key();
+        let root_id = taffy::NodeId::from(root_index as u64);
 
         root_entry.insert(PawsElement::new(
             slab_ptr,
@@ -68,7 +69,7 @@ impl Document {
         ));
 
         // Set IS_IN_DOCUMENT flag for root
-        nodes[root_id].flags.insert(NodeFlags::IS_IN_DOCUMENT);
+        nodes[root_index].flags.insert(NodeFlags::IS_IN_DOCUMENT);
 
         Document {
             nodes,
@@ -84,49 +85,50 @@ impl Document {
         &self.nodes
     }
 
-    pub fn get_node(&self, id: usize) -> Option<&PawsElement> {
-        self.nodes.get(id)
+    pub fn get_node(&self, id: taffy::NodeId) -> Option<&PawsElement> {
+        self.nodes.get(u64::from(id) as usize)
     }
 
-    pub(crate) fn get_node_mut(&mut self, id: usize) -> Option<&mut PawsElement> {
-        self.nodes.get_mut(id)
+    pub(crate) fn get_node_mut(&mut self, id: taffy::NodeId) -> Option<&mut PawsElement> {
+        self.nodes.get_mut(u64::from(id) as usize)
     }
 
-    pub(crate) fn create_node(&mut self, node_type: NodeType) -> usize {
+    pub(crate) fn create_node(&mut self, node_type: NodeType) -> taffy::NodeId {
         let slab_ptr = self.nodes.as_mut() as *mut Slab<PawsElement>;
         let guard = self.guard.clone();
 
         let entry = self.nodes.vacant_entry();
-        let id = entry.key();
+        let index = entry.key();
+        let id = taffy::NodeId::from(index as u64);
         entry.insert(PawsElement::new(slab_ptr, id, guard, node_type));
 
         id
     }
 
-    pub(crate) fn create_element(&mut self, name: QualName) -> usize {
+    pub(crate) fn create_element(&mut self, name: QualName) -> taffy::NodeId {
         let id = self.create_node(NodeType::Element);
-        let el = self.nodes.get_mut(id).unwrap();
+        let el = self.nodes.get_mut(u64::from(id) as usize).unwrap();
         el.name = Some(name);
         id
     }
 
-    pub(crate) fn create_text_node(&mut self, content: String) -> usize {
+    pub(crate) fn create_text_node(&mut self, content: String) -> taffy::NodeId {
         let id = self.create_node(NodeType::Text);
-        let el = self.nodes.get_mut(id).unwrap();
+        let el = self.nodes.get_mut(u64::from(id) as usize).unwrap();
         el.text_content = Some(content);
         id
     }
 
     pub(crate) fn append_child(
         &mut self,
-        parent_id: usize,
-        child_id: usize,
+        parent_id: taffy::NodeId,
+        child_id: taffy::NodeId,
     ) -> Result<(), DomError> {
         // 1. Transactional Pre-Checks
-        if !self.nodes.contains(parent_id) {
+        if !self.nodes.contains(u64::from(parent_id) as usize) {
             return Err(DomError::InvalidParent);
         }
-        if !self.nodes.contains(child_id) {
+        if !self.nodes.contains(u64::from(child_id) as usize) {
             return Err(DomError::InvalidChild);
         }
 
@@ -140,11 +142,11 @@ impl Document {
             if curr == child_id {
                 return Err(DomError::CycleDetected);
             }
-            ancestor = self.nodes.get(curr).and_then(|n| n.parent);
+            ancestor = self.get_node(curr).and_then(|n| n.parent);
         }
 
         // Check if child already has a parent
-        let old_parent = self.nodes[child_id].parent;
+        let old_parent = self.get_node(child_id).unwrap().parent;
         let needs_detach = old_parent == Some(parent_id);
         if !needs_detach && old_parent.is_some() {
             return Err(DomError::ChildAlreadyHasParent);
@@ -156,14 +158,14 @@ impl Document {
         }
         // Add to parent's children
         let mut parent_in_doc = false;
-        if let Some(parent) = self.nodes.get_mut(parent_id) {
+        if let Some(parent) = self.get_node_mut(parent_id) {
             parent.children.push(child_id);
             parent.set_dirty_descendants();
             parent_in_doc = parent.flags.contains(NodeFlags::IS_IN_DOCUMENT);
         }
 
         // Set child's parent
-        if let Some(child) = self.nodes.get_mut(child_id) {
+        if let Some(child) = self.get_node_mut(child_id) {
             child.parent = Some(parent_id);
         }
 
@@ -176,20 +178,24 @@ impl Document {
     }
 
     /// Recursively iterates over a node and its descendants in DFS order.
-    fn traverse_nodes_dfs_mut(&mut self, node_id: usize, mut f: impl FnMut(&mut PawsElement)) {
+    fn traverse_nodes_dfs_mut(
+        &mut self,
+        node_id: taffy::NodeId,
+        mut f: impl FnMut(&mut PawsElement),
+    ) {
         let mut stack = vec![node_id];
         while let Some(id) = stack.pop() {
-            if let Some(node) = self.nodes.get_mut(id) {
+            if let Some(node) = self.get_node_mut(id) {
                 stack.extend(node.children.iter().copied());
                 f(node);
             }
         }
     }
 
-    fn traverse_nodes_dfs(&self, node_id: usize, mut f: impl FnMut(&PawsElement)) {
+    fn traverse_nodes_dfs(&self, node_id: taffy::NodeId, mut f: impl FnMut(&PawsElement)) {
         let mut stack = vec![node_id];
         while let Some(id) = stack.pop() {
-            if let Some(node) = self.nodes.get(id) {
+            if let Some(node) = self.get_node(id) {
                 stack.extend(node.children.iter().copied());
                 f(node);
             }
@@ -197,33 +203,33 @@ impl Document {
     }
 
     /// Recursively sets the IS_IN_DOCUMENT flag on a node and all its descendants.
-    fn propagate_in_document_flag(&mut self, node_id: usize) {
+    fn propagate_in_document_flag(&mut self, node_id: taffy::NodeId) {
         self.traverse_nodes_dfs_mut(node_id, |node| node.flags.insert(NodeFlags::IS_IN_DOCUMENT));
     }
 
     /// Recursively clears the IS_IN_DOCUMENT flag on a node and all its descendants.
-    fn clear_in_document_flag(&mut self, node_id: usize) {
+    fn clear_in_document_flag(&mut self, node_id: taffy::NodeId) {
         self.traverse_nodes_dfs_mut(node_id, |node| node.flags.remove(NodeFlags::IS_IN_DOCUMENT));
     }
 
-    pub(crate) fn detach_node(&mut self, node_id: usize) {
-        let parent_id = self.nodes.get(node_id).and_then(|n| n.parent);
+    pub(crate) fn detach_node(&mut self, node_id: taffy::NodeId) {
+        let parent_id = self.get_node(node_id).and_then(|n| n.parent);
         if let Some(parent_id) = parent_id {
-            if let Some(parent) = self.nodes.get_mut(parent_id) {
+            if let Some(parent) = self.get_node_mut(parent_id) {
                 if let Some(pos) = parent.children.iter().position(|&id| id == node_id) {
                     parent.children.remove(pos);
                     parent.set_dirty_descendants();
                 }
             }
-            if let Some(child) = self.nodes.get_mut(node_id) {
+            if let Some(child) = self.get_node_mut(node_id) {
                 child.parent = None;
             }
             self.clear_in_document_flag(node_id);
         }
     }
 
-    pub(crate) fn remove_node(&mut self, id: usize) -> Result<(), DomError> {
-        if !self.nodes.contains(id) {
+    pub(crate) fn remove_node(&mut self, id: taffy::NodeId) -> Result<(), DomError> {
+        if !self.nodes.contains(u64::from(id) as usize) {
             return Err(DomError::InvalidChild);
         }
         self.detach_node(id);
@@ -233,8 +239,9 @@ impl Document {
         self.traverse_nodes_dfs(id, |node| to_remove.push(node.id));
 
         for node_id in to_remove {
-            if self.nodes.contains(node_id) {
-                self.nodes.remove(node_id);
+            let index = u64::from(node_id) as usize;
+            if self.nodes.contains(index) {
+                self.nodes.remove(index);
             }
         }
         Ok(())
@@ -247,7 +254,7 @@ impl Document {
     /// Returns `None` if the element does not exist or is not an element node.
     pub fn computed_style_map(
         &self,
-        element_id: usize,
+        element_id: taffy::NodeId,
     ) -> Option<crate::style::typed_om::StylePropertyMapReadOnly> {
         let node = self.get_node(element_id)?;
         if !node.is_element() {
@@ -264,7 +271,7 @@ impl Document {
     /// resolution pass if any node is dirty. This is the lazy resolution
     /// entry point used by [`StylePropertyMapReadOnly`] read operations.
     pub(crate) fn ensure_styles_resolved(&mut self, style_context: &crate::style::StyleContext) {
-        if let Some(root) = self.nodes.get(self.root) {
+        if let Some(root) = self.get_node(self.root) {
             if root.has_dirty_descendants() {
                 self.resolve_style(style_context);
             }
@@ -280,11 +287,11 @@ impl Document {
         queue.push_back(self.root);
 
         while let Some(id) = queue.pop_front() {
-            if let Some(node) = self.nodes.get(id) {
+            if let Some(node) = self.get_node(id) {
                 if node.is_element() {
                     let parent_style = node
                         .parent
-                        .and_then(|pid| self.nodes.get(pid))
+                        .and_then(|pid| self.get_node(pid))
                         .and_then(|p| p.computed_values.as_ref())
                         .cloned();
                     let computed = crate::style::compute_style_for_node(
@@ -294,28 +301,24 @@ impl Document {
                         parent_style.as_deref(),
                     );
                     // Re-borrow to enqueue children before mutable borrow
-                    let children: Vec<usize> = self
-                        .nodes
-                        .get(id)
-                        .map_or(Vec::new(), |n| n.children.clone());
+                    let children: Vec<taffy::NodeId> =
+                        self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
                     for &child_id in &children {
                         queue.push_back(child_id);
                     }
-                    if let Some(mut_node) = self.nodes.get_mut(id) {
+                    if let Some(mut_node) = self.get_node_mut(id) {
                         mut_node.computed_values = Some(computed);
                         mut_node.unset_dirty_descendants();
                     }
                 } else {
                     // Non-element nodes: still enqueue children for traversal
-                    let children: Vec<usize> = self
-                        .nodes
-                        .get(id)
-                        .map_or(Vec::new(), |n| n.children.clone());
+                    let children: Vec<taffy::NodeId> =
+                        self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
                     for &child_id in &children {
                         queue.push_back(child_id);
                     }
                     // Clear dirty flag on non-element nodes too
-                    if let Some(node) = self.nodes.get(id) {
+                    if let Some(node) = self.get_node(id) {
                         node.unset_dirty_descendants();
                     }
                 }

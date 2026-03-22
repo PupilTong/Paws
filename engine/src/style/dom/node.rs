@@ -52,7 +52,7 @@ impl<'a> TNode for &'a PawsElement {
     }
 
     fn owner_doc(&self) -> Self::ConcreteDocument {
-        self.with(0) // Assume root is always doc and id 0
+        self.with(taffy::NodeId::from(0_u64)) // Assume root is always doc and id 0
     }
 
     fn is_in_document(&self) -> bool {
@@ -92,7 +92,7 @@ impl<'a> TNode for &'a PawsElement {
     }
 
     fn debug_id(self) -> usize {
-        self.id
+        u64::from(self.id) as usize
     }
 
     fn traversal_parent(&self) -> Option<Self::ConcreteElement> {

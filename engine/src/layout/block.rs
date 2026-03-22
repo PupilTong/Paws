@@ -1,7 +1,6 @@
 use crate::dom::NodeType;
 use crate::layout::text::TextMeasurer;
 use crate::style::to_taffy_style;
-use fnv::FnvHashMap;
 use style::values::specified::font::FONT_MEDIUM_PX;
 use taffy::prelude::*;
 
@@ -9,8 +8,9 @@ use taffy::prelude::*;
 ///
 /// Produced by [`LayoutState::compute_layout`] and consumed by
 /// the iOS renderer backend's conversion layer to build `LayoutNode` trees.
-#[derive(Default)]
 pub struct LayoutBox {
+    /// The DOM node ID this layout box corresponds to.
+    pub node_id: taffy::NodeId,
     /// X offset relative to the parent's content box.
     pub x: f32,
     /// Y offset relative to the parent's content box.
@@ -20,10 +20,21 @@ pub struct LayoutBox {
     pub children: Vec<LayoutBox>,
 }
 
+impl Default for LayoutBox {
+    fn default() -> Self {
+        Self {
+            node_id: taffy::NodeId::from(0_u64),
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+            children: Vec::new(),
+        }
+    }
+}
+
 pub struct LayoutState {
-    pub taffy: TaffyTree<()>,
-    /// Maps Taffy node IDs back to DOM node IDs, populated during tree build.
-    taffy_to_dom: FnvHashMap<NodeId, usize>,
+    pub taffy: TaffyTree<taffy::NodeId>,
 }
 
 impl Default for LayoutState {
@@ -36,7 +47,6 @@ impl LayoutState {
     pub fn new() -> Self {
         Self {
             taffy: TaffyTree::new(),
-            taffy_to_dom: FnvHashMap::default(),
         }
     }
 
@@ -45,18 +55,11 @@ impl LayoutState {
     pub fn compute_layout(
         &mut self,
         doc: &crate::dom::Document,
-        id: usize,
+        id: taffy::NodeId,
         text_measurer: &dyn TextMeasurer,
     ) -> Option<LayoutBox> {
         self.taffy.clear();
-        self.taffy_to_dom.clear();
-        let root_node = build_layout_tree(
-            doc,
-            id,
-            &mut self.taffy,
-            &mut self.taffy_to_dom,
-            text_measurer,
-        )?;
+        let root_node = build_layout_tree(doc, id, &mut self.taffy, text_measurer)?;
         self.taffy
             .compute_layout(root_node, Size::MAX_CONTENT)
             .ok()?;
@@ -66,6 +69,7 @@ impl LayoutState {
     /// Recursively extracts the positioned layout tree from Taffy's results.
     fn extract_tree(&self, taffy_node: NodeId) -> Option<LayoutBox> {
         let layout = self.taffy.layout(taffy_node).ok()?;
+        let node_id = self.taffy.get_node_context(taffy_node).copied()?;
 
         let children: Vec<LayoutBox> = self
             .taffy
@@ -77,6 +81,7 @@ impl LayoutState {
             .collect();
 
         Some(LayoutBox {
+            node_id,
             x: layout.location.x,
             y: layout.location.y,
             width: layout.size.width,
@@ -87,23 +92,19 @@ impl LayoutState {
 }
 
 /// Builds a Taffy layout tree from the DOM subtree rooted at `root_id`.
-///
-/// Populates `node_map` with the mapping from Taffy node IDs to DOM node IDs.
 pub(crate) fn build_layout_tree(
     doc: &crate::dom::Document,
-    root_id: usize,
-    taffy: &mut TaffyTree<()>,
-    node_map: &mut FnvHashMap<NodeId, usize>,
+    root_id: taffy::NodeId,
+    taffy: &mut TaffyTree<taffy::NodeId>,
     text_measurer: &dyn TextMeasurer,
 ) -> Option<NodeId> {
-    build_subtree(doc, root_id, taffy, node_map, text_measurer)
+    build_subtree(doc, root_id, taffy, text_measurer)
 }
 
 fn build_subtree(
     doc: &crate::dom::Document,
-    node_id: usize,
-    taffy: &mut TaffyTree<()>,
-    node_map: &mut FnvHashMap<NodeId, usize>,
+    node_id: taffy::NodeId,
+    taffy: &mut TaffyTree<taffy::NodeId>,
     text_measurer: &dyn TextMeasurer,
 ) -> Option<NodeId> {
     let node = doc.get_node(node_id)?;
@@ -116,14 +117,12 @@ fn build_subtree(
         NodeType::Element => {
             let mut children = Vec::new();
             for &child_id in &node.children {
-                if let Some(child_node) =
-                    build_subtree(doc, child_id, taffy, node_map, text_measurer)
-                {
+                if let Some(child_node) = build_subtree(doc, child_id, taffy, text_measurer) {
                     children.push(child_node);
                 }
             }
             let taffy_id = taffy.new_with_children(style, &children).ok()?;
-            node_map.insert(taffy_id, node_id);
+            let _ = taffy.set_node_context(taffy_id, Some(node_id));
             Some(taffy_id)
         }
         NodeType::Text => {
@@ -141,8 +140,7 @@ fn build_subtree(
             style.size.width = w_lp.into();
             style.size.height = h_lp.into();
 
-            let taffy_id = taffy.new_leaf(style).ok()?;
-            node_map.insert(taffy_id, node_id);
+            let taffy_id = taffy.new_leaf_with_context(style, node_id).ok()?;
             Some(taffy_id)
         }
         _ => None,
@@ -166,7 +164,7 @@ mod tests {
         let measurer = MockTextMeasurer;
 
         let elem1 = doc.create_element(QualName::new(None, "".into(), "div".into()));
-        doc.append_child(0, elem1).unwrap();
+        doc.append_child(doc.root, elem1).unwrap();
 
         let elem2 = doc.create_element(QualName::new(None, "".into(), "span".into()));
         doc.append_child(elem1, elem2).unwrap();

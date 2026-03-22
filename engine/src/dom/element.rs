@@ -42,13 +42,13 @@ pub struct PawsElement {
     pub(crate) tree: *mut Slab<PawsElement>,
 
     /// The ID of this node in the slab.
-    pub id: usize,
+    pub id: taffy::NodeId,
 
     /// The ID of the parent node.
-    pub parent: Option<usize>,
+    pub parent: Option<taffy::NodeId>,
 
     /// The IDs of the child nodes.
-    pub children: Vec<usize>,
+    pub children: Vec<taffy::NodeId>,
 
     /// Node flags.
     pub(crate) flags: NodeFlags,
@@ -60,7 +60,7 @@ pub struct PawsElement {
     pub(crate) attrs: HashMap<Atom, String>,
     pub(crate) classes: HashSet<Atom>,
     pub(crate) style_attribute: Option<Arc<Locked<PropertyDeclarationBlock>>>,
-    pub(crate) shadow_root_id: Option<usize>,
+    pub(crate) shadow_root_id: Option<taffy::NodeId>,
 
     // Text data
     pub(crate) text_content: Option<String>,
@@ -89,7 +89,7 @@ pub struct PawsElement {
 impl PawsElement {
     pub(crate) fn new(
         tree: *mut Slab<PawsElement>,
-        id: usize,
+        id: taffy::NodeId,
         guard: SharedRwLock,
         node_type: NodeType,
     ) -> Self {
@@ -126,8 +126,10 @@ impl PawsElement {
         unsafe { &*self.tree }
     }
 
-    pub(crate) fn with(&self, id: usize) -> &PawsElement {
-        self.tree().get(id).expect("Node not found in slab")
+    pub(crate) fn with(&self, id: taffy::NodeId) -> &PawsElement {
+        self.tree()
+            .get(u64::from(id) as usize)
+            .expect("Node not found in slab")
     }
 
     /// Returns the cached computed style values from the last style resolution.
