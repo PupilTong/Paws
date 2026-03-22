@@ -1,0 +1,18 @@
+[defines]
+
+language = "C"
+
+# Only expose the ios-renderer-backend crate's public API.
+include_guard = "IOS_RENDERER_BACKEND_H"
+
+# Documentation style for the generated header.
+documentation_style = "doxy"
+
+[export]
+include = [
+    "PawsRenderer",
+]
+
+[fn]
+# Prefix for all exported functions (none — we use paws_renderer_ by convention).
+prefix = ""
