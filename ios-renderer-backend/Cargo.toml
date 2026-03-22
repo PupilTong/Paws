@@ -1,0 +1,16 @@
+[package]
+name = "ios-renderer-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+engine = { path = "../engine" }
+wasm-bridge = { path = "../wasm-bridge" }
+fnv = "1.0.7"
+
+[build-dependencies]
+cbindgen = "0.27"

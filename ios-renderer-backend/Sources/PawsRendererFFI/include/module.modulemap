@@ -1,0 +1,4 @@
+module PawsRendererFFI {
+    header "ios_renderer_backend.h"
+    export *
+}

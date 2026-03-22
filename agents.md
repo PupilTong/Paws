@@ -31,7 +31,7 @@ This repository supports LLM-based assistants. The working language is English.
 - `view/`: UI/view layer. Exposes the frontend APIs.
 - `view-macros/`: Contains the `css!` proc-macro for compile-time CSS evaluation.
 - `paws-style-ir/`: Zero-copy intermediate representations (`rkyv`) for styles shared between the macro and runtime.
-- `ios-renderer-backend/`: iOS rendering pipeline — consumes `LayoutNode` trees, produces incremental `LayerCmd` streams via FFI. Includes a Swift Package (`PawsRendererCore`) with push-model API and `LayerApplicator`. Depends on `engine` and `wasm-bridge` for WASM-driven layout.
+- `ios-renderer-backend/`: iOS rendering backend — bridges engine `LayoutBox` output to UIKit via C FFI. Rust owns and controls UIView, UILabel, UITextView, UIScrollView, and CALayer through opaque pointer handles. Includes a Swift Package (`PawsRenderer`) with `PawsRendererInstance` wrapper and `PawsRendererView`. Depends on `engine` and `wasm-bridge`. Uses cbindgen for header generation.
 - `ios-example-app/`: Example iOS app (Xcode project) demonstrating WASM → engine → renderer → UIKit pipeline.
 
 ## Project Design Overview
