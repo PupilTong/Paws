@@ -4,6 +4,20 @@ use crate::style::to_taffy_style;
 use style::values::specified::font::FONT_MEDIUM_PX;
 use taffy::prelude::*;
 
+/// Overflow clipping behavior for a single axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Overflow {
+    /// Content is not clipped and may render outside the element's box.
+    #[default]
+    Visible,
+    /// Content is clipped; no scrolling UI is provided.
+    Hidden,
+    /// Content is clipped; a scrolling mechanism is provided.
+    Scroll,
+    /// Content is clipped at the element's overflow clip edge.
+    Clip,
+}
+
 /// A fully-resolved layout node with absolute position, size, and children.
 ///
 /// Produced by [`LayoutState::compute_layout`] and consumed by
@@ -17,6 +31,12 @@ pub struct LayoutBox {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    /// Stacking order. `None` means `auto`.
+    pub z_index: Option<i32>,
+    /// Overflow behavior on the x-axis.
+    pub overflow_x: Overflow,
+    /// Overflow behavior on the y-axis.
+    pub overflow_y: Overflow,
     pub children: Vec<LayoutBox>,
 }
 
@@ -28,6 +48,9 @@ impl Default for LayoutBox {
             y: 0.0,
             width: 0.0,
             height: 0.0,
+            z_index: None,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
             children: Vec::new(),
         }
     }
@@ -63,11 +86,11 @@ impl LayoutState {
         self.taffy
             .compute_layout(root_node, Size::MAX_CONTENT)
             .ok()?;
-        self.extract_tree(root_node)
+        self.extract_tree(root_node, doc)
     }
 
     /// Recursively extracts the positioned layout tree from Taffy's results.
-    fn extract_tree(&self, taffy_node: NodeId) -> Option<LayoutBox> {
+    fn extract_tree(&self, taffy_node: NodeId, doc: &crate::dom::Document) -> Option<LayoutBox> {
         let layout = self.taffy.layout(taffy_node).ok()?;
         let node_id = self.taffy.get_node_context(taffy_node).copied()?;
 
@@ -77,8 +100,26 @@ impl LayoutState {
             .ok()
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|child| self.extract_tree(child))
+            .filter_map(|child| self.extract_tree(child, doc))
             .collect();
+
+        // Extract z-index and overflow from the DOM node's computed style.
+        let (z_index, overflow_x, overflow_y) = doc
+            .get_node(node_id)
+            .and_then(|node| node.computed_values.as_ref())
+            .map(|cv| {
+                use style::values::generics::position::ZIndex;
+                let z = match cv.clone_z_index() {
+                    ZIndex::Integer(n) => Some(n),
+                    ZIndex::Auto => None,
+                };
+                (
+                    z,
+                    stylo_overflow(cv.clone_overflow_x()),
+                    stylo_overflow(cv.clone_overflow_y()),
+                )
+            })
+            .unwrap_or_default();
 
         Some(LayoutBox {
             node_id,
@@ -86,8 +127,23 @@ impl LayoutState {
             y: layout.location.y,
             width: layout.size.width,
             height: layout.size.height,
+            z_index,
+            overflow_x,
+            overflow_y,
             children,
         })
+    }
+}
+
+/// Converts a Stylo `Overflow` to the renderer-facing [`Overflow`] enum.
+fn stylo_overflow(input: style::values::specified::box_::Overflow) -> Overflow {
+    use style::values::specified::box_::Overflow as SO;
+    match input {
+        SO::Visible => Overflow::Visible,
+        SO::Hidden => Overflow::Hidden,
+        SO::Scroll => Overflow::Scroll,
+        SO::Auto => Overflow::Scroll,
+        SO::Clip => Overflow::Clip,
     }
 }
 
@@ -169,11 +225,8 @@ mod tests {
         let elem2 = doc.create_element(QualName::new(None, "".into(), "span".into()));
         doc.append_child(elem1, elem2).unwrap();
 
-        // Ensure there's a computed values cache so to_taffy_style doesn't bail early.
-        // Actually Document::resolve_style will ensure `computed_values` is Some(...)
         let url = Url::parse("http://test.com").unwrap();
         let style_ctx = crate::style::StyleContext::new(url);
-        // wait, we can just resolve style on the document
         doc.resolve_style(&style_ctx);
 
         let layout = state.compute_layout(&doc, elem1, &measurer);
