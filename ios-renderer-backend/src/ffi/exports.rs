@@ -10,6 +10,28 @@ use engine::RuntimeState;
 use crate::error::RendererError;
 use crate::renderer::ViewTree;
 
+/// Extracts a mutable reference to `PawsRenderer` from a raw pointer,
+/// returning the given error code if the pointer is null.
+macro_rules! get_renderer {
+    ($renderer:expr) => {
+        match unsafe_renderer($renderer) {
+            Some(r) => r,
+            None => return RendererError::InvalidHandle.as_i32(),
+        }
+    };
+}
+
+/// Reads a null-terminated C string from a raw pointer,
+/// returning the given error code if the pointer is null or not valid UTF-8.
+macro_rules! get_cstr {
+    ($ptr:expr) => {
+        match read_cstr($ptr) {
+            Some(s) => s,
+            None => return RendererError::InvalidHandle.as_i32(),
+        }
+    };
+}
+
 /// Opaque handle to the Paws renderer state.
 ///
 /// Owns the engine's `RuntimeState` and the UIKit view tree mapping.
@@ -66,16 +88,8 @@ pub extern "C" fn paws_renderer_create_element(
     renderer: *mut PawsRenderer,
     tag: *const c_char,
 ) -> i32 {
-    let renderer = match unsafe_renderer(renderer) {
-        Some(r) => r,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
-    let tag_str = match read_cstr(tag) {
-        Some(s) => s,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
+    let renderer = get_renderer!(renderer);
+    let tag_str = get_cstr!(tag);
     renderer.state.create_element(tag_str.to_string()) as i32
 }
 
@@ -88,16 +102,8 @@ pub extern "C" fn paws_renderer_create_text_node(
     renderer: *mut PawsRenderer,
     text: *const c_char,
 ) -> i32 {
-    let renderer = match unsafe_renderer(renderer) {
-        Some(r) => r,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
-    let text_str = match read_cstr(text) {
-        Some(s) => s,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
+    let renderer = get_renderer!(renderer);
+    let text_str = get_cstr!(text);
     renderer.state.create_text_node(text_str.to_string()) as i32
 }
 
@@ -110,11 +116,7 @@ pub extern "C" fn paws_renderer_append_element(
     parent: u32,
     child: u32,
 ) -> i32 {
-    let renderer = match unsafe_renderer(renderer) {
-        Some(r) => r,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
+    let renderer = get_renderer!(renderer);
     match renderer.state.append_element(parent, child) {
         Ok(()) => 0,
         Err(code) => code.as_i32(),
@@ -132,20 +134,9 @@ pub extern "C" fn paws_renderer_set_inline_style(
     name: *const c_char,
     value: *const c_char,
 ) -> i32 {
-    let renderer = match unsafe_renderer(renderer) {
-        Some(r) => r,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
-    let name_str = match read_cstr(name) {
-        Some(s) => s,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-    let value_str = match read_cstr(value) {
-        Some(s) => s,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
+    let renderer = get_renderer!(renderer);
+    let name_str = get_cstr!(name);
+    let value_str = get_cstr!(value);
     match renderer
         .state
         .set_inline_style(id, name_str.to_string(), value_str.to_string())
@@ -166,20 +157,9 @@ pub extern "C" fn paws_renderer_set_attribute(
     name: *const c_char,
     value: *const c_char,
 ) -> i32 {
-    let renderer = match unsafe_renderer(renderer) {
-        Some(r) => r,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
-    let name_str = match read_cstr(name) {
-        Some(s) => s,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-    let value_str = match read_cstr(value) {
-        Some(s) => s,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
+    let renderer = get_renderer!(renderer);
+    let name_str = get_cstr!(name);
+    let value_str = get_cstr!(value);
     match renderer
         .state
         .set_attribute(id, name_str.to_string(), value_str.to_string())
@@ -197,15 +177,8 @@ pub extern "C" fn paws_renderer_add_stylesheet(
     renderer: *mut PawsRenderer,
     css: *const c_char,
 ) -> i32 {
-    let renderer = match unsafe_renderer(renderer) {
-        Some(r) => r,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
-
-    let css_str = match read_cstr(css) {
-        Some(s) => s,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
+    let renderer = get_renderer!(renderer);
+    let css_str = get_cstr!(css);
 
     renderer.state.add_stylesheet(css_str.to_string());
     0
@@ -218,10 +191,7 @@ pub extern "C" fn paws_renderer_add_stylesheet(
 /// Returns `0` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_commit(renderer: *mut PawsRenderer, root_view: *mut c_void) -> i32 {
-    let renderer = match unsafe_renderer(renderer) {
-        Some(r) => r,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
+    let renderer = get_renderer!(renderer);
 
     if root_view.is_null() {
         return RendererError::InvalidHandle.as_i32();
@@ -239,10 +209,7 @@ pub extern "C" fn paws_renderer_commit(renderer: *mut PawsRenderer, root_view: *
 /// Returns `0` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_destroy_element(renderer: *mut PawsRenderer, id: u32) -> i32 {
-    let renderer = match unsafe_renderer(renderer) {
-        Some(r) => r,
-        None => return RendererError::InvalidHandle.as_i32(),
-    };
+    let renderer = get_renderer!(renderer);
 
     match renderer.state.destroy_element(id) {
         Ok(()) => 0,

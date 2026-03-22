@@ -9,6 +9,6 @@ fn main() {
         .with_config(config)
         .generate()
     {
-        bindings.write_to_file("ios_renderer_backend.h");
+        bindings.write_to_file("Sources/PawsRendererFFI/include/ios_renderer_backend.h");
     }
 }

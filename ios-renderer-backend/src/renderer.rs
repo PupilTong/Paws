@@ -62,22 +62,18 @@ impl ViewTree {
         self.apply_node(layout, root_view, &mut visited)?;
 
         // Remove views for nodes no longer in the tree.
-        let stale_ids: Vec<u64> = self
-            .view_map
-            .keys()
-            .filter(|id| !visited.contains(id))
-            .copied()
-            .collect();
-
-        for id in stale_ids {
-            if let Some(entry) = self.view_map.remove(&id) {
+        self.view_map.retain(|id, entry| {
+            if visited.contains(id) {
+                true
+            } else {
                 // SAFETY: Removing from superview and releasing the retained pointer.
                 unsafe {
                     imports::swift_paws_view_remove_from_superview(entry.ptr);
-                    release_entry(&entry);
+                    release_entry(entry);
                 }
+                false
             }
-        }
+        });
 
         Ok(())
     }
@@ -153,7 +149,7 @@ impl ViewTree {
 
         // Sort children by z-index for correct stacking order.
         let mut sorted_children: Vec<&LayoutBox> = node.children.iter().collect();
-        sorted_children.sort_by_key(|c| c.z_index.unwrap_or(0));
+        sorted_children.sort_unstable_by_key(|c| c.z_index.unwrap_or(0));
 
         // Recurse into children.
         for child in &sorted_children {

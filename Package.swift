@@ -18,7 +18,6 @@ let package = Package(
             publicHeadersPath: "include",
             linkerSettings: [
                 .linkedLibrary("ios_renderer_backend"),
-                .unsafeFlags(["-L", "target/aarch64-apple-ios/release"]),
             ]
         ),
         // Swift wrapper providing a native API over the C FFI.
