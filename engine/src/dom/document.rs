@@ -178,7 +178,11 @@ impl Document {
     }
 
     /// Recursively iterates over a node and its descendants in DFS order.
-    fn traverse_nodes_dfs_mut(&mut self, node_id: taffy::NodeId, mut f: impl FnMut(&mut PawsElement)) {
+    fn traverse_nodes_dfs_mut(
+        &mut self,
+        node_id: taffy::NodeId,
+        mut f: impl FnMut(&mut PawsElement),
+    ) {
         let mut stack = vec![node_id];
         while let Some(id) = stack.pop() {
             if let Some(node) = self.get_node_mut(id) {
@@ -297,9 +301,8 @@ impl Document {
                         parent_style.as_deref(),
                     );
                     // Re-borrow to enqueue children before mutable borrow
-                    let children: Vec<taffy::NodeId> = self
-                        .get_node(id)
-                        .map_or(Vec::new(), |n| n.children.clone());
+                    let children: Vec<taffy::NodeId> =
+                        self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
                     for &child_id in &children {
                         queue.push_back(child_id);
                     }
@@ -309,9 +312,8 @@ impl Document {
                     }
                 } else {
                     // Non-element nodes: still enqueue children for traversal
-                    let children: Vec<taffy::NodeId> = self
-                        .get_node(id)
-                        .map_or(Vec::new(), |n| n.children.clone());
+                    let children: Vec<taffy::NodeId> =
+                        self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
                     for &child_id in &children {
                         queue.push_back(child_id);
                     }

@@ -127,7 +127,9 @@ impl PawsElement {
     }
 
     pub(crate) fn with(&self, id: taffy::NodeId) -> &PawsElement {
-        self.tree().get(u64::from(id) as usize).expect("Node not found in slab")
+        self.tree()
+            .get(u64::from(id) as usize)
+            .expect("Node not found in slab")
     }
 
     /// Returns the cached computed style values from the last style resolution.

@@ -264,7 +264,7 @@ mod tests {
         // After resolving styles, it should be Some
         let url = Url::parse("http://test.com").unwrap();
         let style_ctx = crate::style::StyleContext::new(url);
-        doc.append_child(0, id).unwrap(); // Must be in the tree to get styled!
+        doc.append_child(doc.root, id).unwrap(); // Must be in the tree to get styled!
         doc.resolve_style(&style_ctx);
 
         let elem = doc.get_node(id).unwrap();

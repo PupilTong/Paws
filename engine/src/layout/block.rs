@@ -9,7 +9,7 @@ use taffy::prelude::*;
 ///
 /// Produced by [`LayoutState::compute_layout`] and consumed by
 /// the iOS renderer backend's conversion layer to build `LayoutNode` trees.
-#[derive(Default)]
+
 pub struct LayoutBox {
     pub node_id: taffy::NodeId,
     /// X offset relative to the parent's content box.
@@ -19,6 +19,19 @@ pub struct LayoutBox {
     pub width: f32,
     pub height: f32,
     pub children: Vec<LayoutBox>,
+}
+
+impl Default for LayoutBox {
+    fn default() -> Self {
+        Self {
+            node_id: taffy::NodeId::from(0_u64),
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+            children: Vec::new(),
+        }
+    }
 }
 
 pub struct LayoutState {
@@ -47,12 +60,7 @@ impl LayoutState {
         text_measurer: &dyn TextMeasurer,
     ) -> Option<LayoutBox> {
         self.taffy.clear();
-        let root_node = build_layout_tree(
-            doc,
-            id,
-            &mut self.taffy,
-            text_measurer,
-        )?;
+        let root_node = build_layout_tree(doc, id, &mut self.taffy, text_measurer)?;
         self.taffy
             .compute_layout(root_node, Size::MAX_CONTENT)
             .ok()?;
@@ -110,9 +118,7 @@ fn build_subtree(
         NodeType::Element => {
             let mut children = Vec::new();
             for &child_id in &node.children {
-                if let Some(child_node) =
-                    build_subtree(doc, child_id, taffy, text_measurer)
-                {
+                if let Some(child_node) = build_subtree(doc, child_id, taffy, text_measurer) {
                     children.push(child_node);
                 }
             }

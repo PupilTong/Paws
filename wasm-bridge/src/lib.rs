@@ -49,7 +49,7 @@ pub fn hello_engine() -> String {
     let text_measurer = engine::layout::MockTextMeasurer;
     let mut layout_state = engine::layout::LayoutState::new();
     let layout = layout_state
-        .compute_layout(&state.doc, id as usize, &text_measurer)
+        .compute_layout(&state.doc, (id as usize).into(), &text_measurer)
         .expect("get layout");
 
     format!(

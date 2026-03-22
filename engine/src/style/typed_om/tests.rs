@@ -388,7 +388,7 @@ fn test_direct_resolve_with_inline_style() {
     // Verify inline style was set
     let has_style = state
         .doc
-        .get_node(el as usize)
+        .get_node(taffy::NodeId::from(el as u64))
         .unwrap()
         .style_attribute
         .is_some();
@@ -402,7 +402,7 @@ fn test_direct_resolve_with_inline_style() {
 
     let cv = state
         .doc
-        .get_node(el as usize)
+        .get_node(taffy::NodeId::from(el as u64))
         .unwrap()
         .computed_values
         .as_ref()

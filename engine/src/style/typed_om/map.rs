@@ -55,7 +55,10 @@ impl StylePropertyMapReadOnly {
     ) -> Option<CSSStyleValue> {
         let longhand_id = resolve_longhand(property)?;
         doc.ensure_styles_resolved(ctx);
-        let cv = doc.get_node(self.element_id)?.computed_values.as_ref()?;
+        let cv = doc
+            .get_node(taffy::NodeId::from(self.element_id as u64))?
+            .computed_values
+            .as_ref()?;
         Some(extract_property(cv, longhand_id))
     }
 
@@ -105,7 +108,7 @@ impl StylePropertyMapReadOnly {
     pub fn to_vec(&self, doc: &mut Document, ctx: &StyleContext) -> Vec<(String, CSSStyleValue)> {
         doc.ensure_styles_resolved(ctx);
         let cv = match doc
-            .get_node(self.element_id)
+            .get_node(taffy::NodeId::from(self.element_id as u64))
             .and_then(|n| n.computed_values.as_ref())
         {
             Some(cv) => cv.clone(),
