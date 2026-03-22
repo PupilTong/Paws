@@ -1,4 +1,9 @@
 fn main() {
+    // Skip cbindgen during test builds — the header is only needed for Swift integration.
+    if std::env::var("CARGO_CFG_TEST").is_ok() {
+        return;
+    }
+
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
 
     let config = cbindgen::Config::from_file("cbindgen.toml")
