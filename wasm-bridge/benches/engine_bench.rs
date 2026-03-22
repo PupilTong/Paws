@@ -11,7 +11,10 @@ fn bench_computed_style(c: &mut Criterion) {
         .set_inline_style(id, "height".to_string(), "100px".to_string())
         .expect("set style");
     // Verify node exists
-    assert!(state.doc.get_node(id as usize).is_some());
+    assert!(state
+        .doc
+        .get_node(engine::NodeId::from(id as u64))
+        .is_some());
 
     let mut layout_state = engine::layout::LayoutState::new();
     let text_measurer = engine::layout::MockTextMeasurer;
@@ -20,7 +23,7 @@ fn bench_computed_style(c: &mut Criterion) {
         b.iter(|| {
             layout_state.compute_layout(
                 black_box(&state.doc),
-                black_box(id as usize),
+                black_box(engine::NodeId::from(id as u64)),
                 &text_measurer,
             );
         })

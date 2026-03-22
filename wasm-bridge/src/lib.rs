@@ -49,7 +49,7 @@ pub fn hello_engine() -> String {
     let text_measurer = engine::layout::MockTextMeasurer;
     let mut layout_state = engine::layout::LayoutState::new();
     let layout = layout_state
-        .compute_layout(&state.doc, id as usize, &text_measurer)
+        .compute_layout(&state.doc, engine::NodeId::from(id as u64), &text_measurer)
         .expect("get layout");
 
     format!(
@@ -117,7 +117,11 @@ mod tests {
 
         let mut layout_state = engine::layout::LayoutState::new();
         let layout = layout_state
-            .compute_layout(&state.doc, id as usize, &engine::layout::MockTextMeasurer)
+            .compute_layout(
+                &state.doc,
+                engine::NodeId::from(id as u64),
+                &engine::layout::MockTextMeasurer,
+            )
             .expect("layout");
         assert_eq!(layout.height, 100.0);
     }
@@ -160,8 +164,8 @@ mod tests {
         assert_eq!(status, 0);
 
         let state = store.data();
-        let parent = 1;
-        let child = 2;
+        let parent = engine::NodeId::from(1_u64);
+        let child = engine::NodeId::from(2_u64);
 
         if let Some(parent_node) = state.doc.get_node(parent) {
             if parent_node.is_element() {
@@ -262,10 +266,13 @@ mod tests {
         assert_eq!(status, 0);
 
         let state = store.data();
-        let parent = 1;
+        let parent = engine::NodeId::from(1_u64);
         if let Some(parent_node) = state.doc.get_node(parent) {
             if parent_node.is_element() {
-                assert_eq!(parent_node.children, vec![2, 3]);
+                assert_eq!(
+                    parent_node.children,
+                    vec![engine::NodeId::from(2_u64), engine::NodeId::from(3_u64)]
+                );
             } else {
                 panic!("Parent not an element");
             }
@@ -312,7 +319,7 @@ mod tests {
         assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
 
         let state = store.data();
-        let parent_element_opt = state.doc.get_node(1);
+        let parent_element_opt = state.doc.get_node(engine::NodeId::from(1_u64));
         if let Some(node) = parent_element_opt {
             if node.is_element() {
                 assert!(node.children.is_empty());
@@ -364,7 +371,7 @@ mod tests {
 
         let state = store.data();
         // Check that child (id 2) is removed from the map
-        assert!(state.doc.get_node(2).is_none());
+        assert!(state.doc.get_node(engine::NodeId::from(2_u64)).is_none());
     }
 
     #[test]
@@ -440,7 +447,11 @@ mod tests {
 
         let mut layout_state = engine::layout::LayoutState::new();
         let layout = layout_state
-            .compute_layout(&state.doc, id as usize, &engine::layout::MockTextMeasurer)
+            .compute_layout(
+                &state.doc,
+                engine::NodeId::from(id as u64),
+                &engine::layout::MockTextMeasurer,
+            )
             .expect("layout");
         assert_eq!(layout.height, 77.0);
     }

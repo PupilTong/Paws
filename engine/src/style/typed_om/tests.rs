@@ -73,7 +73,7 @@ fn test_from_typed_value_sum() {
 #[test]
 fn test_resolve_longhand_valid() {
     // Test via the public `has` method which calls resolve_longhand internally
-    let map = StylePropertyMapReadOnly::new(0);
+    let map = StylePropertyMapReadOnly::new(taffy::NodeId::from(0_u64));
     assert!(map.has("display"));
     assert!(map.has("width"));
     assert!(map.has("color"));
@@ -82,7 +82,7 @@ fn test_resolve_longhand_valid() {
 
 #[test]
 fn test_resolve_longhand_invalid() {
-    let map = StylePropertyMapReadOnly::new(0);
+    let map = StylePropertyMapReadOnly::new(taffy::NodeId::from(0_u64));
     // Shorthand properties
     assert!(!map.has("margin"));
     assert!(!map.has("padding"));
@@ -319,7 +319,7 @@ fn test_behavior_parsed_stylesheet_multiple_rules() {
 
 #[test]
 fn test_computed_style_map_has() {
-    let map = StylePropertyMapReadOnly::new(0);
+    let map = StylePropertyMapReadOnly::new(taffy::NodeId::from(0_u64));
     assert!(map.has("display"));
     assert!(map.has("width"));
     assert!(map.has("color"));
@@ -329,7 +329,7 @@ fn test_computed_style_map_has() {
 
 #[test]
 fn test_computed_style_map_size() {
-    let map = StylePropertyMapReadOnly::new(0);
+    let map = StylePropertyMapReadOnly::new(taffy::NodeId::from(0_u64));
     assert!(map.size() > 0);
     assert_eq!(map.size(), style::properties::property_counts::LONGHANDS);
 }
@@ -388,7 +388,7 @@ fn test_direct_resolve_with_inline_style() {
     // Verify inline style was set
     let has_style = state
         .doc
-        .get_node(el as usize)
+        .get_node(taffy::NodeId::from(el as u64))
         .unwrap()
         .style_attribute
         .is_some();
@@ -402,7 +402,7 @@ fn test_direct_resolve_with_inline_style() {
 
     let cv = state
         .doc
-        .get_node(el as usize)
+        .get_node(taffy::NodeId::from(el as u64))
         .unwrap()
         .computed_values
         .as_ref()

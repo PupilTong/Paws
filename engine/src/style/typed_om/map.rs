@@ -19,18 +19,18 @@ use super::types::CSSStyleValue;
 /// Created via [`Document::computed_style_map()`].
 #[derive(Debug, Clone, Copy)]
 pub struct StylePropertyMapReadOnly {
-    element_id: usize,
+    element_id: taffy::NodeId,
 }
 
 // TODO: support custom properties( CSS variable )
 impl StylePropertyMapReadOnly {
     /// Creates a new live handle for the given element.
-    pub(crate) fn new(element_id: usize) -> Self {
+    pub(crate) fn new(element_id: taffy::NodeId) -> Self {
         Self { element_id }
     }
 
     /// Returns the element ID this handle refers to.
-    pub fn element_id(&self) -> usize {
+    pub fn element_id(&self) -> taffy::NodeId {
         self.element_id
     }
 
