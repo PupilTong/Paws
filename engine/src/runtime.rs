@@ -78,17 +78,19 @@ impl RuntimeState {
     /// Creates a new HTML element with the given tag name. Returns the node ID.
     pub fn create_element(&mut self, tag: String) -> u32 {
         let name = QualName::new(None, markup5ever::ns!(html), LocalName::from(tag));
-        self.doc.create_element(name) as u32
+        let id_u64: u64 = self.doc.create_element(name).into();
+        id_u64 as u32
     }
 
     /// Creates a new text node with the given content. Returns the node ID.
     pub fn create_text_node(&mut self, data: String) -> u32 {
-        self.doc.create_text_node(data) as u32
+        let id_u64: u64 = self.doc.create_text_node(data).into();
+        id_u64 as u32
     }
 
     /// Removes an element and all its descendants from the DOM tree.
     pub fn destroy_element(&mut self, id: u32) -> Result<(), HostErrorCode> {
-        self.doc.remove_node(id as usize).map_err(|e| match e {
+        self.doc.remove_node(taffy::NodeId::from(id as u64)).map_err(|e| match e {
             DomError::InvalidParent => HostErrorCode::InvalidParent,
             DomError::InvalidChild => HostErrorCode::InvalidChild,
             DomError::CycleDetected => HostErrorCode::CycleDetected,
@@ -105,7 +107,7 @@ impl RuntimeState {
     ) -> Result<(), HostErrorCode> {
         let node = self
             .doc
-            .get_node_mut(id as usize)
+            .get_node_mut(taffy::NodeId::from(id as u64))
             .ok_or(HostErrorCode::InvalidChild)?;
 
         if node.is_element() {
@@ -244,7 +246,7 @@ impl RuntimeState {
     ) -> Result<(), HostErrorCode> {
         let node = self
             .doc
-            .get_node_mut(id as usize)
+            .get_node_mut(taffy::NodeId::from(id as u64))
             .ok_or(HostErrorCode::InvalidChild)?;
         if node.is_element() {
             node.set_attribute(&name, &value);
@@ -277,14 +279,14 @@ impl RuntimeState {
         id: u32,
     ) -> Result<crate::style::typed_om::StylePropertyMapReadOnly, HostErrorCode> {
         self.doc
-            .computed_style_map(id as usize)
+            .computed_style_map(taffy::NodeId::from(id as u64))
             .ok_or(HostErrorCode::InvalidChild)
     }
 
     /// Appends a child node to a parent node in the DOM tree.
     pub fn append_element(&mut self, parent: u32, child: u32) -> Result<(), HostErrorCode> {
         self.doc
-            .append_child(parent as usize, child as usize)
+            .append_child(taffy::NodeId::from(parent as u64), taffy::NodeId::from(child as u64))
             .map_err(|e| match e {
                 DomError::InvalidParent => HostErrorCode::InvalidParent,
                 DomError::InvalidChild => HostErrorCode::InvalidChild,
@@ -305,11 +307,11 @@ impl RuntimeState {
 
         // Pre-validate: check each child
         for &child in children {
-            if self.doc.get_node(child as usize).is_none() {
+            if self.doc.get_node(taffy::NodeId::from(child as u64)).is_none() {
                 return Err(HostErrorCode::InvalidChild);
             }
-            let old_parent = self.doc.get_node(child as usize).unwrap().parent;
-            if old_parent.is_some() && old_parent != Some(parent as usize) {
+            let old_parent = self.doc.get_node(taffy::NodeId::from(child as u64)).unwrap().parent;
+            if old_parent.is_some() && old_parent != Some(taffy::NodeId::from(parent as u64)) {
                 return Err(HostErrorCode::ChildAlreadyHasParent);
             }
             if parent == child {
@@ -330,7 +332,7 @@ mod tests {
     fn test_create_element() {
         let mut state = RuntimeState::new("https://example.com".to_string());
         let id = state.create_element("div".to_string());
-        let node = state.doc.get_node(id as usize).unwrap();
+        let node = state.doc.get_node(taffy::NodeId::from(id as u64)).unwrap();
         assert!(node.is_element());
         assert_eq!(node.name.as_ref().unwrap().local.as_ref(), "div");
 
@@ -355,7 +357,7 @@ mod tests {
     fn test_create_text_node() {
         let mut state = RuntimeState::new("https://example.com".to_string());
         let id = state.create_text_node("hello".to_string());
-        let node = state.doc.get_node(id as usize).unwrap();
+        let node = state.doc.get_node(taffy::NodeId::from(id as u64)).unwrap();
         assert!(node.is_text_node());
         assert_eq!(node.text_content.as_deref().unwrap(), "hello");
     }
@@ -369,7 +371,7 @@ mod tests {
         // Document::remove_node removes from slab if we implemented it that way.
         // "if self.nodes.contains(id) { self.nodes.remove(id); }"
         // So yes.
-        assert!(state.doc.get_node(id as usize).is_none());
+        assert!(state.doc.get_node(taffy::NodeId::from(id as u64)).is_none());
         assert_eq!(state.destroy_element(id), Err(HostErrorCode::InvalidChild));
         assert_eq!(state.destroy_element(999), Err(HostErrorCode::InvalidChild));
     }
@@ -403,11 +405,11 @@ mod tests {
 
         assert!(state.append_element(parent, child).is_ok());
 
-        let p_node = state.doc.get_node(parent as usize).unwrap();
+        let p_node = state.doc.get_node(taffy::NodeId::from(parent as u64)).unwrap();
         assert_eq!(p_node.children, vec![child as usize]);
 
-        let c_node = state.doc.get_node(child as usize).unwrap();
-        assert_eq!(c_node.parent, Some(parent as usize));
+        let c_node = state.doc.get_node(taffy::NodeId::from(child as u64)).unwrap();
+        assert_eq!(c_node.parent, Some(taffy::NodeId::from(parent as u64)));
     }
 
     #[test]
@@ -424,7 +426,7 @@ mod tests {
             state.append_element(parent, parent),
             Err(HostErrorCode::CycleDetected)
         );
-        let p_node = state.doc.get_node(parent as usize).unwrap();
+        let p_node = state.doc.get_node(taffy::NodeId::from(parent as u64)).unwrap();
         assert!(p_node.children.is_empty());
 
         // 2. Cycle Detection (Indirect)
@@ -433,7 +435,7 @@ mod tests {
             state.append_element(child, parent),
             Err(HostErrorCode::CycleDetected)
         );
-        let c_node = state.doc.get_node(child as usize).unwrap();
+        let c_node = state.doc.get_node(taffy::NodeId::from(child as u64)).unwrap();
         assert!(c_node.children.is_empty());
 
         // 3. Child Already Has Parent
@@ -442,8 +444,8 @@ mod tests {
             state.append_element(parent2, child),
             Err(HostErrorCode::ChildAlreadyHasParent)
         );
-        let c_node = state.doc.get_node(child as usize).unwrap();
-        assert_eq!(c_node.parent, Some(parent as usize));
+        let c_node = state.doc.get_node(taffy::NodeId::from(child as u64)).unwrap();
+        assert_eq!(c_node.parent, Some(taffy::NodeId::from(parent as u64)));
     }
 
     #[test]
@@ -466,7 +468,7 @@ mod tests {
         assert!(
             state
                 .doc
-                .get_node(parent as usize)
+                .get_node(taffy::NodeId::from(parent as u64))
                 .unwrap()
                 .flags
                 .contains(NodeFlags::IS_IN_DOCUMENT),
@@ -475,7 +477,7 @@ mod tests {
         assert!(
             state
                 .doc
-                .get_node(child as usize)
+                .get_node(taffy::NodeId::from(child as u64))
                 .unwrap()
                 .flags
                 .contains(NodeFlags::IS_IN_DOCUMENT),
@@ -484,7 +486,7 @@ mod tests {
         assert!(
             state
                 .doc
-                .get_node(grandchild as usize)
+                .get_node(taffy::NodeId::from(grandchild as u64))
                 .unwrap()
                 .flags
                 .contains(NodeFlags::IS_IN_DOCUMENT),
@@ -492,13 +494,13 @@ mod tests {
         );
 
         // Detach parent from root
-        state.doc.detach_node(parent as usize);
+        state.doc.detach_node(taffy::NodeId::from(parent as u64));
 
         // All three should no longer have IS_IN_DOCUMENT
         assert!(
             !state
                 .doc
-                .get_node(parent as usize)
+                .get_node(taffy::NodeId::from(parent as u64))
                 .unwrap()
                 .flags
                 .contains(NodeFlags::IS_IN_DOCUMENT),
@@ -507,7 +509,7 @@ mod tests {
         assert!(
             !state
                 .doc
-                .get_node(child as usize)
+                .get_node(taffy::NodeId::from(child as u64))
                 .unwrap()
                 .flags
                 .contains(NodeFlags::IS_IN_DOCUMENT),
@@ -516,7 +518,7 @@ mod tests {
         assert!(
             !state
                 .doc
-                .get_node(grandchild as usize)
+                .get_node(taffy::NodeId::from(grandchild as u64))
                 .unwrap()
                 .flags
                 .contains(NodeFlags::IS_IN_DOCUMENT),
@@ -537,9 +539,9 @@ mod tests {
         // Remove parent — child and grandchild should also be freed
         state.destroy_element(parent).unwrap();
 
-        assert!(state.doc.get_node(parent as usize).is_none());
-        assert!(state.doc.get_node(child as usize).is_none());
-        assert!(state.doc.get_node(grandchild as usize).is_none());
+        assert!(state.doc.get_node(taffy::NodeId::from(parent as u64)).is_none());
+        assert!(state.doc.get_node(taffy::NodeId::from(child as u64)).is_none());
+        assert!(state.doc.get_node(taffy::NodeId::from(grandchild as u64)).is_none());
     }
 
     #[test]
@@ -579,7 +581,7 @@ mod tests {
             Err(HostErrorCode::InvalidChild)
         );
         // Parent should have no children since the operation was rejected
-        let p = state.doc.get_node(parent as usize).unwrap();
+        let p = state.doc.get_node(taffy::NodeId::from(parent as u64)).unwrap();
         assert!(p.children.is_empty());
     }
 
@@ -2240,7 +2242,7 @@ mod tests {
         let mut layout_state = crate::layout::block::LayoutState::new();
         let result = layout_state.compute_layout(
             &state.doc,
-            container as usize,
+            taffy::NodeId::from(container as u64),
             &crate::layout::text::MockTextMeasurer,
         );
         assert!(result.is_some(), "layout should compute");
@@ -2285,7 +2287,7 @@ mod tests {
         let mut layout_state = crate::layout::block::LayoutState::new();
         let result = layout_state.compute_layout(
             &state.doc,
-            container as usize,
+            taffy::NodeId::from(container as u64),
             &crate::layout::text::MockTextMeasurer,
         );
         assert!(result.is_some(), "grid layout should compute");
@@ -2327,7 +2329,7 @@ mod tests {
         let mut layout_state = crate::layout::block::LayoutState::new();
         let result = layout_state.compute_layout(
             &state.doc,
-            el as usize,
+            taffy::NodeId::from(el as u64),
             &crate::layout::text::MockTextMeasurer,
         );
         assert!(result.is_some(), "layout should compute");
