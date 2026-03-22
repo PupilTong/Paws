@@ -6,9 +6,15 @@
 //! All pointer parameters are opaque `*mut c_void` handles obtained from the
 //! corresponding `swift_paws_<object>_create` function. The Swift side retains
 //! objects via `Unmanaged.passRetained` and releases via the `_release` functions.
+//!
+//! When compiled under `#[cfg(test)]`, the real `extern "C"` block is replaced
+//! with Rust stub functions that record every call to a thread-local log,
+//! enabling precise UIKit assertions on Linux (where Swift/UIKit is unavailable).
 
+#[cfg(not(test))]
 use std::ffi::{c_char, c_void};
 
+#[cfg(not(test))]
 extern "C" {
     // ── UIView ──────────────────────────────────────────────────────────
 
@@ -178,3 +184,521 @@ extern "C" {
     /// Sets the `transform` of a `CALayer` as a column-major 4x4 matrix (16 floats).
     pub(crate) fn swift_paws_layer_set_transform(layer: *mut c_void, matrix: *const f32);
 }
+
+// ─── Test stubs ────────────────────────────────────────────────────────────
+//
+// When compiling for tests, we replace the `extern "C"` declarations with
+// plain Rust functions that record every call to a thread-local log. This
+// lets us run tests on Linux without Swift/UIKit and assert the exact
+// sequence of UIKit operations the renderer performs.
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+pub(crate) mod stubs {
+    use std::cell::RefCell;
+    use std::ffi::{c_char, c_void};
+
+    /// A recorded FFI call with its arguments.
+    ///
+    /// Used by tests to assert the exact UIKit operations the renderer performs.
+    #[derive(Debug, Clone, PartialEq)]
+    pub(crate) enum FfiCall {
+        // ── UIView ──────────────────────────────────────────────────────
+        ViewCreate {
+            ret: *mut c_void,
+        },
+        ViewRelease {
+            ptr: *mut c_void,
+        },
+        ViewSetFrame {
+            ptr: *mut c_void,
+            x: f32,
+            y: f32,
+            w: f32,
+            h: f32,
+        },
+        ViewSetBackgroundColor {
+            ptr: *mut c_void,
+            r: f32,
+            g: f32,
+            b: f32,
+            a: f32,
+        },
+        ViewSetAlpha {
+            ptr: *mut c_void,
+            alpha: f32,
+        },
+        ViewSetHidden {
+            ptr: *mut c_void,
+            hidden: bool,
+        },
+        ViewSetClipsToBounds {
+            ptr: *mut c_void,
+            clips: bool,
+        },
+        ViewAddSubview {
+            parent: *mut c_void,
+            child: *mut c_void,
+        },
+        ViewRemoveFromSuperview {
+            ptr: *mut c_void,
+        },
+        ViewGetLayer {
+            ptr: *mut c_void,
+            ret: *mut c_void,
+        },
+
+        // ── UILabel ─────────────────────────────────────────────────────
+        LabelCreate {
+            ret: *mut c_void,
+        },
+        LabelRelease {
+            ptr: *mut c_void,
+        },
+        LabelSetText {
+            ptr: *mut c_void,
+        },
+        LabelSetFontSize {
+            ptr: *mut c_void,
+            size: f32,
+        },
+        LabelSetTextColor {
+            ptr: *mut c_void,
+            r: f32,
+            g: f32,
+            b: f32,
+            a: f32,
+        },
+        LabelSetNumberOfLines {
+            ptr: *mut c_void,
+            lines: i32,
+        },
+        LabelSetTextAlignment {
+            ptr: *mut c_void,
+            alignment: i32,
+        },
+
+        // ── UITextView ──────────────────────────────────────────────────
+        TextViewCreate {
+            ret: *mut c_void,
+        },
+        TextViewRelease {
+            ptr: *mut c_void,
+        },
+        TextViewSetText {
+            ptr: *mut c_void,
+        },
+        TextViewSetFontSize {
+            ptr: *mut c_void,
+            size: f32,
+        },
+        TextViewSetTextColor {
+            ptr: *mut c_void,
+            r: f32,
+            g: f32,
+            b: f32,
+            a: f32,
+        },
+        TextViewSetEditable {
+            ptr: *mut c_void,
+            editable: bool,
+        },
+        TextViewSetScrollable {
+            ptr: *mut c_void,
+            scrollable: bool,
+        },
+        TextViewSetTextAlignment {
+            ptr: *mut c_void,
+            alignment: i32,
+        },
+
+        // ── UIScrollView ────────────────────────────────────────────────
+        ScrollViewCreate {
+            ret: *mut c_void,
+        },
+        ScrollViewRelease {
+            ptr: *mut c_void,
+        },
+        ScrollViewSetContentSize {
+            ptr: *mut c_void,
+            w: f32,
+            h: f32,
+        },
+        ScrollViewSetContentOffset {
+            ptr: *mut c_void,
+            x: f32,
+            y: f32,
+            animated: bool,
+        },
+        ScrollViewSetScrollEnabled {
+            ptr: *mut c_void,
+            enabled: bool,
+        },
+        ScrollViewSetBounces {
+            ptr: *mut c_void,
+            bounces: bool,
+        },
+
+        // ── CALayer ─────────────────────────────────────────────────────
+        LayerSetCornerRadius {
+            ptr: *mut c_void,
+            radius: f32,
+        },
+        LayerSetBorderWidth {
+            ptr: *mut c_void,
+            width: f32,
+        },
+        LayerSetBorderColor {
+            ptr: *mut c_void,
+            r: f32,
+            g: f32,
+            b: f32,
+            a: f32,
+        },
+        LayerSetShadowColor {
+            ptr: *mut c_void,
+            r: f32,
+            g: f32,
+            b: f32,
+            a: f32,
+        },
+        LayerSetShadowOffset {
+            ptr: *mut c_void,
+            dx: f32,
+            dy: f32,
+        },
+        LayerSetShadowRadius {
+            ptr: *mut c_void,
+            radius: f32,
+        },
+        LayerSetShadowOpacity {
+            ptr: *mut c_void,
+            opacity: f32,
+        },
+        LayerSetTransform {
+            ptr: *mut c_void,
+        },
+    }
+
+    // SAFETY: FfiCall contains *mut c_void which is !Send by default.
+    // In tests, the pointers are Box::into_raw sentinels that are never
+    // dereferenced — they only serve as unique identifiers. We need Send
+    // so that the test harness can move FfiCall values across threads.
+    unsafe impl Send for FfiCall {}
+
+    thread_local! {
+        static CALL_LOG: RefCell<Vec<FfiCall>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn log(call: FfiCall) {
+        CALL_LOG.with(|log| log.borrow_mut().push(call));
+    }
+
+    /// Returns and clears the call log.
+    pub(crate) fn take_call_log() -> Vec<FfiCall> {
+        CALL_LOG.with(|log| log.borrow_mut().drain(..).collect())
+    }
+
+    /// Clears the call log without returning entries.
+    pub(crate) fn clear_call_log() {
+        CALL_LOG.with(|log| log.borrow_mut().clear());
+    }
+
+    /// Allocates a unique non-null pointer for test stubs.
+    ///
+    /// These pointers are never dereferenced — they serve only as unique
+    /// identifiers for tracking view identity across calls.
+    fn alloc_ptr() -> *mut c_void {
+        Box::into_raw(Box::new(())) as *mut c_void
+    }
+
+    // ── UIView stubs ────────────────────────────────────────────────────
+
+    pub(crate) fn swift_paws_view_create() -> *mut c_void {
+        let ret = alloc_ptr();
+        log(FfiCall::ViewCreate { ret });
+        ret
+    }
+
+    pub(crate) fn swift_paws_view_release(view: *mut c_void) {
+        log(FfiCall::ViewRelease { ptr: view });
+    }
+
+    pub(crate) fn swift_paws_view_set_frame(view: *mut c_void, x: f32, y: f32, w: f32, h: f32) {
+        log(FfiCall::ViewSetFrame {
+            ptr: view,
+            x,
+            y,
+            w,
+            h,
+        });
+    }
+
+    pub(crate) fn swift_paws_view_set_background_color(
+        view: *mut c_void,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    ) {
+        log(FfiCall::ViewSetBackgroundColor {
+            ptr: view,
+            r,
+            g,
+            b,
+            a,
+        });
+    }
+
+    pub(crate) fn swift_paws_view_set_alpha(view: *mut c_void, alpha: f32) {
+        log(FfiCall::ViewSetAlpha { ptr: view, alpha });
+    }
+
+    pub(crate) fn swift_paws_view_set_hidden(view: *mut c_void, hidden: bool) {
+        log(FfiCall::ViewSetHidden { ptr: view, hidden });
+    }
+
+    pub(crate) fn swift_paws_view_set_clips_to_bounds(view: *mut c_void, clips: bool) {
+        log(FfiCall::ViewSetClipsToBounds { ptr: view, clips });
+    }
+
+    pub(crate) fn swift_paws_view_add_subview(parent: *mut c_void, child: *mut c_void) {
+        log(FfiCall::ViewAddSubview { parent, child });
+    }
+
+    pub(crate) fn swift_paws_view_remove_from_superview(view: *mut c_void) {
+        log(FfiCall::ViewRemoveFromSuperview { ptr: view });
+    }
+
+    pub(crate) fn swift_paws_view_get_layer(view: *mut c_void) -> *mut c_void {
+        let ret = alloc_ptr();
+        log(FfiCall::ViewGetLayer { ptr: view, ret });
+        ret
+    }
+
+    // ── UILabel stubs ───────────────────────────────────────────────────
+
+    pub(crate) fn swift_paws_label_create() -> *mut c_void {
+        let ret = alloc_ptr();
+        log(FfiCall::LabelCreate { ret });
+        ret
+    }
+
+    pub(crate) fn swift_paws_label_release(label: *mut c_void) {
+        log(FfiCall::LabelRelease { ptr: label });
+    }
+
+    pub(crate) fn swift_paws_label_set_text(label: *mut c_void, _text: *const c_char) {
+        log(FfiCall::LabelSetText { ptr: label });
+    }
+
+    pub(crate) fn swift_paws_label_set_font_size(label: *mut c_void, size: f32) {
+        log(FfiCall::LabelSetFontSize { ptr: label, size });
+    }
+
+    pub(crate) fn swift_paws_label_set_text_color(
+        label: *mut c_void,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    ) {
+        log(FfiCall::LabelSetTextColor {
+            ptr: label,
+            r,
+            g,
+            b,
+            a,
+        });
+    }
+
+    pub(crate) fn swift_paws_label_set_number_of_lines(label: *mut c_void, lines: i32) {
+        log(FfiCall::LabelSetNumberOfLines { ptr: label, lines });
+    }
+
+    pub(crate) fn swift_paws_label_set_text_alignment(label: *mut c_void, alignment: i32) {
+        log(FfiCall::LabelSetTextAlignment {
+            ptr: label,
+            alignment,
+        });
+    }
+
+    // ── UITextView stubs ────────────────────────────────────────────────
+
+    pub(crate) fn swift_paws_text_view_create() -> *mut c_void {
+        let ret = alloc_ptr();
+        log(FfiCall::TextViewCreate { ret });
+        ret
+    }
+
+    pub(crate) fn swift_paws_text_view_release(text_view: *mut c_void) {
+        log(FfiCall::TextViewRelease { ptr: text_view });
+    }
+
+    pub(crate) fn swift_paws_text_view_set_text(text_view: *mut c_void, _text: *const c_char) {
+        log(FfiCall::TextViewSetText { ptr: text_view });
+    }
+
+    pub(crate) fn swift_paws_text_view_set_font_size(text_view: *mut c_void, size: f32) {
+        log(FfiCall::TextViewSetFontSize {
+            ptr: text_view,
+            size,
+        });
+    }
+
+    pub(crate) fn swift_paws_text_view_set_text_color(
+        text_view: *mut c_void,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    ) {
+        log(FfiCall::TextViewSetTextColor {
+            ptr: text_view,
+            r,
+            g,
+            b,
+            a,
+        });
+    }
+
+    pub(crate) fn swift_paws_text_view_set_editable(text_view: *mut c_void, editable: bool) {
+        log(FfiCall::TextViewSetEditable {
+            ptr: text_view,
+            editable,
+        });
+    }
+
+    pub(crate) fn swift_paws_text_view_set_scrollable(text_view: *mut c_void, scrollable: bool) {
+        log(FfiCall::TextViewSetScrollable {
+            ptr: text_view,
+            scrollable,
+        });
+    }
+
+    pub(crate) fn swift_paws_text_view_set_text_alignment(text_view: *mut c_void, alignment: i32) {
+        log(FfiCall::TextViewSetTextAlignment {
+            ptr: text_view,
+            alignment,
+        });
+    }
+
+    // ── UIScrollView stubs ──────────────────────────────────────────────
+
+    pub(crate) fn swift_paws_scroll_view_create() -> *mut c_void {
+        let ret = alloc_ptr();
+        log(FfiCall::ScrollViewCreate { ret });
+        ret
+    }
+
+    pub(crate) fn swift_paws_scroll_view_release(scroll_view: *mut c_void) {
+        log(FfiCall::ScrollViewRelease { ptr: scroll_view });
+    }
+
+    pub(crate) fn swift_paws_scroll_view_set_content_size(
+        scroll_view: *mut c_void,
+        w: f32,
+        h: f32,
+    ) {
+        log(FfiCall::ScrollViewSetContentSize {
+            ptr: scroll_view,
+            w,
+            h,
+        });
+    }
+
+    pub(crate) fn swift_paws_scroll_view_set_content_offset(
+        scroll_view: *mut c_void,
+        x: f32,
+        y: f32,
+        animated: bool,
+    ) {
+        log(FfiCall::ScrollViewSetContentOffset {
+            ptr: scroll_view,
+            x,
+            y,
+            animated,
+        });
+    }
+
+    pub(crate) fn swift_paws_scroll_view_set_scroll_enabled(
+        scroll_view: *mut c_void,
+        enabled: bool,
+    ) {
+        log(FfiCall::ScrollViewSetScrollEnabled {
+            ptr: scroll_view,
+            enabled,
+        });
+    }
+
+    pub(crate) fn swift_paws_scroll_view_set_bounces(scroll_view: *mut c_void, bounces: bool) {
+        log(FfiCall::ScrollViewSetBounces {
+            ptr: scroll_view,
+            bounces,
+        });
+    }
+
+    // ── CALayer stubs ───────────────────────────────────────────────────
+
+    pub(crate) fn swift_paws_layer_set_corner_radius(layer: *mut c_void, radius: f32) {
+        log(FfiCall::LayerSetCornerRadius { ptr: layer, radius });
+    }
+
+    pub(crate) fn swift_paws_layer_set_border_width(layer: *mut c_void, width: f32) {
+        log(FfiCall::LayerSetBorderWidth { ptr: layer, width });
+    }
+
+    pub(crate) fn swift_paws_layer_set_border_color(
+        layer: *mut c_void,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    ) {
+        log(FfiCall::LayerSetBorderColor {
+            ptr: layer,
+            r,
+            g,
+            b,
+            a,
+        });
+    }
+
+    pub(crate) fn swift_paws_layer_set_shadow_color(
+        layer: *mut c_void,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    ) {
+        log(FfiCall::LayerSetShadowColor {
+            ptr: layer,
+            r,
+            g,
+            b,
+            a,
+        });
+    }
+
+    pub(crate) fn swift_paws_layer_set_shadow_offset(layer: *mut c_void, dx: f32, dy: f32) {
+        log(FfiCall::LayerSetShadowOffset { ptr: layer, dx, dy });
+    }
+
+    pub(crate) fn swift_paws_layer_set_shadow_radius(layer: *mut c_void, radius: f32) {
+        log(FfiCall::LayerSetShadowRadius { ptr: layer, radius });
+    }
+
+    pub(crate) fn swift_paws_layer_set_shadow_opacity(layer: *mut c_void, opacity: f32) {
+        log(FfiCall::LayerSetShadowOpacity {
+            ptr: layer,
+            opacity,
+        });
+    }
+
+    pub(crate) fn swift_paws_layer_set_transform(layer: *mut c_void, _matrix: *const f32) {
+        log(FfiCall::LayerSetTransform { ptr: layer });
+    }
+}
+
+#[cfg(test)]
+pub(crate) use stubs::*;

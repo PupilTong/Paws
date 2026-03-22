@@ -239,3 +239,102 @@ fn read_cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
     // SAFETY: Caller guarantees a valid null-terminated C string.
     unsafe { CStr::from_ptr(ptr) }.to_str().ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::{c_void, CString};
+
+    use super::*;
+    use crate::ffi::imports::stubs::{clear_call_log, take_call_log, FfiCall};
+
+    #[test]
+    fn test_create_renderer_null_url() {
+        let renderer = paws_renderer_create(std::ptr::null());
+        assert!(
+            !renderer.is_null(),
+            "null URL should fall back to about:blank"
+        );
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_create_renderer_valid_url() {
+        let url = CString::new("https://example.com").unwrap();
+        let renderer = paws_renderer_create(url.as_ptr());
+        assert!(!renderer.is_null());
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_destroy_null_is_noop() {
+        // Should not panic.
+        paws_renderer_destroy(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn test_create_element_null_renderer() {
+        let tag = CString::new("div").unwrap();
+        let result = paws_renderer_create_element(std::ptr::null_mut(), tag.as_ptr());
+        assert_eq!(result, RendererError::InvalidHandle.as_i32());
+    }
+
+    #[test]
+    fn test_create_element_null_tag() {
+        let renderer = paws_renderer_create(std::ptr::null());
+        let result = paws_renderer_create_element(renderer, std::ptr::null());
+        assert_eq!(result, RendererError::InvalidHandle.as_i32());
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_create_element_valid() {
+        let renderer = paws_renderer_create(std::ptr::null());
+        let tag = CString::new("div").unwrap();
+        let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
+        assert!(node_id > 0, "valid element should return positive node ID");
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_commit_null_root_view() {
+        let renderer = paws_renderer_create(std::ptr::null());
+        let result = paws_renderer_commit(renderer, std::ptr::null_mut());
+        assert_eq!(result, RendererError::InvalidHandle.as_i32());
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_round_trip_create_commit() {
+        clear_call_log();
+        let renderer = paws_renderer_create(std::ptr::null());
+
+        let tag = CString::new("div").unwrap();
+        let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
+        assert!(node_id > 0);
+
+        let name = CString::new("width").unwrap();
+        let value = CString::new("100px").unwrap();
+        let style_result =
+            paws_renderer_set_inline_style(renderer, node_id as u32, name.as_ptr(), value.as_ptr());
+        assert_eq!(style_result, 0);
+
+        let root_view = 0x9000 as *mut c_void;
+        let commit_result = paws_renderer_commit(renderer, root_view);
+        assert_eq!(commit_result, 0);
+
+        let log = take_call_log();
+
+        // Commit should have created at least one view and set its frame.
+        assert!(
+            log.iter().any(|c| matches!(c, FfiCall::ViewCreate { .. })),
+            "commit should create UIKit views"
+        );
+        assert!(
+            log.iter()
+                .any(|c| matches!(c, FfiCall::ViewSetFrame { .. })),
+            "commit should set view frames"
+        );
+
+        paws_renderer_destroy(renderer);
+    }
+}

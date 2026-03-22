@@ -31,3 +31,34 @@ impl RendererError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RendererError;
+
+    #[test]
+    fn test_error_codes() {
+        assert_eq!(RendererError::InvalidHandle.as_i32(), -100);
+        assert_eq!(RendererError::ThreadViolation.as_i32(), -101);
+        assert_eq!(RendererError::CallbackFailed.as_i32(), -102);
+        assert_eq!(RendererError::InvalidLayout.as_i32(), -103);
+        assert_eq!(RendererError::EngineFailed.as_i32(), -104);
+    }
+
+    #[test]
+    fn test_error_messages_non_empty() {
+        let variants = [
+            RendererError::InvalidHandle,
+            RendererError::ThreadViolation,
+            RendererError::CallbackFailed,
+            RendererError::InvalidLayout,
+            RendererError::EngineFailed,
+        ];
+        for variant in variants {
+            assert!(
+                !variant.message().is_empty(),
+                "{variant:?} should have a non-empty message"
+            );
+        }
+    }
+}
