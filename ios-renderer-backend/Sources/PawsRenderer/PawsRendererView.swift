@@ -12,19 +12,17 @@ public class PawsRendererView: UIView {
     public let renderer: PawsRendererInstance
 
     /// Creates a new `PawsRendererView` with the given base URL.
+    ///
+    /// The view automatically registers itself as the renderer's root view.
     public init(baseURL: String = "about:blank", frame: CGRect = .zero) {
         self.renderer = PawsRendererInstance(baseURL: baseURL)
         super.init(frame: frame)
+        renderer.setRootView(self)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("PawsRendererView does not support Interface Builder")
-    }
-
-    /// Commits pending DOM changes and updates the UIKit view tree.
-    public func commitChanges() {
-        renderer.commit(rootView: self)
     }
 }
 

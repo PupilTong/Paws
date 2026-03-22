@@ -39,6 +39,21 @@ macro_rules! get_cstr {
 pub struct PawsRenderer {
     state: RuntimeState,
     view_tree: ViewTree,
+    /// The root `UIView*` to render into, set via [`paws_renderer_set_root_view`].
+    root_view: Option<*mut c_void>,
+}
+
+impl PawsRenderer {
+    /// Resolves styles, computes layout, and applies the resulting `LayoutBox`
+    /// tree to the UIKit view hierarchy under the stored root view.
+    ///
+    /// No-op if no root view has been set.
+    pub(crate) fn commit(&mut self) {
+        let layout = self.state.commit();
+        if let Some(root_view) = self.root_view {
+            let _ = self.view_tree.apply(&layout, root_view);
+        }
+    }
 }
 
 /// Creates a new `PawsRenderer`.
@@ -63,6 +78,7 @@ pub extern "C" fn paws_renderer_create(base_url: *const c_char) -> *mut PawsRend
     let renderer = PawsRenderer {
         state: RuntimeState::new(url_str.to_string()),
         view_tree: ViewTree::new(),
+        root_view: None,
     };
 
     Box::into_raw(Box::new(renderer))
@@ -184,24 +200,22 @@ pub extern "C" fn paws_renderer_add_stylesheet(
     0
 }
 
-/// Triggers a commit: resolves styles, computes layout, and applies the
-/// resulting `LayoutBox` tree to the UIKit view hierarchy.
+/// Sets the root `UIView` to render into.
 ///
-/// `root_view` is the `UIView` to render into (an opaque pointer).
+/// `root_view` is an opaque pointer to the `UIView`. Pass `null` to clear.
 /// Returns `0` on success, or a negative error code.
 #[no_mangle]
-pub extern "C" fn paws_renderer_commit(renderer: *mut PawsRenderer, root_view: *mut c_void) -> i32 {
+pub extern "C" fn paws_renderer_set_root_view(
+    renderer: *mut PawsRenderer,
+    root_view: *mut c_void,
+) -> i32 {
     let renderer = get_renderer!(renderer);
-
-    if root_view.is_null() {
-        return RendererError::InvalidHandle.as_i32();
-    }
-
-    let layout = renderer.state.commit();
-    match renderer.view_tree.apply(&layout, root_view) {
-        Ok(()) => 0,
-        Err(e) => e.as_i32(),
-    }
+    renderer.root_view = if root_view.is_null() {
+        None
+    } else {
+        Some(root_view)
+    };
+    0
 }
 
 /// Destroys an element and removes it from the DOM.
@@ -296,15 +310,29 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_null_root_view() {
-        let renderer = paws_renderer_create(std::ptr::null());
-        let result = paws_renderer_commit(renderer, std::ptr::null_mut());
+    fn test_set_root_view_null_renderer() {
+        let root_view = 0x9000 as *mut c_void;
+        let result = paws_renderer_set_root_view(std::ptr::null_mut(), root_view);
         assert_eq!(result, RendererError::InvalidHandle.as_i32());
+    }
+
+    #[test]
+    fn test_set_root_view_null_clears() {
+        let renderer = paws_renderer_create(std::ptr::null());
+        let root_view = 0x9000 as *mut c_void;
+
+        let result = paws_renderer_set_root_view(renderer, root_view);
+        assert_eq!(result, 0);
+
+        // Clearing with null should also succeed.
+        let result = paws_renderer_set_root_view(renderer, std::ptr::null_mut());
+        assert_eq!(result, 0);
+
         paws_renderer_destroy(renderer);
     }
 
     #[test]
-    fn test_round_trip_create_commit() {
+    fn test_commit_with_root_view_applies_layout() {
         clear_call_log();
         let renderer = paws_renderer_create(std::ptr::null());
 
@@ -318,9 +346,13 @@ mod tests {
             paws_renderer_set_inline_style(renderer, node_id as u32, name.as_ptr(), value.as_ptr());
         assert_eq!(style_result, 0);
 
+        // Set root view, then commit internally.
         let root_view = 0x9000 as *mut c_void;
-        let commit_result = paws_renderer_commit(renderer, root_view);
-        assert_eq!(commit_result, 0);
+        paws_renderer_set_root_view(renderer, root_view);
+
+        // SAFETY: renderer is valid, created above.
+        let r = unsafe { &mut *renderer };
+        r.commit();
 
         let log = take_call_log();
 
@@ -333,6 +365,29 @@ mod tests {
             log.iter()
                 .any(|c| matches!(c, FfiCall::ViewSetFrame { .. })),
             "commit should set view frames"
+        );
+
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_commit_without_root_view_is_noop() {
+        clear_call_log();
+        let renderer = paws_renderer_create(std::ptr::null());
+
+        let tag = CString::new("div").unwrap();
+        let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
+        assert!(node_id > 0);
+
+        // Commit without setting root view — should not create any UIKit views.
+        // SAFETY: renderer is valid, created above.
+        let r = unsafe { &mut *renderer };
+        r.commit();
+
+        let log = take_call_log();
+        assert!(
+            !log.iter().any(|c| matches!(c, FfiCall::ViewCreate { .. })),
+            "commit without root view should not create UIKit views"
         );
 
         paws_renderer_destroy(renderer);

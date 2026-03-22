@@ -3,10 +3,11 @@
 /// Usage:
 /// ```swift
 /// let renderer = PawsRendererInstance(baseURL: "https://example.com")
+/// renderer.setRootView(myUIView)
 /// let div = renderer.createElement("div")
 /// renderer.appendElement(parent: 0, child: div)
 /// renderer.setInlineStyle(id: div, name: "width", value: "100px")
-/// renderer.commit(rootView: myUIView)
+/// // Commit is triggered by the WASM program, not Swift.
 /// ```
 
 #if canImport(UIKit)
@@ -81,12 +82,14 @@ public final class PawsRendererInstance {
         precondition(result == 0, "addStylesheet failed with error code \(result)")
     }
 
-    /// Triggers style resolution, layout computation, and applies the result
-    /// to the UIKit view hierarchy under `rootView`.
-    public func commit(rootView: UIView) {
-        let viewPtr = Unmanaged.passUnretained(rootView).toOpaque()
-        let result = paws_renderer_commit(handle, viewPtr)
-        precondition(result == 0, "commit failed with error code \(result)")
+    /// Sets the root `UIView` that the renderer will paint into.
+    ///
+    /// Call this once before the WASM program triggers its first commit.
+    /// Pass `nil` to detach the renderer from its current root view.
+    public func setRootView(_ view: UIView?) {
+        let viewPtr = view.map { Unmanaged.passUnretained($0).toOpaque() }
+        let result = paws_renderer_set_root_view(handle, viewPtr)
+        precondition(result == 0, "setRootView failed with error code \(result)")
     }
 
     /// Destroys an element and removes it from the DOM.
