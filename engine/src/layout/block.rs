@@ -1,7 +1,8 @@
+use style::servo_arc::Arc;
+
 use crate::dom::NodeType;
 use crate::layout::text::TextMeasurer;
 use crate::style::to_taffy_style;
-use style::values::specified::box_::Overflow;
 use style::values::specified::font::FONT_MEDIUM_PX;
 use taffy::prelude::*;
 
@@ -9,6 +10,10 @@ use taffy::prelude::*;
 ///
 /// Produced by [`LayoutState::compute_layout`] and consumed by
 /// the iOS renderer backend's conversion layer to build `LayoutNode` trees.
+///
+/// Style-derived values (overflow, background color, etc.) are accessible
+/// through [`computed_values`](Self::computed_values) rather than being
+/// extracted into separate fields.
 pub struct LayoutBox {
     /// The DOM node ID this layout box corresponds to.
     pub node_id: taffy::NodeId,
@@ -20,10 +25,8 @@ pub struct LayoutBox {
     pub height: f32,
     /// Stacking order. `None` means `auto`.
     pub z_index: Option<i32>,
-    /// Overflow behavior on the x-axis.
-    pub overflow_x: Overflow,
-    /// Overflow behavior on the y-axis.
-    pub overflow_y: Overflow,
+    /// The full computed style for this node (overflow, colors, etc.).
+    pub computed_values: Option<Arc<style::properties::ComputedValues>>,
     pub children: Vec<LayoutBox>,
 }
 
@@ -36,8 +39,7 @@ impl Default for LayoutBox {
             width: 0.0,
             height: 0.0,
             z_index: None,
-            overflow_x: Overflow::Visible,
-            overflow_y: Overflow::Visible,
+            computed_values: None,
             children: Vec::new(),
         }
     }
@@ -90,8 +92,8 @@ impl LayoutState {
             .filter_map(|child| self.extract_tree(child, doc))
             .collect();
 
-        // Extract z-index and overflow from the DOM node's computed style.
-        let (z_index, overflow_x, overflow_y) = doc
+        // Extract z-index and computed values from the DOM node.
+        let (z_index, computed_values) = doc
             .get_node(node_id)
             .and_then(|node| node.computed_values.as_ref())
             .map(|cv| {
@@ -100,9 +102,9 @@ impl LayoutState {
                     ZIndex::Integer(n) => Some(n),
                     ZIndex::Auto => None,
                 };
-                (z, cv.clone_overflow_x(), cv.clone_overflow_y())
+                (z, Some(Arc::clone(cv)))
             })
-            .unwrap_or((None, Overflow::Visible, Overflow::Visible));
+            .unwrap_or((None, None));
 
         Some(LayoutBox {
             node_id,
@@ -111,8 +113,7 @@ impl LayoutState {
             width: layout.size.width,
             height: layout.size.height,
             z_index,
-            overflow_x,
-            overflow_y,
+            computed_values,
             children,
         })
     }

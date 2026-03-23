@@ -228,6 +228,57 @@ pub extern "C" fn paws_renderer_destroy_element(renderer: *mut PawsRenderer, id:
     }
 }
 
+/// Resolves styles, computes layout, and applies the resulting tree to UIKit.
+///
+/// No-op if no root view has been set via [`paws_renderer_set_root_view`].
+/// Returns `0` on success, or a negative error code.
+#[no_mangle]
+pub extern "C" fn paws_renderer_commit(renderer: *mut PawsRenderer) -> i32 {
+    let renderer = get_renderer!(renderer);
+    match renderer.commit() {
+        Ok(()) => 0,
+        Err(e) => e.as_i32(),
+    }
+}
+
+/// Compiles a WAT module and runs the named function against the renderer's
+/// engine state, then commits the resulting layout to UIKit.
+///
+/// `wat_text` must be a null-terminated UTF-8 WAT string.
+/// `func_name` must be a null-terminated UTF-8 string naming the export to call.
+/// Returns `0` on success, or a negative error code.
+#[no_mangle]
+pub extern "C" fn paws_renderer_run_wat(
+    renderer: *mut PawsRenderer,
+    wat_text: *const c_char,
+    func_name: *const c_char,
+) -> i32 {
+    let renderer = get_renderer!(renderer);
+    let wat_str = get_cstr!(wat_text);
+    let func_str = get_cstr!(func_name);
+
+    // Move RuntimeState into wasm-bridge for execution, then recover it.
+    let state = std::mem::replace(
+        &mut renderer.state,
+        RuntimeState::new("about:blank".to_string()),
+    );
+
+    match wasm_bridge::run_wat(state, wat_str, func_str) {
+        Ok(state) => {
+            renderer.state = state;
+            // Auto-commit after WASM execution.
+            match renderer.commit() {
+                Ok(()) => 0,
+                Err(e) => e.as_i32(),
+            }
+        }
+        Err(err) => {
+            renderer.state = err.state;
+            RendererError::EngineFailed.as_i32()
+        }
+    }
+}
+
 /// Converts a raw renderer pointer to a mutable reference.
 ///
 /// Returns `None` if the pointer is null.
@@ -363,6 +414,94 @@ mod tests {
                 .any(|c| matches!(c, FfiCall::ViewSetFrame { .. })),
             "commit should set view frames"
         );
+
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_run_wat_success() {
+        clear_call_log();
+        let renderer = paws_renderer_create(std::ptr::null());
+        let root_view = 0x9000 as *mut c_void;
+        paws_renderer_set_root_view(renderer, root_view);
+
+        let wat = CString::new(
+            r#"
+(module
+  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
+  (import "env" "__SetInlineStyle" (func $style (param i32 i32 i32) (result i32)))
+  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "div\00")
+  (data (i32.const 16) "width\00")
+  (data (i32.const 32) "100px\00")
+  (func (export "run") (result i32)
+    (local $id i32)
+    (local.set $id (call $create (i32.const 0)))
+    (drop (call $append (i32.const 0) (local.get $id)))
+    (drop (call $style (local.get $id) (i32.const 16) (i32.const 32)))
+    (i32.const 0)
+  )
+)
+"#,
+        )
+        .unwrap();
+        let func = CString::new("run").unwrap();
+
+        let result = paws_renderer_run_wat(renderer, wat.as_ptr(), func.as_ptr());
+        assert_eq!(result, 0, "run_wat should succeed");
+
+        let log = take_call_log();
+        // run_wat auto-commits, so UIKit views should have been created.
+        assert!(
+            log.iter().any(|c| matches!(c, FfiCall::ViewCreate { .. })),
+            "run_wat should auto-commit and create UIKit views"
+        );
+
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_run_wat_invalid_wat() {
+        let renderer = paws_renderer_create(std::ptr::null());
+        let root_view = 0x9000 as *mut c_void;
+        paws_renderer_set_root_view(renderer, root_view);
+
+        let wat = CString::new("not valid wat!").unwrap();
+        let func = CString::new("run").unwrap();
+
+        let result = paws_renderer_run_wat(renderer, wat.as_ptr(), func.as_ptr());
+        assert_eq!(
+            result,
+            RendererError::EngineFailed.as_i32(),
+            "invalid WAT should return EngineFailed"
+        );
+
+        // Renderer should still be usable after error.
+        let tag = CString::new("div").unwrap();
+        let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
+        assert!(node_id > 0, "renderer should still work after WAT error");
+
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_run_wat_null_params() {
+        let renderer = paws_renderer_create(std::ptr::null());
+
+        // Null WAT text.
+        let func = CString::new("run").unwrap();
+        let result = paws_renderer_run_wat(renderer, std::ptr::null(), func.as_ptr());
+        assert_eq!(result, RendererError::InvalidHandle.as_i32());
+
+        // Null func name.
+        let wat = CString::new("(module)").unwrap();
+        let result = paws_renderer_run_wat(renderer, wat.as_ptr(), std::ptr::null());
+        assert_eq!(result, RendererError::InvalidHandle.as_i32());
+
+        // Null renderer.
+        let result = paws_renderer_run_wat(std::ptr::null_mut(), wat.as_ptr(), func.as_ptr());
+        assert_eq!(result, RendererError::InvalidHandle.as_i32());
 
         paws_renderer_destroy(renderer);
     }

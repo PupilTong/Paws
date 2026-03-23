@@ -146,7 +146,36 @@ extern "C" {
     /// Sets the `bounces` property of a `UIScrollView`.
     pub(crate) fn swift_paws_scroll_view_set_bounces(scroll_view: *mut c_void, bounces: bool);
 
-    // ── CALayer ─────────────────────────────────────────────────────────
+    // ── CALayer (standalone lifecycle) ─────────────────────────────────
+
+    /// Creates a new standalone `CALayer` and returns a retained opaque pointer.
+    pub(crate) fn swift_paws_layer_create() -> *mut c_void;
+
+    /// Releases a retained standalone `CALayer` pointer.
+    pub(crate) fn swift_paws_layer_release(layer: *mut c_void);
+
+    /// Sets the frame (origin + size) of a standalone `CALayer`.
+    pub(crate) fn swift_paws_layer_set_frame(layer: *mut c_void, x: f32, y: f32, w: f32, h: f32);
+
+    /// Sets the background color of a standalone `CALayer` (RGBA, 0.0–1.0).
+    pub(crate) fn swift_paws_layer_set_background_color(
+        layer: *mut c_void,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    );
+
+    /// Adds `child` as a sublayer of `parent` (both `CALayer`).
+    pub(crate) fn swift_paws_layer_add_sublayer(parent: *mut c_void, child: *mut c_void);
+
+    /// Removes a `CALayer` from its superlayer.
+    pub(crate) fn swift_paws_layer_remove_from_superlayer(layer: *mut c_void);
+
+    /// Adds a standalone `CALayer` as a sublayer of a `UIView`'s layer.
+    pub(crate) fn swift_paws_view_add_sublayer(view: *mut c_void, layer: *mut c_void);
+
+    // ── CALayer (property setters) ──────────────────────────────────────
 
     /// Sets the `cornerRadius` of a `CALayer`.
     pub(crate) fn swift_paws_layer_set_corner_radius(layer: *mut c_void, radius: f32);
@@ -339,7 +368,40 @@ pub(crate) mod stubs {
             bounces: bool,
         },
 
-        // ── CALayer ─────────────────────────────────────────────────────
+        // ── CALayer (standalone lifecycle) ──────────────────────────────
+        LayerCreate {
+            ret: *mut c_void,
+        },
+        LayerRelease {
+            ptr: *mut c_void,
+        },
+        LayerSetFrame {
+            ptr: *mut c_void,
+            x: f32,
+            y: f32,
+            w: f32,
+            h: f32,
+        },
+        LayerSetBackgroundColor {
+            ptr: *mut c_void,
+            r: f32,
+            g: f32,
+            b: f32,
+            a: f32,
+        },
+        LayerAddSublayer {
+            parent: *mut c_void,
+            child: *mut c_void,
+        },
+        LayerRemoveFromSuperlayer {
+            ptr: *mut c_void,
+        },
+        ViewAddSublayer {
+            view: *mut c_void,
+            layer: *mut c_void,
+        },
+
+        // ── CALayer (property setters) ─────────────────────────────────
         LayerSetCornerRadius {
             ptr: *mut c_void,
             radius: f32,
@@ -638,7 +700,57 @@ pub(crate) mod stubs {
         });
     }
 
-    // ── CALayer stubs ───────────────────────────────────────────────────
+    // ── CALayer standalone stubs ──────────────────────────────────────
+
+    pub(crate) fn swift_paws_layer_create() -> *mut c_void {
+        let ret = alloc_ptr();
+        log(FfiCall::LayerCreate { ret });
+        ret
+    }
+
+    pub(crate) fn swift_paws_layer_release(layer: *mut c_void) {
+        log(FfiCall::LayerRelease { ptr: layer });
+    }
+
+    pub(crate) fn swift_paws_layer_set_frame(layer: *mut c_void, x: f32, y: f32, w: f32, h: f32) {
+        log(FfiCall::LayerSetFrame {
+            ptr: layer,
+            x,
+            y,
+            w,
+            h,
+        });
+    }
+
+    pub(crate) fn swift_paws_layer_set_background_color(
+        layer: *mut c_void,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    ) {
+        log(FfiCall::LayerSetBackgroundColor {
+            ptr: layer,
+            r,
+            g,
+            b,
+            a,
+        });
+    }
+
+    pub(crate) fn swift_paws_layer_add_sublayer(parent: *mut c_void, child: *mut c_void) {
+        log(FfiCall::LayerAddSublayer { parent, child });
+    }
+
+    pub(crate) fn swift_paws_layer_remove_from_superlayer(layer: *mut c_void) {
+        log(FfiCall::LayerRemoveFromSuperlayer { ptr: layer });
+    }
+
+    pub(crate) fn swift_paws_view_add_sublayer(view: *mut c_void, layer: *mut c_void) {
+        log(FfiCall::ViewAddSublayer { view, layer });
+    }
+
+    // ── CALayer property stubs ──────────────────────────────────────────
 
     pub(crate) fn swift_paws_layer_set_corner_radius(layer: *mut c_void, radius: f32) {
         log(FfiCall::LayerSetCornerRadius { ptr: layer, radius });

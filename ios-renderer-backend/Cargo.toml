@@ -10,6 +10,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 engine = { path = "../engine" }
 wasm-bridge = { path = "../wasm-bridge" }
+stylo = "0.13"
 fnv = "1.0.7"
 
 [build-dependencies]
