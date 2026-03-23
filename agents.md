@@ -27,16 +27,16 @@ This repository supports LLM-based assistants. The working language is English.
 ## Repository Structure
 
 - `engine/`: core logic (DOM, Style, Layout). A pure Rust library with no host dependencies.
-- `wasm-bridge/`: integration layer threading `wasmtime` and `engine` together.
+- `wasmtime-engine/`: integration layer threading `wasmtime` and `engine` together.
 - `view/`: UI/view layer. Exposes the frontend APIs.
 - `view-macros/`: Contains the `css!` proc-macro for compile-time CSS evaluation.
 - `paws-style-ir/`: Zero-copy intermediate representations (`rkyv`) for styles shared between the macro and runtime.
-- `ios-renderer-backend/`: iOS rendering backend — bridges engine `LayoutBox` output to UIKit via C FFI. Rust owns and controls UIView, UILabel, UITextView, UIScrollView, and CALayer through opaque pointer handles. Includes a Swift Package (`PawsRenderer`) with `PawsRendererInstance` wrapper and `PawsRendererView`. Depends on `engine` and `wasm-bridge`. Uses cbindgen for header generation.
+- `ios-renderer-backend/`: iOS rendering backend — bridges engine `LayoutBox` output to UIKit via C FFI. Rust owns and controls UIView, UILabel, UITextView, UIScrollView, and CALayer through opaque pointer handles. Includes a Swift Package (`PawsRenderer`) with `PawsRendererInstance` wrapper and `PawsRendererView`. Depends on `engine` and `wasmtime-engine`. Uses cbindgen for header generation.
 - `ios-example-app/`: Example iOS app (Xcode project) demonstrating WASM → engine → renderer → UIKit pipeline.
 
 ## Project Design Overview
 
-- Cross-platform framework with a pure WASM VM for UI logic (`wasm-bridge`).
+- Cross-platform framework with a pure WASM VM for UI logic (`wasmtime-engine`).
 - Stylo provides web-standard CSS behavior and style computation.
 - Taffy provides box layout.
 - LynxJS native elements provide actual rendering.

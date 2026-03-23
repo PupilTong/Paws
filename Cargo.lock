@@ -1081,7 +1081,7 @@ dependencies = [
  "engine",
  "fnv",
  "stylo",
- "wasm-bridge",
+ "wasmtime-engine",
 ]
 
 [[package]]
@@ -2549,16 +2549,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-bridge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "codspeed-criterion-compat",
- "engine",
- "wasmtime",
-]
-
-[[package]]
 name = "wasm-encoder"
 version = "0.224.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2702,6 +2692,16 @@ dependencies = [
  "wasmparser 0.224.1",
  "wasmtime-environ",
  "wasmtime-versioned-export-macros",
+]
+
+[[package]]
+name = "wasmtime-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "codspeed-criterion-compat",
+ "engine",
+ "wasmtime",
 ]
 
 [[package]]

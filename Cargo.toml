@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "engine",
-    "wasm-bridge",
+    "wasmtime-engine",
     "view", "paws-style-ir", "view-macros",
     "ios-renderer-backend",
 ]
