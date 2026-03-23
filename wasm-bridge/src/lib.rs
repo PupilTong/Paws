@@ -20,6 +20,53 @@ pub fn create_engine() -> WasmEngine {
     WasmEngine::new(&config).expect("create wasmtime engine")
 }
 
+/// Compiles and runs a WAT module against a [`RuntimeState`].
+///
+/// Creates a wasmtime engine, compiles the WAT text, instantiates the module
+/// with the standard Paws host functions, and calls the named export.
+///
+/// The `RuntimeState` is moved into the wasmtime `Store` during execution
+/// and returned afterwards — even on error — so the caller can always
+/// recover it.
+/// Error returned by [`run_wat`] when WASM execution fails.
+///
+/// Contains the recovered `RuntimeState` so the caller can reuse it.
+pub struct RunWatError {
+    /// The `RuntimeState` recovered from the wasmtime `Store`.
+    pub state: RuntimeState,
+    /// The underlying error.
+    pub error: anyhow::Error,
+}
+
+pub fn run_wat(
+    state: RuntimeState,
+    wat: &str,
+    func_name: &str,
+) -> Result<RuntimeState, Box<RunWatError>> {
+    let engine = create_engine();
+    let module = match Module::new(&engine, wat) {
+        Ok(m) => m,
+        Err(e) => {
+            return Err(Box::new(RunWatError { state, error: e }));
+        }
+    };
+    let linker = build_linker(&engine);
+    let mut store = Store::new(&engine, state);
+
+    let result = (|| -> anyhow::Result<()> {
+        let instance = linker.instantiate(&mut store, &module)?;
+        let run = instance.get_typed_func::<(), i32>(&mut store, func_name)?;
+        run.call(&mut store, ())?;
+        Ok(())
+    })();
+
+    let state = store.into_data();
+    match result {
+        Ok(()) => Ok(state),
+        Err(e) => Err(Box::new(RunWatError { state, error: e })),
+    }
+}
+
 /// A tiny demo that wires wasm, layout, and style concepts together.
 ///
 /// Returns a human-readable summary string.

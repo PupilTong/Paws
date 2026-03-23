@@ -97,6 +97,32 @@ public final class PawsRendererInstance {
         let result = paws_renderer_destroy_element(handle, id)
         precondition(result == 0, "destroyElement failed with error code \(result)")
     }
+
+    /// Resolves styles, computes layout, and applies to the UIKit view tree.
+    ///
+    /// No-op if no root view has been set via `setRootView(_:)`.
+    public func commit() {
+        let result = paws_renderer_commit(handle)
+        precondition(result == 0, "commit failed with error code \(result)")
+    }
+
+    /// Compiles and runs a WAT module, then commits the result.
+    ///
+    /// The WAT text is compiled to WASM, the named function is called
+    /// (which may create elements, set styles, etc.), and then the layout
+    /// is committed to the UIKit view tree.
+    ///
+    /// - Parameters:
+    ///   - wat: WAT text (WebAssembly Text Format) to compile and run.
+    ///   - functionName: The exported function to call (default: `"run"`).
+    public func runWat(_ wat: String, functionName: String = "run") {
+        let result = wat.withCString { watPtr in
+            functionName.withCString { funcPtr in
+                paws_renderer_run_wat(handle, watPtr, funcPtr)
+            }
+        }
+        precondition(result == 0, "runWat failed with error code \(result)")
+    }
 }
 
 #endif

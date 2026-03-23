@@ -24,6 +24,8 @@ pub struct LayoutBox {
     pub overflow_x: Overflow,
     /// Overflow behavior on the y-axis.
     pub overflow_y: Overflow,
+    /// Background color as `(r, g, b, a)` in 0.0–1.0 range, or `None` if transparent.
+    pub background_color: Option<(f32, f32, f32, f32)>,
     pub children: Vec<LayoutBox>,
 }
 
@@ -38,6 +40,7 @@ impl Default for LayoutBox {
             z_index: None,
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            background_color: None,
             children: Vec::new(),
         }
     }
@@ -90,8 +93,8 @@ impl LayoutState {
             .filter_map(|child| self.extract_tree(child, doc))
             .collect();
 
-        // Extract z-index and overflow from the DOM node's computed style.
-        let (z_index, overflow_x, overflow_y) = doc
+        // Extract z-index, overflow, and background-color from computed style.
+        let (z_index, overflow_x, overflow_y, background_color) = doc
             .get_node(node_id)
             .and_then(|node| node.computed_values.as_ref())
             .map(|cv| {
@@ -100,9 +103,12 @@ impl LayoutState {
                     ZIndex::Integer(n) => Some(n),
                     ZIndex::Auto => None,
                 };
-                (z, cv.clone_overflow_x(), cv.clone_overflow_y())
+
+                let bg = extract_background_color(cv);
+
+                (z, cv.clone_overflow_x(), cv.clone_overflow_y(), bg)
             })
-            .unwrap_or((None, Overflow::Visible, Overflow::Visible));
+            .unwrap_or((None, Overflow::Visible, Overflow::Visible, None));
 
         Some(LayoutBox {
             node_id,
@@ -113,8 +119,34 @@ impl LayoutState {
             z_index,
             overflow_x,
             overflow_y,
+            background_color,
             children,
         })
+    }
+}
+
+/// Extracts the background color from computed values as an RGBA tuple.
+///
+/// Returns `None` for transparent backgrounds (alpha ≈ 0) or non-absolute colors.
+fn extract_background_color(
+    cv: &style::properties::ComputedValues,
+) -> Option<(f32, f32, f32, f32)> {
+    use style::values::computed::Color;
+
+    match cv.clone_background_color() {
+        Color::Absolute(abs) => {
+            let r = abs.components.0;
+            let g = abs.components.1;
+            let b = abs.components.2;
+            let a = abs.alpha;
+            // Skip fully transparent backgrounds.
+            if a.abs() < f32::EPSILON {
+                None
+            } else {
+                Some((r, g, b, a))
+            }
+        }
+        _ => None,
     }
 }
 

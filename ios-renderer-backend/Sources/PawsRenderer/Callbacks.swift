@@ -213,7 +213,58 @@ func swiftPawsScrollViewSetBounces(_ ptr: UnsafeMutableRawPointer, _ bounces: Bo
     sv.bounces = bounces
 }
 
-// MARK: - CALayer
+// MARK: - CALayer (standalone lifecycle)
+
+@_cdecl("swift_paws_layer_create")
+func swiftPawsLayerCreate() -> UnsafeMutableRawPointer {
+    let layer = CALayer()
+    return Unmanaged.passRetained(layer).toOpaque()
+}
+
+@_cdecl("swift_paws_layer_release")
+func swiftPawsLayerRelease(_ ptr: UnsafeMutableRawPointer) {
+    Unmanaged<CALayer>.fromOpaque(ptr).release()
+}
+
+@_cdecl("swift_paws_layer_set_frame")
+func swiftPawsLayerSetFrame(
+    _ ptr: UnsafeMutableRawPointer,
+    _ x: Float, _ y: Float, _ w: Float, _ h: Float
+) {
+    let layer = Unmanaged<CALayer>.fromOpaque(ptr).takeUnretainedValue()
+    layer.frame = CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(w), height: CGFloat(h))
+}
+
+@_cdecl("swift_paws_layer_set_background_color")
+func swiftPawsLayerSetBackgroundColor(
+    _ ptr: UnsafeMutableRawPointer,
+    _ r: Float, _ g: Float, _ b: Float, _ a: Float
+) {
+    let layer = Unmanaged<CALayer>.fromOpaque(ptr).takeUnretainedValue()
+    layer.backgroundColor = UIColor(red: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: CGFloat(a)).cgColor
+}
+
+@_cdecl("swift_paws_layer_add_sublayer")
+func swiftPawsLayerAddSublayer(_ parentPtr: UnsafeMutableRawPointer, _ childPtr: UnsafeMutableRawPointer) {
+    let parent = Unmanaged<CALayer>.fromOpaque(parentPtr).takeUnretainedValue()
+    let child = Unmanaged<CALayer>.fromOpaque(childPtr).takeUnretainedValue()
+    parent.addSublayer(child)
+}
+
+@_cdecl("swift_paws_layer_remove_from_superlayer")
+func swiftPawsLayerRemoveFromSuperlayer(_ ptr: UnsafeMutableRawPointer) {
+    let layer = Unmanaged<CALayer>.fromOpaque(ptr).takeUnretainedValue()
+    layer.removeFromSuperlayer()
+}
+
+@_cdecl("swift_paws_view_add_sublayer")
+func swiftPawsViewAddSublayer(_ viewPtr: UnsafeMutableRawPointer, _ layerPtr: UnsafeMutableRawPointer) {
+    let view = Unmanaged<UIView>.fromOpaque(viewPtr).takeUnretainedValue()
+    let layer = Unmanaged<CALayer>.fromOpaque(layerPtr).takeUnretainedValue()
+    view.layer.addSublayer(layer)
+}
+
+// MARK: - CALayer (property setters)
 
 @_cdecl("swift_paws_layer_set_corner_radius")
 func swiftPawsLayerSetCornerRadius(_ ptr: UnsafeMutableRawPointer, _ radius: Float) {

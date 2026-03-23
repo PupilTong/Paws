@@ -228,6 +228,57 @@ pub extern "C" fn paws_renderer_destroy_element(renderer: *mut PawsRenderer, id:
     }
 }
 
+/// Resolves styles, computes layout, and applies the resulting tree to UIKit.
+///
+/// No-op if no root view has been set via [`paws_renderer_set_root_view`].
+/// Returns `0` on success, or a negative error code.
+#[no_mangle]
+pub extern "C" fn paws_renderer_commit(renderer: *mut PawsRenderer) -> i32 {
+    let renderer = get_renderer!(renderer);
+    match renderer.commit() {
+        Ok(()) => 0,
+        Err(e) => e.as_i32(),
+    }
+}
+
+/// Compiles a WAT module and runs the named function against the renderer's
+/// engine state, then commits the resulting layout to UIKit.
+///
+/// `wat_text` must be a null-terminated UTF-8 WAT string.
+/// `func_name` must be a null-terminated UTF-8 string naming the export to call.
+/// Returns `0` on success, or a negative error code.
+#[no_mangle]
+pub extern "C" fn paws_renderer_run_wat(
+    renderer: *mut PawsRenderer,
+    wat_text: *const c_char,
+    func_name: *const c_char,
+) -> i32 {
+    let renderer = get_renderer!(renderer);
+    let wat_str = get_cstr!(wat_text);
+    let func_str = get_cstr!(func_name);
+
+    // Move RuntimeState into wasm-bridge for execution, then recover it.
+    let state = std::mem::replace(
+        &mut renderer.state,
+        RuntimeState::new("about:blank".to_string()),
+    );
+
+    match wasm_bridge::run_wat(state, wat_str, func_str) {
+        Ok(state) => {
+            renderer.state = state;
+            // Auto-commit after WASM execution.
+            match renderer.commit() {
+                Ok(()) => 0,
+                Err(e) => e.as_i32(),
+            }
+        }
+        Err(err) => {
+            renderer.state = err.state;
+            RendererError::EngineFailed.as_i32()
+        }
+    }
+}
+
 /// Converts a raw renderer pointer to a mutable reference.
 ///
 /// Returns `None` if the pointer is null.
