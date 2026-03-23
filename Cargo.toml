@@ -3,8 +3,18 @@ resolver = "2"
 members = [
     "engine",
     "wasmtime-engine",
-    "view", "paws-style-ir", "view-macros",
+    "rust-wasm-binding", "paws-style-ir", "view-macros",
     "ios-renderer-backend",
+]
+exclude = [
+    "examples/example-basic-element",
+    "examples/example-styled-element",
+    "examples/example-nested-elements",
+    "examples/example-stylesheet-cascade",
+    "examples/example-parsed-stylesheet",
+    "examples/example-attributes",
+    "examples/example-destroy-rebuild",
+    "examples/example-commit-full",
 ]
 
 [workspace.package]

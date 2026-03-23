@@ -16,7 +16,7 @@ anyhow = "1"
 [dependencies.wasmtime]
 version = "30"
 default-features = false
-features = ["cranelift", "pulley", "runtime", "std", "wat"]
+features = ["cranelift", "pulley", "runtime", "std", "threads", "wat"]
 
 [dev-dependencies]
 codspeed-criterion-compat = "4.4.1"
