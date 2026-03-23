@@ -38,6 +38,14 @@ pub struct RunWatError {
     pub error: anyhow::Error,
 }
 
+impl std::fmt::Debug for RunWatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunWatError")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 pub fn run_wat(
     state: RuntimeState,
     wat: &str,
@@ -107,7 +115,7 @@ pub fn hello_engine() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_linker, hello_engine};
+    use super::{build_linker, hello_engine, run_wat};
     use engine::{HostErrorCode, RuntimeState};
     use wasmtime::{Engine as WasmEngine, Module, Store};
 
@@ -567,6 +575,71 @@ mod tests {
 
         let status = run.call(&mut store, ()).expect("run wasm");
         assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
+    }
+
+    #[test]
+    fn run_wat_success() {
+        let wat = r#"
+(module
+  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
+  (import "env" "__SetInlineStyle" (func $style (param i32 i32 i32) (result i32)))
+  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "div\00")
+  (data (i32.const 16) "width\00")
+  (data (i32.const 32) "200px\00")
+  (func (export "run") (result i32)
+    (local $id i32)
+    (local.set $id (call $create (i32.const 0)))
+    (drop (call $append (i32.const 0) (local.get $id)))
+    (drop (call $style (local.get $id) (i32.const 16) (i32.const 32)))
+    (i32.const 0)
+  )
+)
+"#;
+        let state = RuntimeState::new("https://example.com".to_string());
+        let state = run_wat(state, wat, "run").expect("run_wat should succeed");
+
+        // The created element should exist in the returned state.
+        let node = state.doc.get_node(engine::NodeId::from(1_u64));
+        assert!(node.is_some(), "element should exist after run_wat");
+    }
+
+    #[test]
+    fn run_wat_invalid_wat_returns_error_with_state() {
+        let state = RuntimeState::new("https://example.com".to_string());
+        match run_wat(state, "not valid wat!", "run") {
+            Ok(_) => panic!("should fail on invalid WAT"),
+            Err(err) => {
+                // State should be recovered even on compilation error.
+                assert!(
+                    err.state
+                        .doc
+                        .get_node(engine::NodeId::from(0_u64))
+                        .is_some(),
+                    "root node should still exist in recovered state"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn run_wat_missing_export_returns_error_with_state() {
+        let wat = "(module (memory (export \"memory\") 1))";
+        let state = RuntimeState::new("https://example.com".to_string());
+        match run_wat(state, wat, "nonexistent") {
+            Ok(_) => panic!("should fail on missing export"),
+            Err(err) => {
+                // State should be recovered.
+                assert!(
+                    err.state
+                        .doc
+                        .get_node(engine::NodeId::from(0_u64))
+                        .is_some(),
+                    "root node should still exist in recovered state"
+                );
+            }
+        }
     }
 
     #[test]

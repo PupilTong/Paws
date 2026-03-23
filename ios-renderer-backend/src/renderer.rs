@@ -379,6 +379,8 @@ mod tests {
     use crate::error::RendererError;
     use crate::ffi::imports::stubs::{clear_call_log, take_call_log, FfiCall};
 
+    use super::extract_background_color;
+
     /// Creates a `LayoutBox` with the given node ID and default fields.
     fn layout(id: u64) -> LayoutBox {
         LayoutBox {
@@ -790,5 +792,83 @@ mod tests {
                 "layer {ptr:?} should be released on drop"
             );
         }
+    }
+
+    #[test]
+    fn test_extract_background_color_from_computed_values() {
+        // Build a RuntimeState with an element that has background-color set.
+        let mut state = engine::RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+        state.append_element(0, id).unwrap();
+        state
+            .set_inline_style(
+                id,
+                "background-color".to_string(),
+                "rgb(255, 0, 128)".to_string(),
+            )
+            .unwrap();
+        state.doc.resolve_style(&state.style_context);
+
+        let node = state.doc.get_node(engine::NodeId::from(id as u64)).unwrap();
+        let cv = node
+            .get_computed_values()
+            .expect("should have computed values");
+        let color = extract_background_color(cv);
+        assert!(color.is_some(), "rgb(255, 0, 128) should extract a color");
+
+        let (r, g, b, a) = color.unwrap();
+        assert!((r - 1.0).abs() < 0.01, "red should be ~1.0, got {r}");
+        assert!(g.abs() < 0.01, "green should be ~0.0, got {g}");
+        assert!((b - 0.502).abs() < 0.02, "blue should be ~0.502, got {b}");
+        assert!((a - 1.0).abs() < 0.01, "alpha should be ~1.0, got {a}");
+    }
+
+    #[test]
+    fn test_extract_background_color_transparent_returns_none() {
+        // Element with default (transparent) background.
+        let mut state = engine::RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+        state.append_element(0, id).unwrap();
+        state.doc.resolve_style(&state.style_context);
+
+        let node = state.doc.get_node(engine::NodeId::from(id as u64)).unwrap();
+        let cv = node
+            .get_computed_values()
+            .expect("should have computed values");
+        let color = extract_background_color(cv);
+        assert!(color.is_none(), "transparent background should return None");
+    }
+
+    #[test]
+    fn test_apply_node_with_background_color_sets_layer_bg() {
+        clear_call_log();
+        let mut tree = ViewTree::new();
+
+        // Build a state with a colored div to get real computed values.
+        let mut state = engine::RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+        state.append_element(0, id).unwrap();
+        state
+            .set_inline_style(id, "background-color".to_string(), "red".to_string())
+            .unwrap();
+        state
+            .set_inline_style(id, "width".to_string(), "50px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(id, "height".to_string(), "50px".to_string())
+            .unwrap();
+
+        let layout_box = state.commit();
+
+        tree.apply(&layout_box, root_view()).unwrap();
+
+        let log = take_call_log();
+
+        // Root is always a View. Verify its background color was set.
+        assert!(
+            log.iter()
+                .any(|c| matches!(c, FfiCall::ViewSetBackgroundColor { .. })),
+            "background-color should be applied to the root view"
+        );
     }
 }
