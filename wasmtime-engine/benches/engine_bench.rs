@@ -1,7 +1,7 @@
 use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Criterion};
 
 use engine::RuntimeState;
-use wasm_bridge::{build_linker, hello_engine};
+use wasmtime_engine::{build_linker, hello_engine};
 use wasmtime::{Engine as WasmEngine, Module, Store};
 
 // ---------------------------------------------------------------------------

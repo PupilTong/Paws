@@ -257,13 +257,13 @@ pub extern "C" fn paws_renderer_run_wat(
     let wat_str = get_cstr!(wat_text);
     let func_str = get_cstr!(func_name);
 
-    // Move RuntimeState into wasm-bridge for execution, then recover it.
+    // Move RuntimeState into wasmtime-engine for execution, then recover it.
     let state = std::mem::replace(
         &mut renderer.state,
         RuntimeState::new("about:blank".to_string()),
     );
 
-    match wasm_bridge::run_wat(state, wat_str, func_str) {
+    match wasmtime_engine::run_wat(state, wat_str, func_str) {
         Ok(state) => {
             renderer.state = state;
             // Auto-commit after WASM execution.
