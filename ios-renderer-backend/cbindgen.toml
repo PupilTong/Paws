@@ -1,5 +1,3 @@
-[defines]
-
 language = "C"
 
 # Only expose the ios-renderer-backend crate's public API.

@@ -194,7 +194,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\ncd \"$SRCROOT/..\"\n\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\nelse\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    CARGO_FLAGS=\"--release\"\n    CARGO_DIR=\"release\"\nelse\n    CARGO_FLAGS=\"\"\n    CARGO_DIR=\"debug\"\nfi\n\ncargo build --target \"$RUST_TARGET\" -p ios-renderer-backend $CARGO_FLAGS\n";
+			shellScript = "set -e\n\n# Xcode strips the user PATH — ensure cargo is available.\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\n\n# Point SDK/toolchain at Xcode.app (needed when xcode-select points to CommandLineTools).\nexport DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    export SDKROOT=\"$DEVELOPER_DIR/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk\"\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\nelse\n    export SDKROOT=\"$DEVELOPER_DIR/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk\"\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    CARGO_FLAGS=\"--release\"\nelse\n    CARGO_FLAGS=\"\"\nfi\n\ncd \"$SRCROOT/..\"\ncargo build --target \"$RUST_TARGET\" -p ios-renderer-backend $CARGO_FLAGS\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
