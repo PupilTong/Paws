@@ -1080,6 +1080,7 @@ dependencies = [
  "cbindgen",
  "engine",
  "fnv",
+ "stylo",
  "wasm-bridge",
 ]
 
