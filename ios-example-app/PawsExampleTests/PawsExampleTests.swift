@@ -102,10 +102,35 @@ final class PawsExampleTests: XCTestCase {
                 return
             }
 
+            // CSS named colors: red=#FF0000, green=#008000, blue=#0000FF, orange=#FFA500
+            let expectedColors: [(r: CGFloat, g: CGFloat, b: CGFloat)] = [
+                (1.0, 0.0, 0.0),         // red
+                (0.0, 128.0/255.0, 0.0),  // green (#008000)
+                (0.0, 0.0, 1.0),          // blue
+                (1.0, 165.0/255.0, 0.0),  // orange (#FFA500)
+            ]
+
             for (i, layer) in sublayers.enumerated() {
-                XCTAssertNotNil(
-                    layer.backgroundColor,
-                    "Child \(i) should have a background color"
+                guard let bgColor = layer.backgroundColor,
+                      let components = bgColor.components,
+                      components.count >= 3 else {
+                    XCTFail("Child \(i) should have a background color with RGB components")
+                    continue
+                }
+
+                let expected = expectedColors[i]
+                let tolerance: CGFloat = 0.02
+                XCTAssertEqual(
+                    components[0], expected.r, accuracy: tolerance,
+                    "Child \(i) red component mismatch"
+                )
+                XCTAssertEqual(
+                    components[1], expected.g, accuracy: tolerance,
+                    "Child \(i) green component mismatch"
+                )
+                XCTAssertEqual(
+                    components[2], expected.b, accuracy: tolerance,
+                    "Child \(i) blue component mismatch"
                 )
             }
             expectation.fulfill()

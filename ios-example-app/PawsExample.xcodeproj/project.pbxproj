@@ -194,7 +194,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n\n# Xcode strips the user PATH — ensure cargo is available.\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\n\n# Point SDK/toolchain at Xcode.app (needed when xcode-select points to CommandLineTools).\nexport DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    export SDKROOT=\"$DEVELOPER_DIR/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk\"\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\nelse\n    export SDKROOT=\"$DEVELOPER_DIR/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk\"\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    CARGO_FLAGS=\"--release\"\nelse\n    CARGO_FLAGS=\"\"\nfi\n\ncd \"$SRCROOT/..\"\ncargo build --target \"$RUST_TARGET\" -p ios-renderer-backend $CARGO_FLAGS\n";
+			shellScript = "set -e\n\n# Xcode strips the user PATH — ensure cargo is available.\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\n\n# Resolve DEVELOPER_DIR dynamically so builds work regardless of Xcode\n# install location (Xcode.app, Xcode-beta.app, custom path, etc.).\n# Fall back to xcode-select if DEVELOPER_DIR is not already set by Xcode.\nif [ -z \"$DEVELOPER_DIR\" ]; then\n    export DEVELOPER_DIR=$(xcode-select -p 2>/dev/null || echo /Applications/Xcode.app/Contents/Developer)\nfi\n\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    export SDKROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\nelse\n    export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    CARGO_FLAGS=\"--release\"\n    CARGO_PROFILE=\"release\"\nelse\n    CARGO_FLAGS=\"\"\n    CARGO_PROFILE=\"debug\"\nfi\n\nCARGO_TARGET_DIR=\"$SRCROOT/../target\"\ncd \"$SRCROOT/..\"\ncargo build --target \"$RUST_TARGET\" -p ios-renderer-backend $CARGO_FLAGS\n\n# Write the resolved library path so Xcode can find it without hardcoded search paths.\nmkdir -p \"$SRCROOT/../target/xcode\"\necho \"$CARGO_TARGET_DIR/$RUST_TARGET/$CARGO_PROFILE\" > \"$SRCROOT/../target/xcode/lib-path.txt\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -289,9 +289,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(SRCROOT)/../target/aarch64-apple-ios-sim/debug",
-					"$(SRCROOT)/../target/aarch64-apple-ios-sim/release",
 					"$(SRCROOT)/../target/aarch64-apple-ios/debug",
-					"$(SRCROOT)/../target/aarch64-apple-ios/release",
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.paws.example;
@@ -314,9 +312,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = (
-					"$(SRCROOT)/../target/aarch64-apple-ios-sim/debug",
 					"$(SRCROOT)/../target/aarch64-apple-ios-sim/release",
-					"$(SRCROOT)/../target/aarch64-apple-ios/debug",
 					"$(SRCROOT)/../target/aarch64-apple-ios/release",
 				);
 				MARKETING_VERSION = 1.0;
