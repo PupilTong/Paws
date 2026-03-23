@@ -48,11 +48,12 @@ impl PawsRenderer {
     /// tree to the UIKit view hierarchy under the stored root view.
     ///
     /// No-op if no root view has been set.
-    pub(crate) fn commit(&mut self) {
+    pub(crate) fn commit(&mut self) -> Result<(), RendererError> {
         let layout = self.state.commit();
         if let Some(root_view) = self.root_view {
-            let _ = self.view_tree.apply(&layout, root_view);
+            self.view_tree.apply(&layout, root_view)?;
         }
+        Ok(())
     }
 }
 
@@ -210,11 +211,7 @@ pub extern "C" fn paws_renderer_set_root_view(
     root_view: *mut c_void,
 ) -> i32 {
     let renderer = get_renderer!(renderer);
-    renderer.root_view = if root_view.is_null() {
-        None
-    } else {
-        Some(root_view)
-    };
+    renderer.root_view = (!root_view.is_null()).then_some(root_view);
     0
 }
 
@@ -352,7 +349,7 @@ mod tests {
 
         // SAFETY: renderer is valid, created above.
         let r = unsafe { &mut *renderer };
-        r.commit();
+        r.commit().unwrap();
 
         let log = take_call_log();
 
@@ -382,7 +379,7 @@ mod tests {
         // Commit without setting root view — should not create any UIKit views.
         // SAFETY: renderer is valid, created above.
         let r = unsafe { &mut *renderer };
-        r.commit();
+        r.commit().unwrap();
 
         let log = take_call_log();
         assert!(
