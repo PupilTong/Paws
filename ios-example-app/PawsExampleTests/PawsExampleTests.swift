@@ -17,15 +17,14 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        // postRunWat sends to background thread — should not crash.
-        view.renderer.postRunWat(demoWat, functionName: "run")
-
-        // Wait for ops to be dispatched back to main thread.
-        let expectation = expectation(description: "ops dispatched")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        // Fulfill when the OpExecutor processes the op buffer.
+        let expectation = expectation(description: "ops executed")
+        view.renderer.executor.onExecute = {
             expectation.fulfill()
         }
-        wait(for: [expectation], timeout: 2.0)
+
+        view.renderer.postRunWat(demoWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
     }
 
     func testCommitProducesLayers() {
@@ -33,11 +32,8 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        view.renderer.postRunWat(demoWat, functionName: "run")
-
-        // Wait for the async ops to be executed on the main thread.
         let expectation = expectation(description: "layout applied")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        view.renderer.executor.onExecute = {
             // The renderer view should have content after ops execute.
             // Root LayoutBox creates a UIView as a subview of rendererView.
             // That UIView's layer should contain CALayer sublayers for child divs.
@@ -55,7 +51,9 @@ final class PawsExampleTests: XCTestCase {
             }
             expectation.fulfill()
         }
-        wait(for: [expectation], timeout: 2.0)
+
+        view.renderer.postRunWat(demoWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
     }
 
     func testLayerFrames() {
@@ -63,10 +61,8 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        view.renderer.postRunWat(demoWat, functionName: "run")
-
         let expectation = expectation(description: "layer frames")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        view.renderer.executor.onExecute = {
             guard let rootDiv = view.subviews.first,
                   let sublayers = rootDiv.layer.sublayers,
                   sublayers.count == 4 else {
@@ -89,7 +85,9 @@ final class PawsExampleTests: XCTestCase {
             }
             expectation.fulfill()
         }
-        wait(for: [expectation], timeout: 2.0)
+
+        view.renderer.postRunWat(demoWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
     }
 
     func testLayerBackgroundColors() {
@@ -97,10 +95,8 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        view.renderer.postRunWat(demoWat, functionName: "run")
-
         let expectation = expectation(description: "layer colors")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        view.renderer.executor.onExecute = {
             guard let rootDiv = view.subviews.first,
                   let sublayers = rootDiv.layer.sublayers,
                   sublayers.count == 4 else {
@@ -142,6 +138,8 @@ final class PawsExampleTests: XCTestCase {
             }
             expectation.fulfill()
         }
-        wait(for: [expectation], timeout: 2.0)
+
+        view.renderer.postRunWat(demoWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
     }
 }

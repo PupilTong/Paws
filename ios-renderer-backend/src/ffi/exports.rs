@@ -366,13 +366,36 @@ fn read_cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Condvar, Mutex};
 
     use super::*;
 
-    /// Test capture for the completion callback.
+    /// Test capture for the completion callback. Uses a condvar so tests
+    /// can wait deterministically instead of sleeping.
     struct TestCapture {
         ops: Mutex<Vec<u8>>,
+        condvar: Condvar,
+    }
+
+    impl TestCapture {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                ops: Mutex::new(Vec::new()),
+                condvar: Condvar::new(),
+            })
+        }
+
+        /// Blocks until the completion callback fires, with a timeout.
+        fn wait_for_ops(&self) -> Vec<u8> {
+            let guard = self.ops.lock().unwrap();
+            let (guard, _timeout) = self
+                .condvar
+                .wait_timeout_while(guard, std::time::Duration::from_secs(5), |ops| {
+                    ops.is_empty()
+                })
+                .unwrap();
+            guard.clone()
+        }
     }
 
     extern "C" fn test_completion(ptr: *const u8, len: usize, ctx: *mut c_void) {
@@ -385,12 +408,11 @@ mod tests {
             Vec::new()
         };
         *capture.ops.lock().unwrap() = bytes;
+        capture.condvar.notify_all();
     }
 
     fn create_test_renderer() -> (*mut PawsRenderer, Arc<TestCapture>) {
-        let capture = Arc::new(TestCapture {
-            ops: Mutex::new(Vec::new()),
-        });
+        let capture = TestCapture::new();
         let ctx = Arc::as_ptr(&capture) as *mut c_void;
         let renderer = paws_renderer_create(std::ptr::null(), test_completion, ctx);
         assert!(!renderer.is_null());
@@ -405,9 +427,7 @@ mod tests {
 
     #[test]
     fn test_create_renderer_valid_url() {
-        let capture = Arc::new(TestCapture {
-            ops: Mutex::new(Vec::new()),
-        });
+        let capture = TestCapture::new();
         let ctx = Arc::as_ptr(&capture) as *mut c_void;
         let url = CString::new("https://example.com").unwrap();
         let renderer = paws_renderer_create(url.as_ptr(), test_completion, ctx);
@@ -466,10 +486,8 @@ mod tests {
         let result = paws_renderer_post_commit(renderer);
         assert_eq!(result, 0);
 
-        // Give background thread time to process.
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        let ops_bytes = capture.ops.lock().unwrap();
+        // Wait for the completion callback to fire (deterministic, no sleep).
+        let ops_bytes = capture.wait_for_ops();
         assert!(
             !ops_bytes.is_empty(),
             "post_commit should produce a non-empty op buffer"
@@ -508,10 +526,8 @@ mod tests {
         let result = paws_renderer_post_run_wat(renderer, wat.as_ptr(), func.as_ptr());
         assert_eq!(result, 0, "post_run_wat should return 0 immediately");
 
-        // Give background thread time to process.
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        let ops_bytes = capture.ops.lock().unwrap();
+        // Wait for the completion callback to fire (deterministic, no sleep).
+        let ops_bytes = capture.wait_for_ops();
         assert!(
             !ops_bytes.is_empty(),
             "post_run_wat should produce a non-empty op buffer"

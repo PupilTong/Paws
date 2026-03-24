@@ -44,6 +44,10 @@ public final class OpExecutor {
     /// The root UIView to render into.
     private let rootView: UIView
 
+    /// Optional callback invoked after each `execute()` completes.
+    /// Used by tests to synchronize on op execution instead of sleeping.
+    public var onExecute: (() -> Void)?
+
     private struct Entry {
         let obj: AnyObject    // UIView, UIScrollView, or CALayer
         let kind: UInt8       // OP_DECLARE_VIEW / SCROLLVIEW / LAYER tag
@@ -150,6 +154,8 @@ public final class OpExecutor {
                 break // Unknown op — skip
             }
         }
+
+        onExecute?()
     }
 
     // MARK: - Private helpers

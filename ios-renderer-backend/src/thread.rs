@@ -272,11 +272,34 @@ fn do_commit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Condvar, Mutex};
 
-    /// A test completion callback that captures the op buffer contents.
+    /// A test completion callback that captures the op buffer contents
+    /// and signals a condvar so tests can wait deterministically.
     struct TestCapture {
         ops: Mutex<Vec<u8>>,
+        condvar: Condvar,
+    }
+
+    impl TestCapture {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                ops: Mutex::new(Vec::new()),
+                condvar: Condvar::new(),
+            })
+        }
+
+        /// Blocks until the completion callback fires, with a timeout.
+        fn wait_for_ops(&self) -> Vec<u8> {
+            let guard = self.ops.lock().unwrap();
+            let (guard, _timeout) = self
+                .condvar
+                .wait_timeout_while(guard, std::time::Duration::from_secs(5), |ops| {
+                    ops.is_empty()
+                })
+                .unwrap();
+            guard.clone()
+        }
     }
 
     extern "C" fn test_completion(ptr: *const u8, len: usize, ctx: *mut std::ffi::c_void) {
@@ -289,13 +312,12 @@ mod tests {
             Vec::new()
         };
         *capture.ops.lock().unwrap() = bytes;
+        capture.condvar.notify_all();
     }
 
     #[test]
     fn test_engine_handle_create_and_shutdown() {
-        let capture = Arc::new(TestCapture {
-            ops: Mutex::new(Vec::new()),
-        });
+        let capture = TestCapture::new();
         let ctx = Arc::as_ptr(&capture) as *mut std::ffi::c_void;
 
         let mut handle =
@@ -306,9 +328,7 @@ mod tests {
 
     #[test]
     fn test_create_element_via_channel() {
-        let capture = Arc::new(TestCapture {
-            ops: Mutex::new(Vec::new()),
-        });
+        let capture = TestCapture::new();
         let ctx = Arc::as_ptr(&capture) as *mut std::ffi::c_void;
 
         let handle = EngineHandle::spawn("https://example.com".to_string(), test_completion, ctx);
@@ -333,9 +353,7 @@ mod tests {
 
     #[test]
     fn test_commit_produces_ops() {
-        let capture = Arc::new(TestCapture {
-            ops: Mutex::new(Vec::new()),
-        });
+        let capture = TestCapture::new();
         let ctx = Arc::as_ptr(&capture) as *mut std::ffi::c_void;
 
         let handle = EngineHandle::spawn("https://example.com".to_string(), test_completion, ctx);
@@ -378,10 +396,8 @@ mod tests {
         // Commit should invoke the callback with ops.
         handle.tx.send(Command::Commit).unwrap();
 
-        // Give the background thread a moment to process.
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        let ops_bytes = capture.ops.lock().unwrap();
+        // Wait for the completion callback to fire (deterministic, no sleep).
+        let ops_bytes = capture.wait_for_ops();
         assert!(
             !ops_bytes.is_empty(),
             "commit should produce a non-empty op buffer"
