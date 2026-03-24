@@ -30,8 +30,7 @@ fn with_memory_data<T>(
         // SAFETY: Shared memory may be concurrently modified, but in our
         // single-threaded WASM execution model no concurrent writes occur
         // during host function calls. We read a snapshot of the data.
-        let data =
-            unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const u8, raw.len()) };
+        let data = unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const u8, raw.len()) };
         return f(data);
     }
 
