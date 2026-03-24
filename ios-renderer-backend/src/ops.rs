@@ -112,6 +112,7 @@ impl OpBuffer {
     }
 
     /// Returns the number of ops in the buffer.
+    #[cfg(test)]
     pub(crate) fn op_count(&self) -> usize {
         self.data.len() / SLOT_SIZE
     }

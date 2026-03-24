@@ -10,10 +10,6 @@
 //! The op-code buffer is a flat array of 32-byte slots passed via a
 //! completion callback. Swift's `OpExecutor` decodes and executes them.
 
-// Handle wrappers and FFI types are part of the public API surface but not all
-// are consumed internally yet. Suppress dead_code warnings for the crate.
-#![allow(dead_code)]
-
 mod error;
 pub(crate) mod ffi;
 mod ops;
