@@ -15,6 +15,7 @@ class ViewController: UIViewController {
         view.addSubview(rendererView)
 
         // Run the demo WAT module — creates the flex container with 4 colored divs.
-        rendererView.renderer.runWat(demoWat, functionName: "run")
+        // This is async: ops will be dispatched to the main thread when ready.
+        rendererView.renderer.postRunWat(demoWat, functionName: "run")
     }
 }

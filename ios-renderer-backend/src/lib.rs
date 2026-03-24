@@ -1,18 +1,17 @@
 //! iOS renderer backend for Paws.
 //!
-//! Bridges the Paws engine's [`LayoutBox`](engine::LayoutBox) output to UIKit
-//! via C FFI. Rust owns and controls UIView, UILabel, UITextView, UIScrollView,
-//! and CALayer objects through opaque pointer handles.
-
-// Handle wrappers and FFI types are part of the public API surface but not all
-// are consumed internally yet. Suppress dead_code warnings for the crate.
-#![allow(dead_code)]
-// In test mode, the Swift FFI imports are replaced with plain Rust stub
-// functions, making `unsafe` blocks around them unnecessary. Allow this
-// crate-wide so callers don't need per-site annotations.
-#![cfg_attr(test, allow(unused_unsafe))]
+//! The rendering pipeline runs on a background thread:
+//! 1. WASM execution mutates the DOM via `RuntimeState`
+//! 2. Stylo resolves CSS styles
+//! 3. Taffy computes layout
+//! 4. `ViewTree` generates minimal updating op-codes
+//! 5. Op-codes are sent to Swift's main thread for UIKit execution
+//!
+//! The op-code buffer is a flat array of 32-byte slots passed via a
+//! completion callback. Swift's `OpExecutor` decodes and executes them.
 
 mod error;
 pub(crate) mod ffi;
-pub(crate) mod handles;
+mod ops;
 mod renderer;
+mod thread;

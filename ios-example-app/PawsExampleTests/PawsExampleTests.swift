@@ -5,7 +5,8 @@ import PawsRenderer
 final class PawsExampleTests: XCTestCase {
 
     func testRendererCreation() {
-        let renderer = PawsRendererInstance()
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
+        let renderer = PawsRendererInstance(baseURL: "about:blank", rootView: view)
         // Verify basic creation doesn't crash.
         let id = renderer.createElement("div")
         XCTAssertGreaterThan(id, 0)
@@ -16,8 +17,14 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        // runWat preconditions on success — this verifies the WAT compiles and runs.
-        view.renderer.runWat(demoWat, functionName: "run")
+        // Fulfill when the OpExecutor processes the op buffer.
+        let expectation = expectation(description: "ops executed")
+        view.renderer.executor.onExecute = {
+            expectation.fulfill()
+        }
+
+        view.renderer.postRunWat(demoWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
     }
 
     func testCommitProducesLayers() {
@@ -25,21 +32,17 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        view.renderer.runWat(demoWat, functionName: "run")
-
-        // After commit the root view should have child content.
-        // The root LayoutBox creates a UIView (subview of rendererView).
-        // That UIView's layer should contain CALayer sublayers for the 4 child divs.
         let expectation = expectation(description: "layout applied")
-        DispatchQueue.main.async {
-            // The renderer view should have at least one subview (the root div).
+        view.renderer.executor.onExecute = {
+            // The renderer view should have content after ops execute.
+            // Root LayoutBox creates a UIView as a subview of rendererView.
+            // That UIView's layer should contain CALayer sublayers for child divs.
             XCTAssertFalse(
                 view.subviews.isEmpty,
                 "PawsRendererView should have a subview after commit"
             )
 
             if let rootDiv = view.subviews.first {
-                // The root div (UIView) should have sublayers for the 4 child divs.
                 let sublayers = rootDiv.layer.sublayers ?? []
                 XCTAssertEqual(
                     sublayers.count, 4,
@@ -48,7 +51,9 @@ final class PawsExampleTests: XCTestCase {
             }
             expectation.fulfill()
         }
-        wait(for: [expectation], timeout: 2.0)
+
+        view.renderer.postRunWat(demoWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
     }
 
     func testLayerFrames() {
@@ -56,10 +61,8 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        view.renderer.runWat(demoWat, functionName: "run")
-
         let expectation = expectation(description: "layer frames")
-        DispatchQueue.main.async {
+        view.renderer.executor.onExecute = {
             guard let rootDiv = view.subviews.first,
                   let sublayers = rootDiv.layer.sublayers,
                   sublayers.count == 4 else {
@@ -82,7 +85,9 @@ final class PawsExampleTests: XCTestCase {
             }
             expectation.fulfill()
         }
-        wait(for: [expectation], timeout: 2.0)
+
+        view.renderer.postRunWat(demoWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
     }
 
     func testLayerBackgroundColors() {
@@ -90,10 +95,8 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        view.renderer.runWat(demoWat, functionName: "run")
-
         let expectation = expectation(description: "layer colors")
-        DispatchQueue.main.async {
+        view.renderer.executor.onExecute = {
             guard let rootDiv = view.subviews.first,
                   let sublayers = rootDiv.layer.sublayers,
                   sublayers.count == 4 else {
@@ -135,6 +138,8 @@ final class PawsExampleTests: XCTestCase {
             }
             expectation.fulfill()
         }
-        wait(for: [expectation], timeout: 2.0)
+
+        view.renderer.postRunWat(demoWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
     }
 }

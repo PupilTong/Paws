@@ -1,39 +1,223 @@
-//! LayoutBox tree walker that creates and updates UIKit views and CALayers.
+//! ViewTree: transformation layer that walks the `LayoutBox` tree and
+//! generates minimal updating op-codes.
 //!
-//! [`ViewTree`] maintains a map from engine `NodeId`s to retained UIView or
-//! CALayer pointers. On each [`apply`](ViewTree::apply) call it walks the new
-//! `LayoutBox` tree, reusing existing entries where possible and creating
-//! new ones as needed.
+//! The [`ViewTree`] maintains a snapshot of each node's properties from
+//! the previous frame. On each [`process`](ViewTree::process) call it
+//! compares the current tree against the snapshot and only emits ops for
+//! properties that actually changed. New nodes get full Create + property
+//! ops, removed nodes get Detach + Release ops.
 //!
-//! Simple non-scrolling nodes are rendered as standalone `CALayer`s for
-//! better performance. The root node is always a `UIView` so it can be
-//! attached to the host `UIView` via `addSubview`. Scroll-overflow nodes
-//! use `UIScrollView`.
-
-use std::ffi::c_void;
+//! This is NOT a vdom-style diff — there is no node reuse or reordering
+//! logic. It is a per-node property-level dirty check.
 
 use engine::LayoutBox;
-use fnv::FnvHashSet;
+use fnv::FnvHashMap;
 use style::values::specified::box_::Overflow;
 
-use crate::error::RendererError;
-use crate::ffi::imports;
+use crate::ops::{OpBuffer, ViewKind};
+
+/// Snapshot of a node's properties from a single frame.
+///
+/// Used for dirty checking: only emit ops when a property differs from
+/// the previous frame's snapshot.
+#[derive(Clone, PartialEq)]
+struct NodeSnapshot {
+    kind: ViewKind,
+    parent_id: u64,
+    parent_kind: ViewKind,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    bg_color: Option<(f32, f32, f32, f32)>,
+    clips: bool,
+    content_size: Option<(f32, f32)>,
+}
+
+/// Walks `LayoutBox` trees and generates minimal updating op-codes by
+/// comparing against the previous frame's state.
+///
+/// The ViewTree is fully `Send` — it holds no UIKit pointers and can
+/// safely live on the background engine thread.
+pub(crate) struct ViewTree {
+    prev: FnvHashMap<u64, NodeSnapshot>,
+}
+
+impl ViewTree {
+    pub(crate) fn new() -> Self {
+        Self {
+            prev: FnvHashMap::default(),
+        }
+    }
+
+    /// Processes a `LayoutBox` tree and emits updating op-codes into `ops`.
+    ///
+    /// Compares each node against the previous frame's snapshot:
+    /// - **New node** → Declare + all property ops
+    /// - **Same kind** → only emit ops for changed properties
+    /// - **Kind changed** → Detach + Release old, Declare + all props for new
+    /// - **Removed node** → Detach + Release
+    pub(crate) fn process(&mut self, layout: &LayoutBox, ops: &mut OpBuffer) {
+        ops.clear();
+        let mut current = FnvHashMap::default();
+        self.process_node(layout, u64::MAX, ViewKind::View, true, ops, &mut current);
+
+        // Emit Release ops for nodes removed since last frame.
+        for (id, snap) in &self.prev {
+            if !current.contains_key(id) {
+                ops.push_detach(*id, snap.kind);
+                ops.push_release(*id, snap.kind);
+            }
+        }
+
+        self.prev = current;
+    }
+
+    fn process_node(
+        &self,
+        node: &LayoutBox,
+        parent_id: u64,
+        parent_kind: ViewKind,
+        is_root: bool,
+        ops: &mut OpBuffer,
+        current: &mut FnvHashMap<u64, NodeSnapshot>,
+    ) {
+        let node_id = u64::from(node.node_id);
+        let kind = determine_kind(node, is_root);
+        let bg = extract_background_color(node);
+        let clips = has_clip_overflow(node);
+        let content_size = if matches!(kind, ViewKind::ScrollView) {
+            Some(compute_content_size(node))
+        } else {
+            None
+        };
+
+        let snap = NodeSnapshot {
+            kind,
+            parent_id,
+            parent_kind,
+            x: node.x,
+            y: node.y,
+            w: node.width,
+            h: node.height,
+            bg_color: bg,
+            clips,
+            content_size,
+        };
+
+        match self.prev.get(&node_id) {
+            None => {
+                // New node — emit create + all properties.
+                emit_full_node(node_id, &snap, ops);
+            }
+            Some(prev) if prev.kind != kind => {
+                // Kind changed — release old, create new.
+                ops.push_detach(node_id, prev.kind);
+                ops.push_release(node_id, prev.kind);
+                emit_full_node(node_id, &snap, ops);
+            }
+            Some(prev) => {
+                // Same kind — only emit changed properties.
+                if prev.x != snap.x || prev.y != snap.y || prev.w != snap.w || prev.h != snap.h {
+                    ops.push_set_frame(kind, node_id, snap.x, snap.y, snap.w, snap.h);
+                }
+                if prev.parent_id != parent_id || prev.parent_kind != parent_kind {
+                    ops.push_attach(node_id, kind, parent_id, parent_kind);
+                }
+                if prev.bg_color != bg {
+                    if let Some((r, g, b, a)) = bg {
+                        ops.push_bg_color(node_id, r, g, b, a);
+                    }
+                }
+                if prev.clips != clips && matches!(kind, ViewKind::View | ViewKind::ScrollView) {
+                    ops.push_clips(node_id, clips);
+                }
+                if prev.content_size != content_size {
+                    if let Some((cw, ch)) = content_size {
+                        ops.push_content_size(node_id, cw, ch);
+                    }
+                }
+            }
+        }
+
+        current.insert(node_id, snap);
+
+        // Recurse children in z-index order.
+        let mut sorted: Vec<&LayoutBox> = node.children.iter().collect();
+        sorted.sort_unstable_by_key(|c| c.z_index.unwrap_or(0));
+        for child in &sorted {
+            self.process_node(child, node_id, kind, false, ops, current);
+        }
+    }
+}
+
+/// Emits a full Declare + all property ops for a node.
+fn emit_full_node(node_id: u64, snap: &NodeSnapshot, ops: &mut OpBuffer) {
+    ops.push_declare(snap.kind, node_id, snap.parent_id);
+    ops.push_set_frame(snap.kind, node_id, snap.x, snap.y, snap.w, snap.h);
+    if let Some((r, g, b, a)) = snap.bg_color {
+        ops.push_bg_color(node_id, r, g, b, a);
+    }
+    if matches!(snap.kind, ViewKind::View | ViewKind::ScrollView) {
+        ops.push_clips(node_id, snap.clips);
+    }
+    if let Some((cw, ch)) = snap.content_size {
+        ops.push_content_size(node_id, cw, ch);
+    }
+    // Attach to parent — root uses sentinel u64::MAX which Swift maps to rootView.
+    if snap.parent_id != u64::MAX {
+        ops.push_attach(node_id, snap.kind, snap.parent_id, snap.parent_kind);
+    }
+}
+
+// ── Helper functions ────────────────────────────────────────────────────
+
+/// Determines the UIKit object kind for a layout node.
+fn determine_kind(node: &LayoutBox, is_root: bool) -> ViewKind {
+    let (overflow_x, overflow_y) = node
+        .computed_values
+        .as_ref()
+        .map(|cv| (cv.clone_overflow_x(), cv.clone_overflow_y()))
+        .unwrap_or((Overflow::Visible, Overflow::Visible));
+
+    let needs_scroll = matches!(overflow_x, Overflow::Scroll | Overflow::Auto)
+        || matches!(overflow_y, Overflow::Scroll | Overflow::Auto);
+
+    if needs_scroll {
+        ViewKind::ScrollView
+    } else if is_root {
+        ViewKind::View
+    } else {
+        ViewKind::Layer
+    }
+}
+
+/// Returns `true` if the node's overflow requires clipping.
+fn has_clip_overflow(node: &LayoutBox) -> bool {
+    node.computed_values
+        .as_ref()
+        .map(|cv| {
+            let ox = cv.clone_overflow_x();
+            let oy = cv.clone_overflow_y();
+            matches!(ox, Overflow::Hidden | Overflow::Clip)
+                || matches!(oy, Overflow::Hidden | Overflow::Clip)
+        })
+        .unwrap_or(false)
+}
 
 /// Extracts the background color from computed values as an RGBA tuple.
 ///
 /// Returns `None` for transparent backgrounds (alpha ≈ 0) or non-absolute colors.
-fn extract_background_color(
-    cv: &style::properties::ComputedValues,
-) -> Option<(f32, f32, f32, f32)> {
+fn extract_background_color(node: &LayoutBox) -> Option<(f32, f32, f32, f32)> {
     use style::values::computed::Color;
 
+    let cv = node.computed_values.as_ref()?;
     match cv.clone_background_color() {
         Color::Absolute(abs) => {
             let r = abs.components.0;
             let g = abs.components.1;
             let b = abs.components.2;
             let a = abs.alpha;
-            // Skip fully transparent backgrounds.
             if a.abs() < f32::EPSILON {
                 None
             } else {
@@ -44,342 +228,25 @@ fn extract_background_color(
     }
 }
 
-/// Tracks the mapping from engine node IDs to UIKit view/layer pointers.
-///
-/// Retained objects are released when they are removed from the tree or
-/// when the `ViewTree` itself is dropped.
-pub(crate) struct ViewTree {
-    /// Maps engine `NodeId` (as `u64`) → retained object pointer.
-    view_map: fnv::FnvHashMap<u64, ViewEntry>,
-}
-
-/// An entry in the view map tracking the UIKit object type.
-struct ViewEntry {
-    /// Retained opaque pointer to the UIView, UIScrollView, or CALayer.
-    ptr: *mut c_void,
-    /// What kind of UIKit object this is.
-    kind: ViewKind,
-}
-
-/// Discriminant for the type of UIKit object backing a node.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ViewKind {
-    /// A plain `UIView`.
-    View,
-    /// A `UIScrollView`.
-    ScrollView,
-    /// A standalone `CALayer` (lightweight, no responder chain).
-    Layer,
-}
-
-impl ViewTree {
-    pub(crate) fn new() -> Self {
-        Self {
-            view_map: fnv::FnvHashMap::default(),
-        }
-    }
-
-    /// Applies a `LayoutBox` tree to the UIKit hierarchy under `root_view`.
-    ///
-    /// Creates, updates, or removes views/layers as needed to match the
-    /// layout tree. The root `LayoutBox` is always backed by a `UIView`;
-    /// non-scrolling children become `CALayer`s.
-    pub(crate) fn apply(
-        &mut self,
-        layout: &LayoutBox,
-        root_view: *mut c_void,
-    ) -> Result<(), RendererError> {
-        if root_view.is_null() {
-            return Err(RendererError::InvalidHandle);
-        }
-
-        // Track which node IDs are visited so we can prune stale entries.
-        let mut visited = FnvHashSet::default();
-
-        self.apply_node(layout, root_view, ViewKind::View, true, &mut visited)?;
-
-        // Remove objects for nodes no longer in the tree.
-        self.view_map.retain(|id, entry| {
-            if visited.contains(id) {
-                true
-            } else {
-                // SAFETY: Removing from parent and releasing the retained pointer.
-                unsafe {
-                    detach_entry(entry);
-                    release_entry(entry);
-                }
-                false
-            }
-        });
-
-        Ok(())
-    }
-
-    /// Recursively creates/updates an object for a `LayoutBox` node and its children.
-    ///
-    /// `parent_ptr` is the pointer to the parent UIView/CALayer.
-    /// `parent_kind` is the kind of the parent (needed for correct attachment).
-    /// `is_root` forces the node to be a `View` (the layout root must be a UIView).
-    fn apply_node(
-        &mut self,
-        node: &LayoutBox,
-        parent_ptr: *mut c_void,
-        parent_kind: ViewKind,
-        is_root: bool,
-        visited: &mut FnvHashSet<u64>,
-    ) -> Result<(), RendererError> {
-        let node_key = u64::from(node.node_id);
-        visited.insert(node_key);
-
-        // Extract overflow from computed values (default: Visible).
-        let (overflow_x, overflow_y) = node
-            .computed_values
-            .as_ref()
-            .map(|cv| (cv.clone_overflow_x(), cv.clone_overflow_y()))
-            .unwrap_or((Overflow::Visible, Overflow::Visible));
-
-        let needs_scroll_view = matches!(overflow_x, Overflow::Scroll | Overflow::Auto)
-            || matches!(overflow_y, Overflow::Scroll | Overflow::Auto);
-        let desired_kind = if needs_scroll_view {
-            ViewKind::ScrollView
-        } else if is_root {
-            ViewKind::View
-        } else {
-            ViewKind::Layer
-        };
-
-        // Get or create the object for this node.
-        let obj_ptr = match self.view_map.get(&node_key) {
-            Some(entry) if entry.kind == desired_kind => entry.ptr,
-            Some(_) => {
-                // Kind changed — recreate.
-                let old = self.view_map.remove(&node_key).unwrap();
-                // SAFETY: Removing stale object and releasing its pointer.
-                unsafe {
-                    detach_entry(&old);
-                    release_entry(&old);
-                }
-                create_entry(desired_kind, &mut self.view_map, node_key)?
-            }
-            None => create_entry(desired_kind, &mut self.view_map, node_key)?,
-        };
-
-        // Update frame.
-        // SAFETY: obj_ptr is a valid retained pointer.
-        unsafe {
-            match desired_kind {
-                ViewKind::View | ViewKind::ScrollView => {
-                    imports::swift_paws_view_set_frame(
-                        obj_ptr,
-                        node.x,
-                        node.y,
-                        node.width,
-                        node.height,
-                    );
-                }
-                ViewKind::Layer => {
-                    imports::swift_paws_layer_set_frame(
-                        obj_ptr,
-                        node.x,
-                        node.y,
-                        node.width,
-                        node.height,
-                    );
-                }
-            }
-        }
-
-        // Update background color.
-        let bg = node
-            .computed_values
-            .as_ref()
-            .and_then(|cv| extract_background_color(cv));
-        if let Some((r, g, b, a)) = bg {
-            // SAFETY: obj_ptr is a valid retained pointer.
-            unsafe {
-                match desired_kind {
-                    ViewKind::View | ViewKind::ScrollView => {
-                        imports::swift_paws_view_set_background_color(obj_ptr, r, g, b, a);
-                    }
-                    ViewKind::Layer => {
-                        imports::swift_paws_layer_set_background_color(obj_ptr, r, g, b, a);
-                    }
-                }
-            }
-        }
-
-        // Update clips-to-bounds (only for UIView/UIScrollView).
-        if matches!(desired_kind, ViewKind::View | ViewKind::ScrollView) {
-            let clips = overflow_x == Overflow::Hidden
-                || overflow_x == Overflow::Clip
-                || overflow_y == Overflow::Hidden
-                || overflow_y == Overflow::Clip;
-            // SAFETY: obj_ptr is a valid retained UIView.
-            unsafe {
-                imports::swift_paws_view_set_clips_to_bounds(obj_ptr, clips);
-            }
-        }
-
-        // If scroll view, update content size.
-        if needs_scroll_view {
-            let content_w = node
-                .children
-                .iter()
-                .map(|c| c.x + c.width)
-                .fold(0.0_f32, f32::max);
-            let content_h = node
-                .children
-                .iter()
-                .map(|c| c.y + c.height)
-                .fold(0.0_f32, f32::max);
-            // SAFETY: obj_ptr is a valid retained UIScrollView.
-            unsafe {
-                imports::swift_paws_scroll_view_set_content_size(obj_ptr, content_w, content_h);
-            }
-        }
-
-        // Sort children by z-index for correct stacking order.
-        let mut sorted_children: Vec<&LayoutBox> = node.children.iter().collect();
-        sorted_children.sort_unstable_by_key(|c| c.z_index.unwrap_or(0));
-
-        // Recurse into children (never root).
-        for child in &sorted_children {
-            self.apply_node(child, obj_ptr, desired_kind, false, visited)?;
-        }
-
-        // Attach this object to the parent.
-        // SAFETY: Both pointers are valid retained objects.
-        unsafe {
-            attach_to_parent(parent_ptr, parent_kind, obj_ptr, desired_kind);
-        }
-
-        Ok(())
-    }
-}
-
-impl Drop for ViewTree {
-    fn drop(&mut self) {
-        for entry in self.view_map.values() {
-            // SAFETY: Releasing all retained pointers.
-            unsafe {
-                detach_entry(entry);
-                release_entry(entry);
-            }
-        }
-    }
-}
-
-/// Attaches a child object to its parent using the correct method.
-///
-/// # Safety
-///
-/// Both `parent_ptr` and `child_ptr` must be valid retained pointers of
-/// the kinds indicated by `parent_kind` and `child_kind`.
-unsafe fn attach_to_parent(
-    parent_ptr: *mut c_void,
-    parent_kind: ViewKind,
-    child_ptr: *mut c_void,
-    child_kind: ViewKind,
-) {
-    match (parent_kind, child_kind) {
-        // View/ScrollView parent + View/ScrollView child → addSubview.
-        (ViewKind::View | ViewKind::ScrollView, ViewKind::View | ViewKind::ScrollView) => {
-            imports::swift_paws_view_add_subview(parent_ptr, child_ptr);
-        }
-        // View/ScrollView parent + Layer child → view.layer.addSublayer.
-        (ViewKind::View | ViewKind::ScrollView, ViewKind::Layer) => {
-            imports::swift_paws_view_add_sublayer(parent_ptr, child_ptr);
-        }
-        // Layer parent + Layer child → addSublayer.
-        (ViewKind::Layer, ViewKind::Layer) => {
-            imports::swift_paws_layer_add_sublayer(parent_ptr, child_ptr);
-        }
-        // Layer parent + View child — not supported in this implementation.
-        // This case should not occur since only scroll nodes become Views
-        // when they are not root, and scroll views under layers is an edge
-        // case we don't handle yet.
-        (ViewKind::Layer, ViewKind::View | ViewKind::ScrollView) => {
-            // Fallback: treat as layer-to-layer (won't render correctly but
-            // avoids a crash). A future version could wrap in a UIView.
-            imports::swift_paws_layer_add_sublayer(parent_ptr, child_ptr);
-        }
-    }
-}
-
-/// Creates a new UIKit object of the specified kind and inserts it into the map.
-fn create_entry(
-    kind: ViewKind,
-    map: &mut fnv::FnvHashMap<u64, ViewEntry>,
-    node_key: u64,
-) -> Result<*mut c_void, RendererError> {
-    // SAFETY: Calling Swift create functions which return retained pointers.
-    let ptr = unsafe {
-        match kind {
-            ViewKind::View => imports::swift_paws_view_create(),
-            ViewKind::ScrollView => imports::swift_paws_scroll_view_create(),
-            ViewKind::Layer => imports::swift_paws_layer_create(),
-        }
-    };
-    if ptr.is_null() {
-        return Err(RendererError::CallbackFailed);
-    }
-    map.insert(node_key, ViewEntry { ptr, kind });
-    Ok(ptr)
-}
-
-/// Detaches an entry from its parent (superview or superlayer).
-///
-/// # Safety
-///
-/// `entry.ptr` must be a valid retained pointer matching `entry.kind`.
-unsafe fn detach_entry(entry: &ViewEntry) {
-    match entry.kind {
-        ViewKind::View | ViewKind::ScrollView => {
-            imports::swift_paws_view_remove_from_superview(entry.ptr);
-        }
-        ViewKind::Layer => {
-            imports::swift_paws_layer_remove_from_superlayer(entry.ptr);
-        }
-    }
-}
-
-/// Releases an entry's retained pointer via the appropriate Swift callback.
-///
-/// # Safety
-///
-/// `entry.ptr` must be a valid retained pointer matching `entry.kind`.
-unsafe fn release_entry(entry: &ViewEntry) {
-    match entry.kind {
-        ViewKind::View => imports::swift_paws_view_release(entry.ptr),
-        ViewKind::ScrollView => imports::swift_paws_scroll_view_release(entry.ptr),
-        ViewKind::Layer => imports::swift_paws_layer_release(entry.ptr),
-    }
-}
-
-#[cfg(test)]
-impl ViewTree {
-    /// Returns the number of tracked entries.
-    fn len(&self) -> usize {
-        self.view_map.len()
-    }
-
-    /// Returns `true` if an entry is tracked for the given node ID.
-    fn contains_node(&self, node_id: u64) -> bool {
-        self.view_map.contains_key(&node_id)
-    }
+/// Computes the scroll content size from a node's children.
+fn compute_content_size(node: &LayoutBox) -> (f32, f32) {
+    let w = node
+        .children
+        .iter()
+        .map(|c| c.x + c.width)
+        .fold(0.0_f32, f32::max);
+    let h = node
+        .children
+        .iter()
+        .map(|c| c.y + c.height)
+        .fold(0.0_f32, f32::max);
+    (w, h)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::c_void;
-
-    use engine::LayoutBox;
-
-    use super::ViewTree;
-    use crate::error::RendererError;
-    use crate::ffi::imports::stubs::{clear_call_log, take_call_log, FfiCall};
-
-    use super::extract_background_color;
+    use super::*;
+    use crate::ops::{OpBuffer, OpTag};
 
     /// Creates a `LayoutBox` with the given node ID and default fields.
     fn layout(id: u64) -> LayoutBox {
@@ -401,450 +268,133 @@ mod tests {
         }
     }
 
-    /// A non-null sentinel representing the root UIView in tests.
-    fn root_view() -> *mut c_void {
-        0x8000 as *mut c_void
+    /// Collects all op tags from a buffer.
+    fn collect_tags(ops: &OpBuffer) -> Vec<u8> {
+        (0..ops.op_count()).filter_map(|i| ops.tag_at(i)).collect()
     }
 
     #[test]
-    fn test_apply_null_root_returns_error() {
-        clear_call_log();
+    fn test_first_frame_emits_full_ops() {
         let mut tree = ViewTree::new();
-        let node = layout(1);
-
-        let result = tree.apply(&node, std::ptr::null_mut());
-
-        assert_eq!(result, Err(RendererError::InvalidHandle));
-        assert!(take_call_log().is_empty(), "no UIKit calls should be made");
-    }
-
-    #[test]
-    fn test_apply_single_node() {
-        clear_call_log();
-        let mut tree = ViewTree::new();
+        let mut ops = OpBuffer::new();
         let node = layout_with_frame(1, 10.0, 20.0, 100.0, 50.0);
 
-        let result = tree.apply(&node, root_view());
-        assert!(result.is_ok());
-        assert_eq!(tree.len(), 1);
-        assert!(tree.contains_node(1));
+        tree.process(&node, &mut ops);
 
-        let log = take_call_log();
-
-        // Root should create a UIView (not a Layer).
-        let created_ptr = match &log[0] {
-            FfiCall::ViewCreate { ret } => *ret,
-            other => panic!("expected ViewCreate, got {other:?}"),
-        };
-
-        // Should set the frame with exact values.
-        assert!(log.contains(&FfiCall::ViewSetFrame {
-            ptr: created_ptr,
-            x: 10.0,
-            y: 20.0,
-            w: 100.0,
-            h: 50.0,
-        }));
-
-        // Should add as subview of root.
-        assert!(log.contains(&FfiCall::ViewAddSubview {
-            parent: root_view(),
-            child: created_ptr,
-        }));
+        let tags = collect_tags(&ops);
+        // Root: DeclareView + SetViewFrame + SetClipsToBounds (no bg, no content size)
+        assert!(tags.contains(&(OpTag::DeclareView as u8)));
+        assert!(tags.contains(&(OpTag::SetViewFrame as u8)));
+        assert!(tags.contains(&(OpTag::SetClipsToBounds as u8)));
     }
 
     #[test]
-    fn test_root_always_view() {
-        clear_call_log();
+    fn test_unchanged_frame_emits_nothing() {
         let mut tree = ViewTree::new();
-        let node = layout(1);
+        let mut ops = OpBuffer::new();
+        let node = layout_with_frame(1, 10.0, 20.0, 100.0, 50.0);
 
-        tree.apply(&node, root_view()).unwrap();
+        // First frame — full ops.
+        tree.process(&node, &mut ops);
+        assert!(ops.op_count() > 0);
 
-        let log = take_call_log();
-        assert!(
-            log.iter().any(|c| matches!(c, FfiCall::ViewCreate { .. })),
-            "root node should always create a UIView"
-        );
-        assert!(
-            !log.iter().any(|c| matches!(c, FfiCall::LayerCreate { .. })),
-            "root node should not create a CALayer"
-        );
+        // Second frame — same data, no changes.
+        tree.process(&node, &mut ops);
+        assert_eq!(ops.op_count(), 0, "unchanged tree should emit zero ops");
     }
 
     #[test]
-    fn test_child_uses_layer() {
-        clear_call_log();
+    fn test_changed_frame_emits_set_frame_only() {
         let mut tree = ViewTree::new();
-        let mut root = layout(1);
-        root.children = vec![layout_with_frame(2, 0.0, 0.0, 50.0, 50.0)];
+        let mut ops = OpBuffer::new();
 
-        tree.apply(&root, root_view()).unwrap();
+        tree.process(&layout_with_frame(1, 0.0, 0.0, 100.0, 50.0), &mut ops);
 
-        let log = take_call_log();
+        // Change frame only.
+        tree.process(&layout_with_frame(1, 5.0, 10.0, 200.0, 100.0), &mut ops);
 
-        // Root is a View, child is a Layer.
-        assert_eq!(
-            log.iter()
-                .filter(|c| matches!(c, FfiCall::ViewCreate { .. }))
-                .count(),
-            1,
-            "only root should be a UIView"
-        );
-        assert_eq!(
-            log.iter()
-                .filter(|c| matches!(c, FfiCall::LayerCreate { .. }))
-                .count(),
-            1,
-            "child should be a CALayer"
-        );
+        let tags = collect_tags(&ops);
+        assert!(tags.contains(&(OpTag::SetViewFrame as u8)));
+        // Should NOT re-declare.
+        assert!(!tags.contains(&(OpTag::DeclareView as u8)));
     }
 
     #[test]
-    fn test_layer_set_frame() {
-        clear_call_log();
+    fn test_removed_node_emits_detach_release() {
         let mut tree = ViewTree::new();
-        let mut root = layout(1);
-        root.children = vec![layout_with_frame(2, 5.0, 10.0, 50.0, 50.0)];
+        let mut ops = OpBuffer::new();
 
-        tree.apply(&root, root_view()).unwrap();
-
-        let log = take_call_log();
-        let layer_ptr = log
-            .iter()
-            .find_map(|c| match c {
-                FfiCall::LayerCreate { ret } => Some(*ret),
-                _ => None,
-            })
-            .expect("child should be a Layer");
-
-        assert!(
-            log.contains(&FfiCall::LayerSetFrame {
-                ptr: layer_ptr,
-                x: 5.0,
-                y: 10.0,
-                w: 50.0,
-                h: 50.0,
-            }),
-            "layer frame should be set"
-        );
-    }
-
-    #[test]
-    fn test_layer_under_view_uses_add_sublayer() {
-        clear_call_log();
-        let mut tree = ViewTree::new();
+        // Root with child.
         let mut root = layout(1);
         root.children = vec![layout(2)];
+        tree.process(&root, &mut ops);
 
-        tree.apply(&root, root_view()).unwrap();
+        // Root only — child removed.
+        let root_only = layout(1);
+        tree.process(&root_only, &mut ops);
 
-        let log = take_call_log();
-        let root_ptr = log
-            .iter()
-            .find_map(|c| match c {
-                FfiCall::ViewCreate { ret } => Some(*ret),
-                _ => None,
-            })
-            .unwrap();
-        let layer_ptr = log
-            .iter()
-            .find_map(|c| match c {
-                FfiCall::LayerCreate { ret } => Some(*ret),
-                _ => None,
-            })
-            .unwrap();
-
+        let tags = collect_tags(&ops);
         assert!(
-            log.contains(&FfiCall::ViewAddSublayer {
-                view: root_ptr,
-                layer: layer_ptr,
-            }),
-            "layer child of view should use view_add_sublayer"
+            tags.contains(&(OpTag::DetachLayer as u8)),
+            "removed layer should be detached"
+        );
+        assert!(
+            tags.contains(&(OpTag::ReleaseLayer as u8)),
+            "removed layer should be released"
         );
     }
 
     #[test]
-    fn test_layer_under_layer_uses_add_sublayer() {
-        clear_call_log();
+    fn test_child_uses_layer_kind() {
         let mut tree = ViewTree::new();
-        let mut child = layout(2);
-        child.children = vec![layout(3)]; // grandchild = layer under layer
+        let mut ops = OpBuffer::new();
+
         let mut root = layout(1);
-        root.children = vec![child];
+        root.children = vec![layout(2)];
+        tree.process(&root, &mut ops);
 
-        tree.apply(&root, root_view()).unwrap();
-
-        let log = take_call_log();
-        let layer_ptrs: Vec<*mut c_void> = log
-            .iter()
-            .filter_map(|c| match c {
-                FfiCall::LayerCreate { ret } => Some(*ret),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(layer_ptrs.len(), 2, "should have 2 layers");
-
-        let parent_layer = layer_ptrs[0];
-        let child_layer = layer_ptrs[1];
-
-        assert!(
-            log.contains(&FfiCall::LayerAddSublayer {
-                parent: parent_layer,
-                child: child_layer,
-            }),
-            "layer child of layer should use layer_add_sublayer"
-        );
-    }
-
-    #[test]
-    fn test_apply_reuses_existing_view() {
-        clear_call_log();
-        let mut tree = ViewTree::new();
-        let node = layout_with_frame(1, 0.0, 0.0, 50.0, 50.0);
-
-        tree.apply(&node, root_view()).unwrap();
-        let first_log = take_call_log();
-        let created_ptr = match &first_log[0] {
-            FfiCall::ViewCreate { ret } => *ret,
-            other => panic!("expected ViewCreate, got {other:?}"),
-        };
-
-        // Apply again with same node ID but different frame.
-        clear_call_log();
-        let node2 = layout_with_frame(1, 5.0, 10.0, 200.0, 100.0);
-        tree.apply(&node2, root_view()).unwrap();
-        assert_eq!(tree.len(), 1);
-
-        let second_log = take_call_log();
-
-        // No new ViewCreate — view was reused.
-        assert!(
-            !second_log
-                .iter()
-                .any(|c| matches!(c, FfiCall::ViewCreate { .. })),
-            "view should be reused, not recreated"
-        );
-
-        // Frame should be updated to new values.
-        assert!(second_log.contains(&FfiCall::ViewSetFrame {
-            ptr: created_ptr,
-            x: 5.0,
-            y: 10.0,
-            w: 200.0,
-            h: 100.0,
-        }));
-    }
-
-    #[test]
-    fn test_stale_layer_pruning() {
-        clear_call_log();
-        let mut tree = ViewTree::new();
-
-        // Apply tree with root (view) + children 2, 3 (layers).
-        let mut root = layout(1);
-        root.children = vec![layout(2), layout(3)];
-        tree.apply(&root, root_view()).unwrap();
-        assert_eq!(tree.len(), 3);
-
-        // Capture node 3's pointer.
-        let first_log = take_call_log();
-        let layer_creates: Vec<*mut c_void> = first_log
-            .iter()
-            .filter_map(|c| match c {
-                FfiCall::LayerCreate { ret } => Some(*ret),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(layer_creates.len(), 2);
-        let node3_ptr = layer_creates[1];
-
-        // Apply tree with only root + node 2 — node 3 is stale.
-        clear_call_log();
-        let mut root2 = layout(1);
-        root2.children = vec![layout(2)];
-        tree.apply(&root2, root_view()).unwrap();
-
-        assert_eq!(tree.len(), 2);
-        assert!(!tree.contains_node(3));
-
-        let second_log = take_call_log();
-        assert!(
-            second_log.contains(&FfiCall::LayerRemoveFromSuperlayer { ptr: node3_ptr }),
-            "stale layer should be removed from superlayer"
-        );
-        assert!(
-            second_log.contains(&FfiCall::LayerRelease { ptr: node3_ptr }),
-            "stale layer should be released"
-        );
+        let tags = collect_tags(&ops);
+        // Root should be View, child should be Layer.
+        assert!(tags.contains(&(OpTag::DeclareView as u8)));
+        assert!(tags.contains(&(OpTag::DeclareLayer as u8)));
     }
 
     #[test]
     fn test_z_index_sorting() {
-        clear_call_log();
         let mut tree = ViewTree::new();
+        let mut ops = OpBuffer::new();
 
-        let mut child_a = layout(2);
+        let mut child_a = layout_with_frame(2, 0.0, 0.0, 10.0, 10.0);
         child_a.z_index = Some(3);
-        let mut child_b = layout(3);
+        let mut child_b = layout_with_frame(3, 0.0, 0.0, 10.0, 10.0);
         child_b.z_index = Some(1);
-        let mut child_c = layout(4);
-        child_c.z_index = Some(2);
 
         let mut root = layout(1);
-        root.children = vec![child_a, child_b, child_c];
+        root.children = vec![child_a, child_b];
+        tree.process(&root, &mut ops);
 
-        tree.apply(&root, root_view()).unwrap();
-
-        let log = take_call_log();
-
-        // Root is a View, children are Layers.
-        let root_ptr = log
-            .iter()
-            .find_map(|c| match c {
-                FfiCall::ViewCreate { ret } => Some(*ret),
-                _ => None,
-            })
-            .unwrap();
-
-        // Children are added as sublayers in z-index sorted order.
-        let sublayer_adds: Vec<*mut c_void> = log
-            .iter()
-            .filter_map(|c| match c {
-                FfiCall::ViewAddSublayer { view, layer } if *view == root_ptr => Some(*layer),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(sublayer_adds.len(), 3, "3 children should be added to root");
-    }
-
-    #[test]
-    fn test_no_clips_with_default_overflow() {
-        clear_call_log();
-        let mut tree = ViewTree::new();
-        let node = layout(1); // computed_values: None → default visible overflow
-
-        tree.apply(&node, root_view()).unwrap();
-
-        let log = take_call_log();
-        let ptr = match &log[0] {
-            FfiCall::ViewCreate { ret } => *ret,
-            other => panic!("expected ViewCreate, got {other:?}"),
-        };
-        assert!(
-            log.contains(&FfiCall::ViewSetClipsToBounds { ptr, clips: false }),
-            "default overflow (None computed_values) should not clip"
+        // Find the DeclareLayer ops and check their node_ids are in z-order.
+        let mut layer_ids = Vec::new();
+        for i in 0..ops.op_count() {
+            if ops.tag_at(i) == Some(OpTag::DeclareLayer as u8) {
+                let slot = ops.slot_at(i).unwrap();
+                let nid = u64::from_le_bytes(slot[1..9].try_into().unwrap());
+                layer_ids.push(nid);
+            }
+        }
+        assert_eq!(
+            layer_ids,
+            vec![3, 2],
+            "z-index 1 (node 3) should come before z-index 3 (node 2)"
         );
     }
 
     #[test]
-    fn test_drop_releases_all_entries() {
-        clear_call_log();
+    fn test_background_color_emitted() {
         let mut tree = ViewTree::new();
-        let mut root = layout(1);
-        root.children = vec![layout(2), layout(3)];
-        tree.apply(&root, root_view()).unwrap();
+        let mut ops = OpBuffer::new();
 
-        let setup_log = take_call_log();
-        let view_ptrs: Vec<*mut c_void> = setup_log
-            .iter()
-            .filter_map(|c| match c {
-                FfiCall::ViewCreate { ret } => Some(*ret),
-                _ => None,
-            })
-            .collect();
-        let layer_ptrs: Vec<*mut c_void> = setup_log
-            .iter()
-            .filter_map(|c| match c {
-                FfiCall::LayerCreate { ret } => Some(*ret),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(view_ptrs.len(), 1, "root should be a view");
-        assert_eq!(layer_ptrs.len(), 2, "children should be layers");
-
-        // Drop the tree.
-        clear_call_log();
-        drop(tree);
-
-        let drop_log = take_call_log();
-
-        // Root view should be removed from superview and released.
-        for ptr in &view_ptrs {
-            assert!(
-                drop_log.contains(&FfiCall::ViewRemoveFromSuperview { ptr: *ptr }),
-                "view {ptr:?} should be removed from superview on drop"
-            );
-            assert!(
-                drop_log.contains(&FfiCall::ViewRelease { ptr: *ptr }),
-                "view {ptr:?} should be released on drop"
-            );
-        }
-
-        // Layer children should be removed from superlayer and released.
-        for ptr in &layer_ptrs {
-            assert!(
-                drop_log.contains(&FfiCall::LayerRemoveFromSuperlayer { ptr: *ptr }),
-                "layer {ptr:?} should be removed from superlayer on drop"
-            );
-            assert!(
-                drop_log.contains(&FfiCall::LayerRelease { ptr: *ptr }),
-                "layer {ptr:?} should be released on drop"
-            );
-        }
-    }
-
-    #[test]
-    fn test_extract_background_color_from_computed_values() {
-        // Build a RuntimeState with an element that has background-color set.
-        let mut state = engine::RuntimeState::new("https://example.com".to_string());
-        let id = state.create_element("div".to_string());
-        state.append_element(0, id).unwrap();
-        state
-            .set_inline_style(
-                id,
-                "background-color".to_string(),
-                "rgb(255, 0, 128)".to_string(),
-            )
-            .unwrap();
-        state.doc.resolve_style(&state.style_context);
-
-        let node = state.doc.get_node(engine::NodeId::from(id as u64)).unwrap();
-        let cv = node
-            .get_computed_values()
-            .expect("should have computed values");
-        let color = extract_background_color(cv);
-        assert!(color.is_some(), "rgb(255, 0, 128) should extract a color");
-
-        let (r, g, b, a) = color.unwrap();
-        assert!((r - 1.0).abs() < 0.01, "red should be ~1.0, got {r}");
-        assert!(g.abs() < 0.01, "green should be ~0.0, got {g}");
-        assert!((b - 0.502).abs() < 0.02, "blue should be ~0.502, got {b}");
-        assert!((a - 1.0).abs() < 0.01, "alpha should be ~1.0, got {a}");
-    }
-
-    #[test]
-    fn test_extract_background_color_transparent_returns_none() {
-        // Element with default (transparent) background.
-        let mut state = engine::RuntimeState::new("https://example.com".to_string());
-        let id = state.create_element("div".to_string());
-        state.append_element(0, id).unwrap();
-        state.doc.resolve_style(&state.style_context);
-
-        let node = state.doc.get_node(engine::NodeId::from(id as u64)).unwrap();
-        let cv = node
-            .get_computed_values()
-            .expect("should have computed values");
-        let color = extract_background_color(cv);
-        assert!(color.is_none(), "transparent background should return None");
-    }
-
-    #[test]
-    fn test_apply_node_with_background_color_sets_layer_bg() {
-        clear_call_log();
-        let mut tree = ViewTree::new();
-
-        // Build a state with a colored div to get real computed values.
+        // Build a RuntimeState with a colored div to get real computed values.
         let mut state = engine::RuntimeState::new("https://example.com".to_string());
         let id = state.create_element("div".to_string());
         state.append_element(0, id).unwrap();
@@ -859,16 +409,23 @@ mod tests {
             .unwrap();
 
         let layout_box = state.commit();
+        tree.process(&layout_box, &mut ops);
 
-        tree.apply(&layout_box, root_view()).unwrap();
-
-        let log = take_call_log();
-
-        // Root is always a View. Verify its background color was set.
+        let tags = collect_tags(&ops);
         assert!(
-            log.iter()
-                .any(|c| matches!(c, FfiCall::ViewSetBackgroundColor { .. })),
-            "background-color should be applied to the root view"
+            tags.contains(&(OpTag::SetBgColor as u8)),
+            "background-color should generate a SetBgColor op"
         );
+    }
+
+    #[test]
+    fn test_extract_background_color_transparent_returns_none() {
+        let mut state = engine::RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+        state.append_element(0, id).unwrap();
+
+        let layout_box = state.commit();
+        let bg = extract_background_color(&layout_box);
+        assert!(bg.is_none(), "transparent background should return None");
     }
 }
