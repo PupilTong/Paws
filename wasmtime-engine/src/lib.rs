@@ -5,7 +5,7 @@ pub mod wasm;
 pub use wasm::{build_linker, read_cstr};
 
 use engine::RuntimeState;
-use wasmtime::{Engine as WasmEngine, Module, Store};
+use wasmtime::{Engine as WasmEngine, MemoryType, Module, SharedMemory, Store};
 
 /// Create a [`wasmtime::Engine`] configured for the current platform.
 ///
@@ -13,8 +13,8 @@ use wasmtime::{Engine as WasmEngine, Module, Store};
 /// Pulley — wasmtime's portable interpreter. On all other platforms we
 /// use the default (Cranelift) configuration.
 pub fn create_engine() -> WasmEngine {
-    #[allow(unused_mut)]
     let mut config = wasmtime::Config::new();
+    config.wasm_threads(true);
     #[cfg(target_os = "ios")]
     config.target("pulley64").expect("set pulley64 target");
     WasmEngine::new(&config).expect("create wasmtime engine")
@@ -60,6 +60,51 @@ pub fn run_wat(
     };
     let linker = build_linker(&engine);
     let mut store = Store::new(&engine, state);
+
+    let result = (|| -> anyhow::Result<()> {
+        let instance = linker.instantiate(&mut store, &module)?;
+        let run = instance.get_typed_func::<(), i32>(&mut store, func_name)?;
+        run.call(&mut store, ())?;
+        Ok(())
+    })();
+
+    let state = store.into_data();
+    match result {
+        Ok(()) => Ok(state),
+        Err(e) => Err(Box::new(RunWatError { state, error: e })),
+    }
+}
+
+/// Compiles and runs a binary WASM module against a [`RuntimeState`].
+///
+/// Same as [`run_wat`] but accepts pre-compiled `.wasm` bytes instead of WAT
+/// text. The `RuntimeState` is always recovered, even on error.
+pub fn run_wasm(
+    state: RuntimeState,
+    wasm_bytes: &[u8],
+    func_name: &str,
+) -> Result<RuntimeState, Box<RunWatError>> {
+    let engine = create_engine();
+    let module = match Module::new(&engine, wasm_bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            return Err(Box::new(RunWatError { state, error: e }));
+        }
+    };
+    let mut linker = build_linker(&engine);
+    let mut store = Store::new(&engine, state);
+
+    // Modules compiled with wasm32-wasip1-threads import shared memory
+    // from "env::memory". Provide it via the linker before instantiation.
+    if let Err(e) = (|| -> anyhow::Result<()> {
+        let mem_ty = MemoryType::shared(17, 16384);
+        let shared_mem = SharedMemory::new(&engine, mem_ty)?;
+        linker.define(&mut store, "env", "memory", shared_mem)?;
+        Ok(())
+    })() {
+        let state = store.into_data();
+        return Err(Box::new(RunWatError { state, error: e }));
+    }
 
     let result = (|| -> anyhow::Result<()> {
         let instance = linker.instantiate(&mut store, &module)?;

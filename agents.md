@@ -28,7 +28,7 @@ This repository supports LLM-based assistants. The working language is English.
 
 - `engine/`: core logic (DOM, Style, Layout). A pure Rust library with no host dependencies.
 - `wasmtime-engine/`: integration layer threading `wasmtime` and `engine` together.
-- `view/`: UI/view layer. Exposes the frontend APIs.
+- `rust-wasm-binding/`: no_std Rust FFI binding for WASM guests. Wraps all host functions and re-exports `css!()` macro.
 - `view-macros/`: Contains the `css!` proc-macro for compile-time CSS evaluation.
 - `paws-style-ir/`: Zero-copy intermediate representations (`rkyv`) for styles shared between the macro and runtime.
 - `ios-renderer-backend/`: iOS rendering backend — bridges engine `LayoutBox` output to UIKit via C FFI. Rust owns and controls UIView, UILabel, UITextView, UIScrollView, and CALayer through opaque pointer handles. Includes a Swift Package (`PawsRenderer`) with `PawsRendererInstance` wrapper and `PawsRendererView`. Depends on `engine` and `wasmtime-engine`. Uses cbindgen for header generation.
