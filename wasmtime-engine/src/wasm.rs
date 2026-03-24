@@ -98,11 +98,7 @@ fn read_i32_slice(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> 
 ///
 /// Returns `Ok(())` if the write fits within the memory, or `Err` on
 /// out-of-bounds access.
-fn write_to_memory(
-    caller: &mut Caller<'_, RuntimeState>,
-    ptr: i32,
-    data: &[u8],
-) -> Result<()> {
+fn write_to_memory(caller: &mut Caller<'_, RuntimeState>, ptr: i32, data: &[u8]) -> Result<()> {
     let start = ptr as usize;
     let end = start
         .checked_add(data.len())
@@ -741,10 +737,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
                         .set_error(HostErrorCode::InvalidChild, "negative element id");
                     return Ok(code);
                 }
-                match caller
-                    .data_mut()
-                    .remove_child(parent as u32, child as u32)
-                {
+                match caller.data_mut().remove_child(parent as u32, child as u32) {
                     Ok(()) => {
                         caller.data_mut().clear_error();
                         Ok(0)

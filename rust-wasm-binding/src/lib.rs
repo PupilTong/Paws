@@ -224,42 +224,66 @@ pub fn apply_css(css_bytes: &[u8]) {
 pub fn get_first_child(id: i32) -> Option<i32> {
     // SAFETY: No memory pointers involved — only integer ID.
     let result = unsafe { __get_first_child(id) };
-    if result >= 0 { Some(result) } else { None }
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 /// Returns the last child of the given node, or `None` if it has no children.
 pub fn get_last_child(id: i32) -> Option<i32> {
     // SAFETY: No memory pointers involved — only integer ID.
     let result = unsafe { __get_last_child(id) };
-    if result >= 0 { Some(result) } else { None }
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 /// Returns the next sibling of the given node, or `None`.
 pub fn get_next_sibling(id: i32) -> Option<i32> {
     // SAFETY: No memory pointers involved — only integer ID.
     let result = unsafe { __get_next_sibling(id) };
-    if result >= 0 { Some(result) } else { None }
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 /// Returns the previous sibling of the given node, or `None`.
 pub fn get_previous_sibling(id: i32) -> Option<i32> {
     // SAFETY: No memory pointers involved — only integer ID.
     let result = unsafe { __get_previous_sibling(id) };
-    if result >= 0 { Some(result) } else { None }
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 /// Returns the parent element (Element type only), or `None`.
 pub fn get_parent_element(id: i32) -> Option<i32> {
     // SAFETY: No memory pointers involved — only integer ID.
     let result = unsafe { __get_parent_element(id) };
-    if result >= 0 { Some(result) } else { None }
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 /// Returns the parent node (any type), or `None`.
 pub fn get_parent_node(id: i32) -> Option<i32> {
     // SAFETY: No memory pointers involved — only integer ID.
     let result = unsafe { __get_parent_node(id) };
-    if result >= 0 { Some(result) } else { None }
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 /// Returns whether the node is connected to the document tree.
@@ -295,9 +319,7 @@ pub fn get_attribute(id: i32, name: &str, buf: &mut [u8]) -> Result<Option<usize
     let name_ptr = write_cstr(name);
     // SAFETY: `name_ptr` is a null-terminated string. `buf` is a valid mutable
     // byte slice in WASM linear memory.
-    let result = unsafe {
-        __get_attribute(id, name_ptr, buf.as_mut_ptr(), buf.len() as i32)
-    };
+    let result = unsafe { __get_attribute(id, name_ptr, buf.as_mut_ptr(), buf.len() as i32) };
     if result >= 0 {
         Ok(Some(result as usize))
     } else if result == -1 {
