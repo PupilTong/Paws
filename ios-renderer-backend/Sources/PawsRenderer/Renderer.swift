@@ -1,34 +1,89 @@
 /// High-level Swift API wrapping the Paws renderer C FFI.
 ///
+/// The rendering pipeline runs on a background thread. DOM mutations
+/// (createElement, setInlineStyle, etc.) send commands to the background
+/// thread. Commits produce an op-code buffer that is dispatched to the
+/// main thread for UIKit execution via `OpExecutor`.
+///
 /// Usage:
 /// ```swift
-/// let renderer = PawsRendererInstance(baseURL: "https://example.com")
-/// renderer.setRootView(myUIView)
-/// let div = renderer.createElement("div")
-/// renderer.appendElement(parent: 0, child: div)
-/// renderer.setInlineStyle(id: div, name: "width", value: "100px")
-/// // Commit is triggered by the WASM program, not Swift.
+/// let view = PawsRendererView(baseURL: "about:blank", frame: frame)
+/// view.renderer.postRunWat(demoWat)
 /// ```
 
 #if canImport(UIKit)
 import UIKit
 import PawsRendererFFI
 
+/// C completion callback — called from the Rust background thread.
+///
+/// Copies the op buffer and dispatches to the main queue for execution.
+private func pawsCompletionCallback(
+    opsPtr: UnsafePointer<UInt8>?,
+    opsLen: Int,
+    ctx: UnsafeMutableRawPointer?
+) {
+    guard let opsPtr = opsPtr, let ctx = ctx, opsLen > 0 else { return }
+
+    // Copy the buffer — it's only valid during this callback invocation.
+    let data = Data(bytes: opsPtr, count: opsLen)
+    let executor = Unmanaged<OpExecutor>.fromOpaque(ctx).takeUnretainedValue()
+
+    DispatchQueue.main.async {
+        data.withUnsafeBytes { rawBuffer in
+            guard let basePtr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                return
+            }
+            executor.execute(ptr: basePtr, byteCount: opsLen)
+        }
+    }
+}
+
 /// A Paws renderer instance that manages a DOM, style engine, and UIKit view tree.
+///
+/// All engine state lives on a background thread. This class holds only the
+/// FFI handle (channel sender) and the `OpExecutor` reference.
 public final class PawsRendererInstance {
     private let handle: OpaquePointer
+    /// Retained reference to the OpExecutor to prevent deallocation.
+    /// The Rust background thread holds an unretained pointer to this.
+    private let executorRef: Unmanaged<OpExecutor>
 
-    /// Creates a new renderer with the given base URL for the document.
-    public init(baseURL: String = "about:blank") {
-        guard let ptr = baseURL.withCString({ paws_renderer_create($0) }) else {
+    /// The `OpExecutor` that processes op-code buffers on the main thread.
+    public let executor: OpExecutor
+
+    /// Creates a new renderer with the given base URL and root view.
+    ///
+    /// The renderer spawns a background thread for the engine pipeline.
+    /// Op-code buffers are dispatched to the main thread and executed
+    /// against the given root view via `OpExecutor`.
+    public init(baseURL: String = "about:blank", rootView: UIView) {
+        let opExecutor = OpExecutor(rootView: rootView)
+        self.executor = opExecutor
+
+        // Retain the executor for the lifetime of this renderer.
+        // The Rust background thread holds an unretained pointer to it.
+        let retained = Unmanaged.passRetained(opExecutor)
+        self.executorRef = retained
+        let ctx = retained.toOpaque()
+
+        guard let ptr = baseURL.withCString({ urlPtr in
+            paws_renderer_create(urlPtr, pawsCompletionCallback, ctx)
+        }) else {
             fatalError("paws_renderer_create returned null")
         }
         self.handle = ptr
     }
 
     deinit {
+        // Shut down the background thread first (this blocks until the
+        // thread exits, so no more callbacks will fire after this).
         paws_renderer_destroy(handle)
+        // Release the retained executor reference.
+        executorRef.release()
     }
+
+    // MARK: - DOM mutations (blocking — send to background thread)
 
     /// Creates a DOM element with the given tag name.
     ///
@@ -82,46 +137,36 @@ public final class PawsRendererInstance {
         precondition(result == 0, "addStylesheet failed with error code \(result)")
     }
 
-    /// Sets the root `UIView` that the renderer will paint into.
-    ///
-    /// Call this once before the WASM program triggers its first commit.
-    /// Pass `nil` to detach the renderer from its current root view.
-    public func setRootView(_ view: UIView?) {
-        let viewPtr = view.map { Unmanaged.passUnretained($0).toOpaque() }
-        let result = paws_renderer_set_root_view(handle, viewPtr)
-        precondition(result == 0, "setRootView failed with error code \(result)")
-    }
-
     /// Destroys an element and removes it from the DOM.
     public func destroyElement(id: UInt32) {
         let result = paws_renderer_destroy_element(handle, id)
         precondition(result == 0, "destroyElement failed with error code \(result)")
     }
 
-    /// Resolves styles, computes layout, and applies to the UIKit view tree.
+    // MARK: - Async operations (non-blocking)
+
+    /// Asynchronously resolves styles, computes layout, and generates ops.
     ///
-    /// No-op if no root view has been set via `setRootView(_:)`.
-    public func commit() {
-        let result = paws_renderer_commit(handle)
-        precondition(result == 0, "commit failed with error code \(result)")
+    /// The `OpExecutor` will be called on the main thread when ops are ready.
+    public func postCommit() {
+        let result = paws_renderer_post_commit(handle)
+        precondition(result == 0, "postCommit failed with error code \(result)")
     }
 
-    /// Compiles and runs a WAT module, then commits the result.
+    /// Asynchronously compiles and runs a WAT module, then auto-commits.
     ///
-    /// The WAT text is compiled to WASM, the named function is called
-    /// (which may create elements, set styles, etc.), and then the layout
-    /// is committed to the UIKit view tree.
+    /// The `OpExecutor` will be called on the main thread when ops are ready.
     ///
     /// - Parameters:
     ///   - wat: WAT text (WebAssembly Text Format) to compile and run.
     ///   - functionName: The exported function to call (default: `"run"`).
-    public func runWat(_ wat: String, functionName: String = "run") {
+    public func postRunWat(_ wat: String, functionName: String = "run") {
         let result = wat.withCString { watPtr in
             functionName.withCString { funcPtr in
-                paws_renderer_run_wat(handle, watPtr, funcPtr)
+                paws_renderer_post_run_wat(handle, watPtr, funcPtr)
             }
         }
-        precondition(result == 0, "runWat failed with error code \(result)")
+        precondition(result == 0, "postRunWat failed with error code \(result)")
     }
 }
 

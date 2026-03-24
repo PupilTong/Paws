@@ -5,7 +5,8 @@ import PawsRenderer
 final class PawsExampleTests: XCTestCase {
 
     func testRendererCreation() {
-        let renderer = PawsRendererInstance()
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
+        let renderer = PawsRendererInstance(baseURL: "about:blank", rootView: view)
         // Verify basic creation doesn't crash.
         let id = renderer.createElement("div")
         XCTAssertGreaterThan(id, 0)
@@ -16,8 +17,15 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        // runWat preconditions on success — this verifies the WAT compiles and runs.
-        view.renderer.runWat(demoWat, functionName: "run")
+        // postRunWat sends to background thread — should not crash.
+        view.renderer.postRunWat(demoWat, functionName: "run")
+
+        // Wait for ops to be dispatched back to main thread.
+        let expectation = expectation(description: "ops dispatched")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 2.0)
     }
 
     func testCommitProducesLayers() {
@@ -25,21 +33,20 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        view.renderer.runWat(demoWat, functionName: "run")
+        view.renderer.postRunWat(demoWat, functionName: "run")
 
-        // After commit the root view should have child content.
-        // The root LayoutBox creates a UIView (subview of rendererView).
-        // That UIView's layer should contain CALayer sublayers for the 4 child divs.
+        // Wait for the async ops to be executed on the main thread.
         let expectation = expectation(description: "layout applied")
-        DispatchQueue.main.async {
-            // The renderer view should have at least one subview (the root div).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // The renderer view should have content after ops execute.
+            // Root LayoutBox creates a UIView as a subview of rendererView.
+            // That UIView's layer should contain CALayer sublayers for child divs.
             XCTAssertFalse(
                 view.subviews.isEmpty,
                 "PawsRendererView should have a subview after commit"
             )
 
             if let rootDiv = view.subviews.first {
-                // The root div (UIView) should have sublayers for the 4 child divs.
                 let sublayers = rootDiv.layer.sublayers ?? []
                 XCTAssertEqual(
                     sublayers.count, 4,
@@ -56,10 +63,10 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        view.renderer.runWat(demoWat, functionName: "run")
+        view.renderer.postRunWat(demoWat, functionName: "run")
 
         let expectation = expectation(description: "layer frames")
-        DispatchQueue.main.async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             guard let rootDiv = view.subviews.first,
                   let sublayers = rootDiv.layer.sublayers,
                   sublayers.count == 4 else {
@@ -90,10 +97,10 @@ final class PawsExampleTests: XCTestCase {
             baseURL: "about:blank",
             frame: CGRect(x: 0, y: 0, width: 300, height: 300)
         )
-        view.renderer.runWat(demoWat, functionName: "run")
+        view.renderer.postRunWat(demoWat, functionName: "run")
 
         let expectation = expectation(description: "layer colors")
-        DispatchQueue.main.async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             guard let rootDiv = view.subviews.first,
                   let sublayers = rootDiv.layer.sublayers,
                   sublayers.count == 4 else {

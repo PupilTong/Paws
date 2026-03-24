@@ -2,13 +2,17 @@
 //!
 //! These form the public C API exposed via the cbindgen-generated header.
 //! Naming convention: `paws_renderer_*`.
+//!
+//! All engine work (WASM execution, style resolution, layout, ViewTree
+//! processing) happens on a background thread. The FFI layer sends
+//! [`Command`](crate::thread::Command)s via a channel and, for operations
+//! that need a return value, blocks on a reply.
 
 use std::ffi::{c_char, c_void, CStr};
-
-use engine::RuntimeState;
+use std::sync::mpsc;
 
 use crate::error::RendererError;
-use crate::renderer::ViewTree;
+use crate::thread::{Command, CompletionFn, EngineHandle};
 
 /// Extracts a mutable reference to `PawsRenderer` from a raw pointer,
 /// returning the given error code if the pointer is null.
@@ -32,40 +36,37 @@ macro_rules! get_cstr {
     };
 }
 
-/// Opaque handle to the Paws renderer state.
+/// Opaque handle to the Paws renderer.
 ///
-/// Owns the engine's `RuntimeState` and the UIKit view tree mapping.
+/// Owns the background engine thread via [`EngineHandle`]. All engine
+/// state lives on that thread — this struct only holds the channel sender.
+///
 /// Created by [`paws_renderer_create`] and destroyed by [`paws_renderer_destroy`].
 pub struct PawsRenderer {
-    state: RuntimeState,
-    view_tree: ViewTree,
-    /// The root `UIView*` to render into, set via [`paws_renderer_set_root_view`].
-    root_view: Option<*mut c_void>,
+    engine: EngineHandle,
 }
 
-impl PawsRenderer {
-    /// Resolves styles, computes layout, and applies the resulting `LayoutBox`
-    /// tree to the UIKit view hierarchy under the stored root view.
-    ///
-    /// No-op if no root view has been set.
-    pub(crate) fn commit(&mut self) -> Result<(), RendererError> {
-        let layout = self.state.commit();
-        if let Some(root_view) = self.root_view {
-            self.view_tree.apply(&layout, root_view)?;
-        }
-        Ok(())
-    }
-}
-
-/// Creates a new `PawsRenderer`.
+/// Creates a new `PawsRenderer` with a background engine thread.
 ///
-/// `base_url` must be a null-terminated UTF-8 string (used as the document base URL).
-/// Returns an opaque pointer. The caller (Swift) owns this and must call
+/// - `base_url`: null-terminated UTF-8 string (document base URL).
+///   Pass `null` to use `"about:blank"`.
+/// - `completion`: called from the background thread each time ops are
+///   ready after a commit. The `ops_ptr` and `ops_len` describe a buffer
+///   of 32-byte op-code slots. The pointer is only valid for the duration
+///   of the callback — copy or process before returning.
+/// - `context`: opaque pointer forwarded to every `completion` call.
+///   Typically an `Unmanaged<OpExecutor>` pointer on the Swift side.
+///
+/// Returns an opaque pointer. The caller (Swift) owns it and must call
 /// [`paws_renderer_destroy`] to free it.
 ///
 /// Returns `null` on failure.
 #[no_mangle]
-pub extern "C" fn paws_renderer_create(base_url: *const c_char) -> *mut PawsRenderer {
+pub extern "C" fn paws_renderer_create(
+    base_url: *const c_char,
+    completion: CompletionFn,
+    context: *mut c_void,
+) -> *mut PawsRenderer {
     let url_str = if base_url.is_null() {
         "about:blank"
     } else {
@@ -76,16 +77,12 @@ pub extern "C" fn paws_renderer_create(base_url: *const c_char) -> *mut PawsRend
         }
     };
 
-    let renderer = PawsRenderer {
-        state: RuntimeState::new(url_str.to_string()),
-        view_tree: ViewTree::new(),
-        root_view: None,
-    };
-
+    let engine = EngineHandle::spawn(url_str.to_string(), completion, context);
+    let renderer = PawsRenderer { engine };
     Box::into_raw(Box::new(renderer))
 }
 
-/// Destroys a `PawsRenderer` and frees all associated memory.
+/// Destroys a `PawsRenderer`, shutting down the background thread.
 ///
 /// After this call the pointer is invalid. Passing `null` is a no-op.
 #[no_mangle]
@@ -96,9 +93,46 @@ pub extern "C" fn paws_renderer_destroy(renderer: *mut PawsRenderer) {
     }
 }
 
+/// Asynchronously triggers style resolution + layout + op generation.
+///
+/// The completion callback (registered at creation) will be called from
+/// the background thread once ops are ready. Returns `0` immediately.
+#[no_mangle]
+pub extern "C" fn paws_renderer_post_commit(renderer: *mut PawsRenderer) -> i32 {
+    let renderer = get_renderer!(renderer);
+    match renderer.engine.tx.send(Command::Commit) {
+        Ok(()) => 0,
+        Err(_) => RendererError::EngineFailed.as_i32(),
+    }
+}
+
+/// Asynchronously compiles a WAT module and runs the named function,
+/// then auto-commits.
+///
+/// The completion callback will be called from the background thread
+/// once ops are ready. Returns `0` immediately.
+#[no_mangle]
+pub extern "C" fn paws_renderer_post_run_wat(
+    renderer: *mut PawsRenderer,
+    wat_text: *const c_char,
+    func_name: *const c_char,
+) -> i32 {
+    let renderer = get_renderer!(renderer);
+    let wat_str = get_cstr!(wat_text);
+    let func_str = get_cstr!(func_name);
+
+    match renderer.engine.tx.send(Command::RunWat {
+        wat: wat_str.to_string(),
+        func_name: func_str.to_string(),
+    }) {
+        Ok(()) => 0,
+        Err(_) => RendererError::EngineFailed.as_i32(),
+    }
+}
+
 /// Creates a DOM element with the given tag name.
 ///
-/// `tag` must be a null-terminated UTF-8 string.
+/// Blocks until the background thread processes the request.
 /// Returns the element's node ID (>0) on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_create_element(
@@ -107,12 +141,29 @@ pub extern "C" fn paws_renderer_create_element(
 ) -> i32 {
     let renderer = get_renderer!(renderer);
     let tag_str = get_cstr!(tag);
-    renderer.state.create_element(tag_str.to_string()) as i32
+
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if renderer
+        .engine
+        .tx
+        .send(Command::CreateElement {
+            tag: tag_str.to_string(),
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        return RendererError::EngineFailed.as_i32();
+    }
+
+    match reply_rx.recv() {
+        Ok(id) => id as i32,
+        Err(_) => RendererError::EngineFailed.as_i32(),
+    }
 }
 
 /// Creates a text node with the given content.
 ///
-/// `text` must be a null-terminated UTF-8 string.
+/// Blocks until the background thread processes the request.
 /// Returns the node ID (>0) on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_create_text_node(
@@ -121,11 +172,29 @@ pub extern "C" fn paws_renderer_create_text_node(
 ) -> i32 {
     let renderer = get_renderer!(renderer);
     let text_str = get_cstr!(text);
-    renderer.state.create_text_node(text_str.to_string()) as i32
+
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if renderer
+        .engine
+        .tx
+        .send(Command::CreateTextNode {
+            text: text_str.to_string(),
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        return RendererError::EngineFailed.as_i32();
+    }
+
+    match reply_rx.recv() {
+        Ok(id) => id as i32,
+        Err(_) => RendererError::EngineFailed.as_i32(),
+    }
 }
 
 /// Appends a child element to a parent element.
 ///
+/// Blocks until the background thread processes the request.
 /// Returns `0` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_append_element(
@@ -134,15 +203,29 @@ pub extern "C" fn paws_renderer_append_element(
     child: u32,
 ) -> i32 {
     let renderer = get_renderer!(renderer);
-    match renderer.state.append_element(parent, child) {
-        Ok(()) => 0,
-        Err(code) => code.as_i32(),
+
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if renderer
+        .engine
+        .tx
+        .send(Command::AppendElement {
+            parent,
+            child,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        return RendererError::EngineFailed.as_i32();
     }
+
+    reply_rx
+        .recv()
+        .unwrap_or(RendererError::EngineFailed.as_i32())
 }
 
 /// Sets an inline CSS property on an element.
 ///
-/// `name` and `value` must be null-terminated UTF-8 strings.
+/// Blocks until the background thread processes the request.
 /// Returns `0` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_set_inline_style(
@@ -154,18 +237,30 @@ pub extern "C" fn paws_renderer_set_inline_style(
     let renderer = get_renderer!(renderer);
     let name_str = get_cstr!(name);
     let value_str = get_cstr!(value);
-    match renderer
-        .state
-        .set_inline_style(id, name_str.to_string(), value_str.to_string())
+
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if renderer
+        .engine
+        .tx
+        .send(Command::SetInlineStyle {
+            id,
+            name: name_str.to_string(),
+            value: value_str.to_string(),
+            reply: reply_tx,
+        })
+        .is_err()
     {
-        Ok(()) => 0,
-        Err(code) => code.as_i32(),
+        return RendererError::EngineFailed.as_i32();
     }
+
+    reply_rx
+        .recv()
+        .unwrap_or(RendererError::EngineFailed.as_i32())
 }
 
 /// Sets a DOM attribute on an element.
 ///
-/// `name` and `value` must be null-terminated UTF-8 strings.
+/// Blocks until the background thread processes the request.
 /// Returns `0` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_set_attribute(
@@ -177,18 +272,30 @@ pub extern "C" fn paws_renderer_set_attribute(
     let renderer = get_renderer!(renderer);
     let name_str = get_cstr!(name);
     let value_str = get_cstr!(value);
-    match renderer
-        .state
-        .set_attribute(id, name_str.to_string(), value_str.to_string())
+
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if renderer
+        .engine
+        .tx
+        .send(Command::SetAttribute {
+            id,
+            name: name_str.to_string(),
+            value: value_str.to_string(),
+            reply: reply_tx,
+        })
+        .is_err()
     {
-        Ok(()) => 0,
-        Err(code) => code.as_i32(),
+        return RendererError::EngineFailed.as_i32();
     }
+
+    reply_rx
+        .recv()
+        .unwrap_or(RendererError::EngineFailed.as_i32())
 }
 
 /// Adds a CSS stylesheet to the document.
 ///
-/// `css` must be a null-terminated UTF-8 string containing CSS source.
+/// Fire-and-forget — does not block for a reply.
 #[no_mangle]
 pub extern "C" fn paws_renderer_add_stylesheet(
     renderer: *mut PawsRenderer,
@@ -197,86 +304,38 @@ pub extern "C" fn paws_renderer_add_stylesheet(
     let renderer = get_renderer!(renderer);
     let css_str = get_cstr!(css);
 
-    renderer.state.add_stylesheet(css_str.to_string());
-    0
-}
-
-/// Sets the root `UIView` to render into.
-///
-/// `root_view` is an opaque pointer to the `UIView`. Pass `null` to clear.
-/// Returns `0` on success, or a negative error code.
-#[no_mangle]
-pub extern "C" fn paws_renderer_set_root_view(
-    renderer: *mut PawsRenderer,
-    root_view: *mut c_void,
-) -> i32 {
-    let renderer = get_renderer!(renderer);
-    renderer.root_view = (!root_view.is_null()).then_some(root_view);
-    0
+    match renderer.engine.tx.send(Command::AddStylesheet {
+        css: css_str.to_string(),
+    }) {
+        Ok(()) => 0,
+        Err(_) => RendererError::EngineFailed.as_i32(),
+    }
 }
 
 /// Destroys an element and removes it from the DOM.
 ///
+/// Blocks until the background thread processes the request.
 /// Returns `0` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_destroy_element(renderer: *mut PawsRenderer, id: u32) -> i32 {
     let renderer = get_renderer!(renderer);
 
-    match renderer.state.destroy_element(id) {
-        Ok(()) => 0,
-        Err(code) => code.as_i32(),
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if renderer
+        .engine
+        .tx
+        .send(Command::DestroyElement {
+            id,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        return RendererError::EngineFailed.as_i32();
     }
-}
 
-/// Resolves styles, computes layout, and applies the resulting tree to UIKit.
-///
-/// No-op if no root view has been set via [`paws_renderer_set_root_view`].
-/// Returns `0` on success, or a negative error code.
-#[no_mangle]
-pub extern "C" fn paws_renderer_commit(renderer: *mut PawsRenderer) -> i32 {
-    let renderer = get_renderer!(renderer);
-    match renderer.commit() {
-        Ok(()) => 0,
-        Err(e) => e.as_i32(),
-    }
-}
-
-/// Compiles a WAT module and runs the named function against the renderer's
-/// engine state, then commits the resulting layout to UIKit.
-///
-/// `wat_text` must be a null-terminated UTF-8 WAT string.
-/// `func_name` must be a null-terminated UTF-8 string naming the export to call.
-/// Returns `0` on success, or a negative error code.
-#[no_mangle]
-pub extern "C" fn paws_renderer_run_wat(
-    renderer: *mut PawsRenderer,
-    wat_text: *const c_char,
-    func_name: *const c_char,
-) -> i32 {
-    let renderer = get_renderer!(renderer);
-    let wat_str = get_cstr!(wat_text);
-    let func_str = get_cstr!(func_name);
-
-    // Move RuntimeState into wasmtime-engine for execution, then recover it.
-    let state = std::mem::replace(
-        &mut renderer.state,
-        RuntimeState::new("about:blank".to_string()),
-    );
-
-    match wasmtime_engine::run_wat(state, wat_str, func_str) {
-        Ok(state) => {
-            renderer.state = state;
-            // Auto-commit after WASM execution.
-            match renderer.commit() {
-                Ok(()) => 0,
-                Err(e) => e.as_i32(),
-            }
-        }
-        Err(err) => {
-            renderer.state = err.state;
-            RendererError::EngineFailed.as_i32()
-        }
-    }
+    reply_rx
+        .recv()
+        .unwrap_or(RendererError::EngineFailed.as_i32())
 }
 
 /// Converts a raw renderer pointer to a mutable reference.
@@ -286,8 +345,10 @@ fn unsafe_renderer<'a>(ptr: *mut PawsRenderer) -> Option<&'a mut PawsRenderer> {
     if ptr.is_null() {
         None
     } else {
-        // SAFETY: The pointer was created by Box::into_raw and the caller
-        // guarantees exclusive access (single-threaded UIKit requirement).
+        // SAFETY: The pointer was created by Box::into_raw. Exclusive access
+        // is guaranteed because the struct only holds a channel sender (which
+        // is safe to use from multiple threads, though in practice Swift calls
+        // FFI functions from a single thread).
         Some(unsafe { &mut *ptr })
     }
 }
@@ -304,32 +365,58 @@ fn read_cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::{c_void, CString};
+    use std::ffi::CString;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::ffi::imports::stubs::{clear_call_log, take_call_log, FfiCall};
+
+    /// Test capture for the completion callback.
+    struct TestCapture {
+        ops: Mutex<Vec<u8>>,
+    }
+
+    extern "C" fn test_completion(ptr: *const u8, len: usize, ctx: *mut c_void) {
+        // SAFETY: ctx points to a valid Arc<TestCapture>.
+        let capture = unsafe { &*(ctx as *const TestCapture) };
+        let bytes = if len > 0 && !ptr.is_null() {
+            // SAFETY: ptr is valid for len bytes during this callback.
+            unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
+        } else {
+            Vec::new()
+        };
+        *capture.ops.lock().unwrap() = bytes;
+    }
+
+    fn create_test_renderer() -> (*mut PawsRenderer, Arc<TestCapture>) {
+        let capture = Arc::new(TestCapture {
+            ops: Mutex::new(Vec::new()),
+        });
+        let ctx = Arc::as_ptr(&capture) as *mut c_void;
+        let renderer = paws_renderer_create(std::ptr::null(), test_completion, ctx);
+        assert!(!renderer.is_null());
+        (renderer, capture)
+    }
 
     #[test]
     fn test_create_renderer_null_url() {
-        let renderer = paws_renderer_create(std::ptr::null());
-        assert!(
-            !renderer.is_null(),
-            "null URL should fall back to about:blank"
-        );
+        let (renderer, _capture) = create_test_renderer();
         paws_renderer_destroy(renderer);
     }
 
     #[test]
     fn test_create_renderer_valid_url() {
+        let capture = Arc::new(TestCapture {
+            ops: Mutex::new(Vec::new()),
+        });
+        let ctx = Arc::as_ptr(&capture) as *mut c_void;
         let url = CString::new("https://example.com").unwrap();
-        let renderer = paws_renderer_create(url.as_ptr());
+        let renderer = paws_renderer_create(url.as_ptr(), test_completion, ctx);
         assert!(!renderer.is_null());
         paws_renderer_destroy(renderer);
     }
 
     #[test]
     fn test_destroy_null_is_noop() {
-        // Should not panic.
         paws_renderer_destroy(std::ptr::null_mut());
     }
 
@@ -342,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_create_element_null_tag() {
-        let renderer = paws_renderer_create(std::ptr::null());
+        let (renderer, _capture) = create_test_renderer();
         let result = paws_renderer_create_element(renderer, std::ptr::null());
         assert_eq!(result, RendererError::InvalidHandle.as_i32());
         paws_renderer_destroy(renderer);
@@ -350,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_create_element_valid() {
-        let renderer = paws_renderer_create(std::ptr::null());
+        let (renderer, _capture) = create_test_renderer();
         let tag = CString::new("div").unwrap();
         let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
         assert!(node_id > 0, "valid element should return positive node ID");
@@ -358,72 +445,42 @@ mod tests {
     }
 
     #[test]
-    fn test_set_root_view_null_renderer() {
-        let root_view = 0x9000 as *mut c_void;
-        let result = paws_renderer_set_root_view(std::ptr::null_mut(), root_view);
-        assert_eq!(result, RendererError::InvalidHandle.as_i32());
-    }
+    fn test_post_commit_produces_ops() {
+        let (renderer, capture) = create_test_renderer();
 
-    #[test]
-    fn test_set_root_view_null_clears() {
-        let renderer = paws_renderer_create(std::ptr::null());
-        let root_view = 0x9000 as *mut c_void;
-
-        let result = paws_renderer_set_root_view(renderer, root_view);
-        assert_eq!(result, 0);
-
-        // Clearing with null should also succeed.
-        let result = paws_renderer_set_root_view(renderer, std::ptr::null_mut());
-        assert_eq!(result, 0);
-
-        paws_renderer_destroy(renderer);
-    }
-
-    #[test]
-    fn test_commit_with_root_view_applies_layout() {
-        clear_call_log();
-        let renderer = paws_renderer_create(std::ptr::null());
-
+        // Create an element and append to root.
         let tag = CString::new("div").unwrap();
         let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
         assert!(node_id > 0);
 
+        let result = paws_renderer_append_element(renderer, 0, node_id as u32);
+        assert_eq!(result, 0);
+
         let name = CString::new("width").unwrap();
         let value = CString::new("100px").unwrap();
-        let style_result =
+        let result =
             paws_renderer_set_inline_style(renderer, node_id as u32, name.as_ptr(), value.as_ptr());
-        assert_eq!(style_result, 0);
+        assert_eq!(result, 0);
 
-        // Set root view, then commit internally.
-        let root_view = 0x9000 as *mut c_void;
-        paws_renderer_set_root_view(renderer, root_view);
+        // Commit.
+        let result = paws_renderer_post_commit(renderer);
+        assert_eq!(result, 0);
 
-        // SAFETY: renderer is valid, created above.
-        let r = unsafe { &mut *renderer };
-        r.commit().unwrap();
+        // Give background thread time to process.
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let log = take_call_log();
-
-        // Commit should have created at least one view and set its frame.
+        let ops_bytes = capture.ops.lock().unwrap();
         assert!(
-            log.iter().any(|c| matches!(c, FfiCall::ViewCreate { .. })),
-            "commit should create UIKit views"
-        );
-        assert!(
-            log.iter()
-                .any(|c| matches!(c, FfiCall::ViewSetFrame { .. })),
-            "commit should set view frames"
+            !ops_bytes.is_empty(),
+            "post_commit should produce a non-empty op buffer"
         );
 
         paws_renderer_destroy(renderer);
     }
 
     #[test]
-    fn test_run_wat_success() {
-        clear_call_log();
-        let renderer = paws_renderer_create(std::ptr::null());
-        let root_view = 0x9000 as *mut c_void;
-        paws_renderer_set_root_view(renderer, root_view);
+    fn test_post_run_wat_produces_ops() {
+        let (renderer, capture) = create_test_renderer();
 
         let wat = CString::new(
             r#"
@@ -448,83 +505,35 @@ mod tests {
         .unwrap();
         let func = CString::new("run").unwrap();
 
-        let result = paws_renderer_run_wat(renderer, wat.as_ptr(), func.as_ptr());
-        assert_eq!(result, 0, "run_wat should succeed");
+        let result = paws_renderer_post_run_wat(renderer, wat.as_ptr(), func.as_ptr());
+        assert_eq!(result, 0, "post_run_wat should return 0 immediately");
 
-        let log = take_call_log();
-        // run_wat auto-commits, so UIKit views should have been created.
+        // Give background thread time to process.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        let ops_bytes = capture.ops.lock().unwrap();
         assert!(
-            log.iter().any(|c| matches!(c, FfiCall::ViewCreate { .. })),
-            "run_wat should auto-commit and create UIKit views"
+            !ops_bytes.is_empty(),
+            "post_run_wat should produce a non-empty op buffer"
         );
 
         paws_renderer_destroy(renderer);
     }
 
     #[test]
-    fn test_run_wat_invalid_wat() {
-        let renderer = paws_renderer_create(std::ptr::null());
-        let root_view = 0x9000 as *mut c_void;
-        paws_renderer_set_root_view(renderer, root_view);
+    fn test_post_run_wat_null_params() {
+        let (renderer, _capture) = create_test_renderer();
 
-        let wat = CString::new("not valid wat!").unwrap();
         let func = CString::new("run").unwrap();
-
-        let result = paws_renderer_run_wat(renderer, wat.as_ptr(), func.as_ptr());
-        assert_eq!(
-            result,
-            RendererError::EngineFailed.as_i32(),
-            "invalid WAT should return EngineFailed"
-        );
-
-        // Renderer should still be usable after error.
-        let tag = CString::new("div").unwrap();
-        let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
-        assert!(node_id > 0, "renderer should still work after WAT error");
-
-        paws_renderer_destroy(renderer);
-    }
-
-    #[test]
-    fn test_run_wat_null_params() {
-        let renderer = paws_renderer_create(std::ptr::null());
-
-        // Null WAT text.
-        let func = CString::new("run").unwrap();
-        let result = paws_renderer_run_wat(renderer, std::ptr::null(), func.as_ptr());
+        let result = paws_renderer_post_run_wat(renderer, std::ptr::null(), func.as_ptr());
         assert_eq!(result, RendererError::InvalidHandle.as_i32());
 
-        // Null func name.
         let wat = CString::new("(module)").unwrap();
-        let result = paws_renderer_run_wat(renderer, wat.as_ptr(), std::ptr::null());
+        let result = paws_renderer_post_run_wat(renderer, wat.as_ptr(), std::ptr::null());
         assert_eq!(result, RendererError::InvalidHandle.as_i32());
 
-        // Null renderer.
-        let result = paws_renderer_run_wat(std::ptr::null_mut(), wat.as_ptr(), func.as_ptr());
+        let result = paws_renderer_post_run_wat(std::ptr::null_mut(), wat.as_ptr(), func.as_ptr());
         assert_eq!(result, RendererError::InvalidHandle.as_i32());
-
-        paws_renderer_destroy(renderer);
-    }
-
-    #[test]
-    fn test_commit_without_root_view_is_noop() {
-        clear_call_log();
-        let renderer = paws_renderer_create(std::ptr::null());
-
-        let tag = CString::new("div").unwrap();
-        let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
-        assert!(node_id > 0);
-
-        // Commit without setting root view — should not create any UIKit views.
-        // SAFETY: renderer is valid, created above.
-        let r = unsafe { &mut *renderer };
-        r.commit().unwrap();
-
-        let log = take_call_log();
-        assert!(
-            !log.iter().any(|c| matches!(c, FfiCall::ViewCreate { .. })),
-            "commit without root view should not create UIKit views"
-        );
 
         paws_renderer_destroy(renderer);
     }
