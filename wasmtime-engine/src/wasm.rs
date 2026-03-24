@@ -50,16 +50,19 @@ fn read_memory_slice(
 pub fn read_cstr(caller: &mut Caller<'_, RuntimeState>, ptr: i32) -> Result<String> {
     let start = ptr as usize;
 
+    let to_string = |bytes: &[u8]| {
+        std::str::from_utf8(bytes)
+            .map(|s| s.to_string())
+            .map_err(|_| anyhow!("invalid utf-8 string"))
+    };
+
     // Read in chunks to find null terminator. Start with a reasonable size.
     let chunk_size = 256;
     let mut buf = read_memory_slice(caller, start, chunk_size)?;
 
     // Find null terminator
     if let Some(null_pos) = buf.iter().position(|&b| b == 0) {
-        let bytes = &buf[..null_pos];
-        return std::str::from_utf8(bytes)
-            .map(|s| s.to_string())
-            .map_err(|_| anyhow!("invalid utf-8 string"));
+        return to_string(&buf[..null_pos]);
     }
 
     // If not found in first chunk, keep reading
@@ -72,10 +75,7 @@ pub fn read_cstr(caller: &mut Caller<'_, RuntimeState>, ptr: i32) -> Result<Stri
         buf.extend_from_slice(&next_chunk);
         total_read += chunk_size;
         if let Some(null_pos) = buf.iter().position(|&b| b == 0) {
-            let bytes = &buf[..null_pos];
-            return std::str::from_utf8(bytes)
-                .map(|s| s.to_string())
-                .map_err(|_| anyhow!("invalid utf-8 string"));
+            return to_string(&buf[..null_pos]);
         }
     }
 }

@@ -8,22 +8,13 @@ use rust_wasm_binding::*;
 pub extern "C" fn run() -> i32 {
     reset_scratch();
 
-    let div_id = match create_element("div") {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
+    let result: Result<i32, i32> = (|| {
+        let div_id = create_element("div")?;
+        append_element(0, div_id)?;
+        set_inline_style(div_id, "width", "200px")?;
+        set_inline_style(div_id, "height", "100px")?;
+        Ok(0)
+    })();
 
-    if let Err(e) = append_element(0, div_id) {
-        return e;
-    }
-
-    if let Err(e) = set_inline_style(div_id, "width", "200px") {
-        return e;
-    }
-
-    if let Err(e) = set_inline_style(div_id, "height", "100px") {
-        return e;
-    }
-
-    0
+    result.unwrap_or_else(|e| e)
 }

@@ -11,35 +11,21 @@ use rust_wasm_binding::*;
 pub extern "C" fn run() -> i32 {
     reset_scratch();
 
-    // Create parent
-    let parent = match create_element("div") {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
-    if let Err(e) = append_element(0, parent) {
-        return e;
-    }
+    let result: Result<i32, i32> = (|| {
+        let parent = create_element("div")?;
+        append_element(0, parent)?;
 
-    // Create child, append, then destroy it
-    let child_old = match create_element("span") {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
-    if let Err(e) = append_element(parent, child_old) {
-        return e;
-    }
-    if let Err(e) = destroy_element(child_old) {
-        return e;
-    }
+        // Create child, append, then destroy it
+        let child_old = create_element("span")?;
+        append_element(parent, child_old)?;
+        destroy_element(child_old)?;
 
-    // Create replacement child
-    let child_new = match create_element("p") {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
-    if let Err(e) = append_element(parent, child_new) {
-        return e;
-    }
+        // Create replacement child
+        let child_new = create_element("p")?;
+        append_element(parent, child_new)?;
 
-    0
+        Ok(0)
+    })();
+
+    result.unwrap_or_else(|e| e)
 }

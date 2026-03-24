@@ -8,16 +8,11 @@ use rust_wasm_binding::*;
 pub extern "C" fn run() -> i32 {
     reset_scratch();
 
-    // Create a div element
-    let div_id = match create_element("div") {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
+    let result: Result<i32, i32> = (|| {
+        let div_id = create_element("div")?;
+        append_element(0, div_id)?;
+        Ok(0)
+    })();
 
-    // Append to document root (id 0)
-    if let Err(e) = append_element(0, div_id) {
-        return e;
-    }
-
-    0
+    result.unwrap_or_else(|e| e)
 }

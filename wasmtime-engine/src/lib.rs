@@ -96,15 +96,12 @@ pub fn run_wasm(
 
     // Modules compiled with wasm32-wasip1-threads import shared memory
     // from "env::memory". Provide it via the linker before instantiation.
-    let mem_ty = MemoryType::shared(17, 16384);
-    let shared_mem = match SharedMemory::new(&engine, mem_ty) {
-        Ok(m) => m,
-        Err(e) => {
-            let state = store.into_data();
-            return Err(Box::new(RunWatError { state, error: e }));
-        }
-    };
-    if let Err(e) = linker.define(&mut store, "env", "memory", shared_mem) {
+    if let Err(e) = (|| -> anyhow::Result<()> {
+        let mem_ty = MemoryType::shared(17, 16384);
+        let shared_mem = SharedMemory::new(&engine, mem_ty)?;
+        linker.define(&mut store, "env", "memory", shared_mem)?;
+        Ok(())
+    })() {
         let state = store.into_data();
         return Err(Box::new(RunWatError { state, error: e }));
     }
