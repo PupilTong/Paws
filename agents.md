@@ -10,6 +10,7 @@ This repository supports LLM-based assistants. The working language is English.
 
 ## General Guidelines
 
+- **Rebase onto `origin/main` before starting any work** to avoid merge conflicts and stale base commits.
 - Keep changes minimal and focused.
 - Follow existing style conventions and formatting.
 - Prefer Rust 2021 edition and stable toolchain.
@@ -24,6 +25,23 @@ This repository supports LLM-based assistants. The working language is English.
 - All `unsafe` blocks must have a `// SAFETY:` comment explaining the invariant.
 - Prefer to use `pub(crate)` or keep fields/methods private by default unless they explicitly need to be public.
 - On every code change, assess whether agents.md needs an update and update it when needed.
+- After finishing all work, verify that agents.md is still accurate and up to date.
+
+## Formatting
+
+- CI runs `cargo fmt --check` with the **stable** toolchain. Local nightly rustfmt may produce different output.
+- Always run `cargo fmt --check` (not just `cargo fmt`) before committing to catch divergences. If your local formatter disagrees with CI, manually adjust to match the stable rustfmt style:
+  - Short method chains that fit on one line should stay on one line (e.g. `if self.doc.get_node(id).is_none() {`).
+  - Short `if/else` with single expressions should use multi-line block style, not single-line `if x { A } else { B }`.
+  - Function signatures that fit within the line width should stay on one line.
+
+## WASM Host Functions
+
+- All WASM host functions use **snake_case** names with a `__` prefix (e.g. `__create_element`, `__append_element`).
+- Host functions registered in `wasmtime-engine/src/wasm.rs` must have matching `extern "C"` declarations in `rust-wasm-binding/src/lib.rs`.
+- When adding a new host function, update all three layers: `engine/` (core logic) → `wasmtime-engine/` (linker registration) → `rust-wasm-binding/` (FFI + safe wrapper).
+- WAT test strings in `wasmtime-engine/src/lib.rs`, benchmarks, and iOS files must also use the same function names.
+
 ## Repository Structure
 
 - `engine/`: core logic (DOM, Style, Layout). A pure Rust library with no host dependencies.

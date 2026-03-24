@@ -376,11 +376,7 @@ impl RuntimeState {
 
     /// Returns the next sibling of the given node, or `None`.
     pub fn get_next_sibling(&self, id: u32) -> Result<Option<u32>, HostErrorCode> {
-        if self
-            .doc
-            .get_node(taffy::NodeId::from(id as u64))
-            .is_none()
-        {
+        if self.doc.get_node(taffy::NodeId::from(id as u64)).is_none() {
             return Err(HostErrorCode::InvalidChild);
         }
         Ok(self
@@ -391,11 +387,7 @@ impl RuntimeState {
 
     /// Returns the previous sibling of the given node, or `None`.
     pub fn get_previous_sibling(&self, id: u32) -> Result<Option<u32>, HostErrorCode> {
-        if self
-            .doc
-            .get_node(taffy::NodeId::from(id as u64))
-            .is_none()
-        {
+        if self.doc.get_node(taffy::NodeId::from(id as u64)).is_none() {
             return Err(HostErrorCode::InvalidChild);
         }
         Ok(self
