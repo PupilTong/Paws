@@ -63,8 +63,8 @@ fn bench_hello_engine(c: &mut Criterion) {
 fn bench_wasm_execution(c: &mut Criterion) {
     let wat = r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $set_style (param i32 i32 i32) (result i32)))
   (memory (export "memory") 1)
   (data (i32.const 0) "div\00")
   (data (i32.const 16) "height\00")
@@ -94,10 +94,10 @@ fn bench_wasm_execution(c: &mut Criterion) {
 fn bench_wasm_flex_layout(c: &mut Criterion) {
     let wat = r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-  (import "env" "__Commit" (func $commit (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $set_style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
   (memory (export "memory") 1)
 
   ;; tag names
@@ -195,10 +195,10 @@ fn bench_wasm_flex_layout(c: &mut Criterion) {
 fn bench_wasm_deep_tree(c: &mut Criterion) {
     let wat = r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-  (import "env" "__Commit" (func $commit (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $set_style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
   (memory (export "memory") 1)
 
   (data (i32.const 0) "div\00")
@@ -257,10 +257,10 @@ fn bench_wasm_deep_tree(c: &mut Criterion) {
 fn bench_wasm_wide_tree(c: &mut Criterion) {
     let wat = r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-  (import "env" "__Commit" (func $commit (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $set_style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
   (memory (export "memory") 1)
 
   (data (i32.const 0) "div\00")
@@ -329,11 +329,11 @@ fn bench_wasm_wide_tree(c: &mut Criterion) {
 fn bench_wasm_large_tree_move(c: &mut Criterion) {
     let wat = r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-  (import "env" "__DestroyElement" (func $destroy (param i32) (result i32)))
-  (import "env" "__Commit" (func $commit (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $set_style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__destroy_element" (func $destroy (param i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
   (memory (export "memory") 1)
 
   (data (i32.const 0) "div\00")
@@ -422,10 +422,10 @@ fn bench_wasm_large_tree_move(c: &mut Criterion) {
 fn bench_wasm_remove_nodes(c: &mut Criterion) {
     let wat = r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-  (import "env" "__DestroyElement" (func $destroy (param i32) (result i32)))
-  (import "env" "__Commit" (func $commit (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__destroy_element" (func $destroy (param i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
   (memory (export "memory") 1)
 
   (data (i32.const 0) "div\00")
@@ -518,7 +518,7 @@ fn bench_wasm_add_large_stylesheet(c: &mut Criterion) {
     }
     css.push('\0'); // null-terminate for WASM
 
-    // Build WAT that embeds a pointer/length reference and calls __AddStylesheet
+    // Build WAT that embeds a pointer/length reference and calls __add_stylesheet
     // We'll place the CSS string at offset 0 in WASM memory.
     let css_len = css.len();
     let pages_needed = (css_len / 65536) + 1;
@@ -526,11 +526,11 @@ fn bench_wasm_add_large_stylesheet(c: &mut Criterion) {
     let wat = format!(
         r#"
 (module
-  (import "env" "__AddStylesheet" (func $add_css (param i32) (result i32)))
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetAttribute" (func $set_attr (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-  (import "env" "__Commit" (func $commit (result i32)))
+  (import "env" "__add_stylesheet" (func $add_css (param i32) (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_attribute" (func $set_attr (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
   (memory (export "memory") {pages})
   (func (export "setup")
     (local $root i32)
@@ -639,11 +639,11 @@ fn bench_wasm_complex_selectors(c: &mut Criterion) {
     let wat = format!(
         r#"
 (module
-  (import "env" "__AddStylesheet" (func $add_css (param i32) (result i32)))
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetAttribute" (func $set_attr (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-  (import "env" "__Commit" (func $commit (result i32)))
+  (import "env" "__add_stylesheet" (func $add_css (param i32) (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_attribute" (func $set_attr (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
   (memory (export "memory") 1)
 
   (func (export "setup")
@@ -778,10 +778,10 @@ fn bench_wasm_complex_selectors(c: &mut Criterion) {
 fn bench_wasm_grid_layout(c: &mut Criterion) {
     let wat = r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-  (import "env" "__Commit" (func $commit (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $set_style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
   (memory (export "memory") 1)
 
   (data (i32.const 0) "div\00")

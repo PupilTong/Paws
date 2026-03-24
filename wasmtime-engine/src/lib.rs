@@ -177,9 +177,9 @@ mod tests {
     fn wasm_injected_bindings_compute_height() {
         let wat = r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $set_style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
   (memory (export "memory") 1)
   (data (i32.const 0) "div\00")
   (data (i32.const 16) "height\00")
@@ -230,8 +230,8 @@ mod tests {
     fn wasm_append_element_success_and_idempotent() {
         let wat = r#"
 (module
-    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-    (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
     (data (i32.const 16) "span\00")
@@ -292,8 +292,8 @@ mod tests {
     fn wasm_append_element_invalid_parent_sets_error() {
         let wat = r#"
 (module
-    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-    (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
     (func (export "run") (result i32)
@@ -329,8 +329,8 @@ mod tests {
     fn wasm_append_elements_success_and_dedup() {
         let wat = r#"
 (module
-    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-    (import "env" "__AppendElements" (func $append_many (param i32 i32 i32) (result i32)))
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__append_elements" (func $append_many (param i32 i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
     (data (i32.const 16) "span\00")
@@ -385,8 +385,8 @@ mod tests {
     fn wasm_append_elements_invalid_child_no_partial_apply() {
         let wat = r#"
 (module
-    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-    (import "env" "__AppendElements" (func $append_many (param i32 i32 i32) (result i32)))
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__append_elements" (func $append_many (param i32 i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
     (data (i32.const 16) "span\00")
@@ -435,9 +435,9 @@ mod tests {
     fn wasm_destroy_element() {
         let wat = r#"
 (module
-    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-    (import "env" "__DestroyElement" (func $destroy (param i32) (result i32)))
-    (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__destroy_element" (func $destroy (param i32) (result i32)))
+    (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
     (func (export "run") (result i32)
@@ -478,7 +478,7 @@ mod tests {
     fn wasm_set_inline_style_invalid_child() {
         let wat = r#"
 (module
-    (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
+    (import "env" "__set_inline_style" (func $set_style (param i32 i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "height\00")
     (data (i32.const 16) "100px\00")
@@ -509,9 +509,9 @@ mod tests {
     fn wasm_add_stylesheet_cascade() {
         let wat = r#"
 (module
-    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-    (import "env" "__AddStylesheet" (func $add_css (param i32) (result i32)))
-    (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__add_stylesheet" (func $add_css (param i32) (result i32)))
+    (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
     (data (i32.const 16) "div { height: 77px; }\00")
@@ -560,8 +560,8 @@ mod tests {
     fn wasm_set_attribute_success() {
         let wat = r#"
 (module
-    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-    (import "env" "__SetAttribute" (func $set_attr (param i32 i32 i32) (result i32)))
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__set_attribute" (func $set_attr (param i32 i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
     (data (i32.const 16) "class\00")
@@ -595,7 +595,7 @@ mod tests {
     fn wasm_set_attribute_invalid_child() {
         let wat = r#"
 (module
-    (import "env" "__SetAttribute" (func $set_attr (param i32 i32 i32) (result i32)))
+    (import "env" "__set_attribute" (func $set_attr (param i32 i32 i32) (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "class\00")
     (data (i32.const 16) "foo bar\00")
@@ -626,9 +626,9 @@ mod tests {
     fn run_wat_success() {
         let wat = r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $style (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
   (memory (export "memory") 1)
   (data (i32.const 0) "div\00")
   (data (i32.const 16) "width\00")
@@ -691,10 +691,10 @@ mod tests {
     fn wasm_commit_triggers_style_and_layout() {
         let wat = r#"
 (module
-    (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-    (import "env" "__SetInlineStyle" (func $set_style (param i32 i32 i32) (result i32)))
-    (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-    (import "env" "__Commit" (func $commit (result i32)))
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__set_inline_style" (func $set_style (param i32 i32 i32) (result i32)))
+    (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+    (import "env" "__commit" (func $commit (result i32)))
     (memory (export "memory") 1)
     (data (i32.const 0) "div\00")
     (data (i32.const 16) "width\00")
@@ -728,7 +728,7 @@ mod tests {
             .get_typed_func::<(), i32>(&mut store, "run")
             .expect("get run function");
         let result = run.call(&mut store, ()).expect("run wasm");
-        assert_eq!(result, 0, "__Commit should return 0 on success");
+        assert_eq!(result, 0, "__commit should return 0 on success");
 
         // Verify that commit resolved styles by reading a computed property
         let state = store.data_mut();

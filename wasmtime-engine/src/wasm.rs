@@ -94,6 +94,50 @@ fn read_i32_slice(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> 
     })
 }
 
+/// Writes bytes into WASM linear memory at the given offset.
+///
+/// Returns `Ok(())` if the write fits within the memory, or `Err` on
+/// out-of-bounds access.
+fn write_to_memory(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: i32,
+    data: &[u8],
+) -> Result<()> {
+    let start = ptr as usize;
+    let end = start
+        .checked_add(data.len())
+        .ok_or_else(|| anyhow!("length overflow"))?;
+
+    let export = caller
+        .get_export("memory")
+        .ok_or_else(|| anyhow!("missing memory export"))?;
+
+    if let Some(memory) = export.clone().into_memory() {
+        let mem = memory.data_mut(&mut *caller);
+        if end > mem.len() {
+            return Err(anyhow!("pointer out of bounds"));
+        }
+        mem[start..end].copy_from_slice(data);
+        return Ok(());
+    }
+
+    if let Some(shared) = export.into_shared_memory() {
+        let raw = shared.data();
+        if end > raw.len() {
+            return Err(anyhow!("pointer out of bounds"));
+        }
+        // SAFETY: Single-threaded WASM execution — no concurrent writes during
+        // host function calls.
+        unsafe {
+            let dst = raw.as_ptr() as *mut u8;
+            std::ptr::copy_nonoverlapping(data.as_ptr(), dst.add(start), data.len());
+        }
+        return Ok(());
+    }
+
+    Err(anyhow!("memory export is neither Memory nor SharedMemory"))
+}
+
 /// Reads a raw byte region from WASM linear memory.
 ///
 /// Unlike `read_cstr`, this function *does* allocate a `Vec<u8>` because the
@@ -121,7 +165,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
     linker
         .func_wrap(
             "env",
-            "__CreateElement",
+            "__create_element",
             |mut caller: Caller<'_, RuntimeState>, name_ptr: i32| -> Result<i32> {
                 let name = match read_cstr(&mut caller, name_ptr) {
                     Ok(value) => value,
@@ -137,12 +181,12 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
                 Ok(id as i32)
             },
         )
-        .expect("link __CreateElement");
+        .expect("link __create_element");
 
     linker
         .func_wrap(
             "env",
-            "__SetInlineStyle",
+            "__set_inline_style",
             |mut caller: Caller<'_, RuntimeState>,
              id: i32,
              name_ptr: i32,
@@ -185,12 +229,12 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
                 }
             },
         )
-        .expect("link __SetInlineStyle");
+        .expect("link __set_inline_style");
 
     linker
         .func_wrap(
             "env",
-            "__DestroyElement",
+            "__destroy_element",
             |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
@@ -210,12 +254,12 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
                 }
             },
         )
-        .expect("link __DestroyElement");
+        .expect("link __destroy_element");
 
     linker
         .func_wrap(
             "env",
-            "__AppendElement",
+            "__append_element",
             |mut caller: Caller<'_, RuntimeState>, parent: i32, child: i32| -> Result<i32> {
                 if parent < 0 || child < 0 {
                     let code = caller
@@ -238,12 +282,12 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
                 }
             },
         )
-        .expect("link __AppendElement");
+        .expect("link __append_element");
 
     linker
         .func_wrap(
             "env",
-            "__AppendElements",
+            "__append_elements",
             |mut caller: Caller<'_, RuntimeState>,
              parent: i32,
              ptr: i32,
@@ -279,12 +323,12 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
                 }
             },
         )
-        .expect("link __AppendElements");
+        .expect("link __append_elements");
 
     linker
         .func_wrap(
             "env",
-            "__AddStylesheet",
+            "__add_stylesheet",
             |mut caller: Caller<'_, RuntimeState>, css_ptr: i32| -> Result<i32> {
                 let css = match read_cstr(&mut caller, css_ptr) {
                     Ok(value) => value,
@@ -300,12 +344,12 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
                 Ok(0)
             },
         )
-        .expect("link __AddStylesheet");
+        .expect("link __add_stylesheet");
 
     linker
         .func_wrap(
             "env",
-            "__SetAttribute",
+            "__set_attribute",
             |mut caller: Caller<'_, RuntimeState>,
              id: i32,
              name_ptr: i32,
@@ -348,19 +392,404 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
                 }
             },
         )
-        .expect("link __SetAttribute");
+        .expect("link __set_attribute");
 
     linker
         .func_wrap(
             "env",
-            "__Commit",
+            "__commit",
             |mut caller: Caller<'_, RuntimeState>| -> Result<i32> {
                 caller.data_mut().commit();
                 caller.data_mut().clear_error();
                 Ok(0)
             },
         )
-        .expect("link __Commit");
+        .expect("link __commit");
+
+    // -----------------------------------------------------------------------
+    // New DOM query / mutation host functions
+    // -----------------------------------------------------------------------
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_first_child",
+            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data().get_first_child(id as u32) {
+                    Ok(Some(child_id)) => {
+                        caller.data_mut().clear_error();
+                        Ok(child_id as i32)
+                    }
+                    Ok(None) => {
+                        caller.data_mut().clear_error();
+                        Ok(-1)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __get_first_child");
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_last_child",
+            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data().get_last_child(id as u32) {
+                    Ok(Some(child_id)) => {
+                        caller.data_mut().clear_error();
+                        Ok(child_id as i32)
+                    }
+                    Ok(None) => {
+                        caller.data_mut().clear_error();
+                        Ok(-1)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __get_last_child");
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_next_sibling",
+            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data().get_next_sibling(id as u32) {
+                    Ok(Some(sibling_id)) => {
+                        caller.data_mut().clear_error();
+                        Ok(sibling_id as i32)
+                    }
+                    Ok(None) => {
+                        caller.data_mut().clear_error();
+                        Ok(-1)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __get_next_sibling");
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_previous_sibling",
+            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data().get_previous_sibling(id as u32) {
+                    Ok(Some(sibling_id)) => {
+                        caller.data_mut().clear_error();
+                        Ok(sibling_id as i32)
+                    }
+                    Ok(None) => {
+                        caller.data_mut().clear_error();
+                        Ok(-1)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __get_previous_sibling");
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_parent_element",
+            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data().get_parent_element(id as u32) {
+                    Ok(Some(parent_id)) => {
+                        caller.data_mut().clear_error();
+                        Ok(parent_id as i32)
+                    }
+                    Ok(None) => {
+                        caller.data_mut().clear_error();
+                        Ok(-1)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __get_parent_element");
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_parent_node",
+            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data().get_parent_node(id as u32) {
+                    Ok(Some(parent_id)) => {
+                        caller.data_mut().clear_error();
+                        Ok(parent_id as i32)
+                    }
+                    Ok(None) => {
+                        caller.data_mut().clear_error();
+                        Ok(-1)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __get_parent_node");
+
+    linker
+        .func_wrap(
+            "env",
+            "__is_connected",
+            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data().is_connected(id as u32) {
+                    Ok(connected) => {
+                        caller.data_mut().clear_error();
+                        Ok(if connected { 1 } else { 0 })
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __is_connected");
+
+    linker
+        .func_wrap(
+            "env",
+            "__has_attribute",
+            |mut caller: Caller<'_, RuntimeState>, id: i32, name_ptr: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                let name = match read_cstr(&mut caller, name_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                match caller.data().has_attribute(id as u32, &name) {
+                    Ok(has) => {
+                        caller.data_mut().clear_error();
+                        Ok(if has { 1 } else { 0 })
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __has_attribute");
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_attribute",
+            |mut caller: Caller<'_, RuntimeState>,
+             id: i32,
+             name_ptr: i32,
+             buf_ptr: i32,
+             buf_len: i32|
+             -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                let name = match read_cstr(&mut caller, name_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                match caller.data().get_attribute(id as u32, &name) {
+                    Ok(Some(value)) => {
+                        let bytes = value.as_bytes();
+                        let needed = bytes.len() as i32;
+                        if buf_len >= needed {
+                            if let Err(err) = write_to_memory(&mut caller, buf_ptr, bytes) {
+                                let code = caller
+                                    .data_mut()
+                                    .set_error(HostErrorCode::MemoryError, err.to_string());
+                                return Ok(code);
+                            }
+                        }
+                        caller.data_mut().clear_error();
+                        Ok(needed)
+                    }
+                    Ok(None) => {
+                        caller.data_mut().clear_error();
+                        Ok(-1)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __get_attribute");
+
+    linker
+        .func_wrap(
+            "env",
+            "__remove_attribute",
+            |mut caller: Caller<'_, RuntimeState>, id: i32, name_ptr: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                let name = match read_cstr(&mut caller, name_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                match caller.data_mut().remove_attribute(id as u32, &name) {
+                    Ok(()) => {
+                        caller.data_mut().clear_error();
+                        Ok(0)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __remove_attribute");
+
+    linker
+        .func_wrap(
+            "env",
+            "__remove_child",
+            |mut caller: Caller<'_, RuntimeState>, parent: i32, child: i32| -> Result<i32> {
+                if parent < 0 || child < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative element id");
+                    return Ok(code);
+                }
+                match caller
+                    .data_mut()
+                    .remove_child(parent as u32, child as u32)
+                {
+                    Ok(()) => {
+                        caller.data_mut().clear_error();
+                        Ok(0)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __remove_child");
+
+    linker
+        .func_wrap(
+            "env",
+            "__replace_child",
+            |mut caller: Caller<'_, RuntimeState>,
+             parent: i32,
+             new_child: i32,
+             old_child: i32|
+             -> Result<i32> {
+                if parent < 0 || new_child < 0 || old_child < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative element id");
+                    return Ok(code);
+                }
+                match caller.data_mut().replace_child(
+                    parent as u32,
+                    new_child as u32,
+                    old_child as u32,
+                ) {
+                    Ok(()) => {
+                        caller.data_mut().clear_error();
+                        Ok(0)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __replace_child");
 
     linker
         .func_wrap(

@@ -503,9 +503,9 @@ mod tests {
         let wat = CString::new(
             r#"
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $style (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
   (memory (export "memory") 1)
   (data (i32.const 0) "div\00")
   (data (i32.const 16) "width\00")

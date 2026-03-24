@@ -26,14 +26,26 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[link(wasm_import_module = "env")]
 extern "C" {
-    fn __CreateElement(name_ptr: *const u8) -> i32;
-    fn __SetInlineStyle(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
-    fn __SetAttribute(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
-    fn __AppendElement(parent: i32, child: i32) -> i32;
-    fn __AppendElements(parent: i32, ptr: *const i32, len: i32) -> i32;
-    fn __DestroyElement(id: i32) -> i32;
-    fn __AddStylesheet(css_ptr: *const u8) -> i32;
-    fn __Commit() -> i32;
+    fn __create_element(name_ptr: *const u8) -> i32;
+    fn __set_inline_style(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
+    fn __set_attribute(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
+    fn __append_element(parent: i32, child: i32) -> i32;
+    fn __append_elements(parent: i32, ptr: *const i32, len: i32) -> i32;
+    fn __destroy_element(id: i32) -> i32;
+    fn __add_stylesheet(css_ptr: *const u8) -> i32;
+    fn __commit() -> i32;
+    fn __get_first_child(id: i32) -> i32;
+    fn __get_last_child(id: i32) -> i32;
+    fn __get_next_sibling(id: i32) -> i32;
+    fn __get_previous_sibling(id: i32) -> i32;
+    fn __get_parent_element(id: i32) -> i32;
+    fn __get_parent_node(id: i32) -> i32;
+    fn __is_connected(id: i32) -> i32;
+    fn __has_attribute(id: i32, name_ptr: *const u8) -> i32;
+    fn __get_attribute(id: i32, name_ptr: *const u8, buf_ptr: *mut u8, buf_len: i32) -> i32;
+    fn __remove_attribute(id: i32, name_ptr: *const u8) -> i32;
+    fn __remove_child(parent: i32, child: i32) -> i32;
+    fn __replace_child(parent: i32, new_child: i32, old_child: i32) -> i32;
 }
 
 #[link(wasm_import_module = "paws")]
@@ -126,7 +138,7 @@ pub fn create_element(name: &str) -> Result<i32, i32> {
     let ptr = write_cstr(name);
     // SAFETY: `ptr` points to a null-terminated string in WASM linear memory.
     // The host reads from this memory region during the call.
-    let id = unsafe { __CreateElement(ptr) };
+    let id = unsafe { __create_element(ptr) };
     if id < 0 {
         Err(id)
     } else {
@@ -139,7 +151,7 @@ pub fn set_inline_style(id: i32, name: &str, value: &str) -> Result<(), i32> {
     let name_ptr = write_cstr(name);
     let value_ptr = write_cstr(value);
     // SAFETY: Both pointers are null-terminated strings in WASM linear memory.
-    let code = unsafe { __SetInlineStyle(id, name_ptr, value_ptr) };
+    let code = unsafe { __set_inline_style(id, name_ptr, value_ptr) };
     check(code)
 }
 
@@ -148,14 +160,14 @@ pub fn set_attribute(id: i32, name: &str, value: &str) -> Result<(), i32> {
     let name_ptr = write_cstr(name);
     let value_ptr = write_cstr(value);
     // SAFETY: Both pointers are null-terminated strings in WASM linear memory.
-    let code = unsafe { __SetAttribute(id, name_ptr, value_ptr) };
+    let code = unsafe { __set_attribute(id, name_ptr, value_ptr) };
     check(code)
 }
 
 /// Appends a child element to a parent element.
 pub fn append_element(parent: i32, child: i32) -> Result<(), i32> {
     // SAFETY: No memory pointers involved — only integer IDs.
-    let code = unsafe { __AppendElement(parent, child) };
+    let code = unsafe { __append_element(parent, child) };
     check(code)
 }
 
@@ -165,14 +177,14 @@ pub fn append_element(parent: i32, child: i32) -> Result<(), i32> {
 pub fn append_elements(parent: i32, children: &[i32]) -> Result<(), i32> {
     // SAFETY: `children.as_ptr()` points to a valid i32 slice in WASM linear
     // memory. The host reads `len` i32 values starting from this pointer.
-    let code = unsafe { __AppendElements(parent, children.as_ptr(), children.len() as i32) };
+    let code = unsafe { __append_elements(parent, children.as_ptr(), children.len() as i32) };
     check(code)
 }
 
 /// Destroys an element and all its descendants.
 pub fn destroy_element(id: i32) -> Result<(), i32> {
     // SAFETY: No memory pointers involved — only integer ID.
-    let code = unsafe { __DestroyElement(id) };
+    let code = unsafe { __destroy_element(id) };
     check(code)
 }
 
@@ -180,7 +192,7 @@ pub fn destroy_element(id: i32) -> Result<(), i32> {
 pub fn add_stylesheet(css: &str) -> Result<(), i32> {
     let ptr = write_cstr(css);
     // SAFETY: `ptr` points to a null-terminated CSS string in WASM linear memory.
-    let code = unsafe { __AddStylesheet(ptr) };
+    let code = unsafe { __add_stylesheet(ptr) };
     check(code)
 }
 
@@ -189,7 +201,7 @@ pub fn add_stylesheet(css: &str) -> Result<(), i32> {
 /// Returns `Ok(())` on success.
 pub fn commit() -> Result<(), i32> {
     // SAFETY: No arguments — triggers host-side style+layout pass.
-    let code = unsafe { __Commit() };
+    let code = unsafe { __commit() };
     check(code)
 }
 
@@ -202,6 +214,119 @@ pub fn apply_css(css_bytes: &[u8]) {
     unsafe {
         paws_add_parsed_stylesheet(css_bytes.as_ptr(), css_bytes.len());
     }
+}
+
+// ---------------------------------------------------------------------------
+// DOM query wrappers
+// ---------------------------------------------------------------------------
+
+/// Returns the first child of the given node, or `None` if it has no children.
+pub fn get_first_child(id: i32) -> Option<i32> {
+    // SAFETY: No memory pointers involved — only integer ID.
+    let result = unsafe { __get_first_child(id) };
+    if result >= 0 { Some(result) } else { None }
+}
+
+/// Returns the last child of the given node, or `None` if it has no children.
+pub fn get_last_child(id: i32) -> Option<i32> {
+    // SAFETY: No memory pointers involved — only integer ID.
+    let result = unsafe { __get_last_child(id) };
+    if result >= 0 { Some(result) } else { None }
+}
+
+/// Returns the next sibling of the given node, or `None`.
+pub fn get_next_sibling(id: i32) -> Option<i32> {
+    // SAFETY: No memory pointers involved — only integer ID.
+    let result = unsafe { __get_next_sibling(id) };
+    if result >= 0 { Some(result) } else { None }
+}
+
+/// Returns the previous sibling of the given node, or `None`.
+pub fn get_previous_sibling(id: i32) -> Option<i32> {
+    // SAFETY: No memory pointers involved — only integer ID.
+    let result = unsafe { __get_previous_sibling(id) };
+    if result >= 0 { Some(result) } else { None }
+}
+
+/// Returns the parent element (Element type only), or `None`.
+pub fn get_parent_element(id: i32) -> Option<i32> {
+    // SAFETY: No memory pointers involved — only integer ID.
+    let result = unsafe { __get_parent_element(id) };
+    if result >= 0 { Some(result) } else { None }
+}
+
+/// Returns the parent node (any type), or `None`.
+pub fn get_parent_node(id: i32) -> Option<i32> {
+    // SAFETY: No memory pointers involved — only integer ID.
+    let result = unsafe { __get_parent_node(id) };
+    if result >= 0 { Some(result) } else { None }
+}
+
+/// Returns whether the node is connected to the document tree.
+pub fn is_connected(id: i32) -> Result<bool, i32> {
+    // SAFETY: No memory pointers involved — only integer ID.
+    let result = unsafe { __is_connected(id) };
+    match result {
+        1 => Ok(true),
+        0 => Ok(false),
+        err => Err(err),
+    }
+}
+
+/// Returns whether the element has the named attribute.
+pub fn has_attribute(id: i32, name: &str) -> Result<bool, i32> {
+    let name_ptr = write_cstr(name);
+    // SAFETY: `name_ptr` points to a null-terminated string in WASM linear memory.
+    let result = unsafe { __has_attribute(id, name_ptr) };
+    match result {
+        1 => Ok(true),
+        0 => Ok(false),
+        err => Err(err),
+    }
+}
+
+/// Reads the value of the named attribute into `buf`.
+///
+/// Returns `Ok(Some(len))` with the byte length of the attribute value on
+/// success. If `buf` is large enough the value is written into it; otherwise
+/// only the needed length is returned (no write). Returns `Ok(None)` if the
+/// attribute does not exist.
+pub fn get_attribute(id: i32, name: &str, buf: &mut [u8]) -> Result<Option<usize>, i32> {
+    let name_ptr = write_cstr(name);
+    // SAFETY: `name_ptr` is a null-terminated string. `buf` is a valid mutable
+    // byte slice in WASM linear memory.
+    let result = unsafe {
+        __get_attribute(id, name_ptr, buf.as_mut_ptr(), buf.len() as i32)
+    };
+    if result >= 0 {
+        Ok(Some(result as usize))
+    } else if result == -1 {
+        Ok(None)
+    } else {
+        Err(result)
+    }
+}
+
+/// Removes the named attribute from the element.
+pub fn remove_attribute(id: i32, name: &str) -> Result<(), i32> {
+    let name_ptr = write_cstr(name);
+    // SAFETY: `name_ptr` points to a null-terminated string in WASM linear memory.
+    let code = unsafe { __remove_attribute(id, name_ptr) };
+    check(code)
+}
+
+/// Removes a child from its parent without deleting the child node.
+pub fn remove_child(parent: i32, child: i32) -> Result<(), i32> {
+    // SAFETY: No memory pointers involved — only integer IDs.
+    let code = unsafe { __remove_child(parent, child) };
+    check(code)
+}
+
+/// Replaces an old child with a new child under the given parent.
+pub fn replace_child(parent: i32, new_child: i32, old_child: i32) -> Result<(), i32> {
+    // SAFETY: No memory pointers involved — only integer IDs.
+    let code = unsafe { __replace_child(parent, new_child, old_child) };
+    check(code)
 }
 
 // ---------------------------------------------------------------------------

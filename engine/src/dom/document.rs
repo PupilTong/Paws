@@ -228,6 +228,139 @@ impl Document {
         }
     }
 
+    /// Removes a child from its parent without deleting the child node.
+    ///
+    /// Validates that the child's parent matches `parent_id` before detaching.
+    /// Per the W3C DOM spec, throws if the child is not a child of the parent.
+    pub(crate) fn remove_child(
+        &mut self,
+        parent_id: taffy::NodeId,
+        child_id: taffy::NodeId,
+    ) -> Result<(), DomError> {
+        if !self.nodes.contains(u64::from(parent_id) as usize) {
+            return Err(DomError::InvalidParent);
+        }
+        if !self.nodes.contains(u64::from(child_id) as usize) {
+            return Err(DomError::InvalidChild);
+        }
+        let actual_parent = self.get_node(child_id).unwrap().parent;
+        if actual_parent != Some(parent_id) {
+            return Err(DomError::InvalidChild);
+        }
+        self.detach_node(child_id);
+        Ok(())
+    }
+
+    /// Replaces an old child with a new child under a given parent.
+    ///
+    /// The new child is inserted at the same position as the old child.
+    /// The old child is detached (not deleted). Per the W3C DOM spec,
+    /// this is `parentNode.replaceChild(newChild, oldChild)`.
+    pub(crate) fn replace_child(
+        &mut self,
+        parent_id: taffy::NodeId,
+        new_child_id: taffy::NodeId,
+        old_child_id: taffy::NodeId,
+    ) -> Result<(), DomError> {
+        // Validate existence
+        if !self.nodes.contains(u64::from(parent_id) as usize) {
+            return Err(DomError::InvalidParent);
+        }
+        if !self.nodes.contains(u64::from(new_child_id) as usize) {
+            return Err(DomError::InvalidChild);
+        }
+        if !self.nodes.contains(u64::from(old_child_id) as usize) {
+            return Err(DomError::InvalidChild);
+        }
+
+        // Verify old_child is actually a child of parent
+        let old_parent = self.get_node(old_child_id).unwrap().parent;
+        if old_parent != Some(parent_id) {
+            return Err(DomError::InvalidChild);
+        }
+
+        // Check new_child doesn't create a cycle
+        if new_child_id == parent_id {
+            return Err(DomError::CycleDetected);
+        }
+        let mut ancestor = Some(parent_id);
+        while let Some(curr) = ancestor {
+            if curr == new_child_id {
+                return Err(DomError::CycleDetected);
+            }
+            ancestor = self.get_node(curr).and_then(|n| n.parent);
+        }
+
+        // If new_child already has a parent that isn't this parent, reject
+        let new_parent = self.get_node(new_child_id).unwrap().parent;
+        if new_parent.is_some() && new_parent != Some(parent_id) {
+            return Err(DomError::ChildAlreadyHasParent);
+        }
+
+        // Find old_child's position in parent's children
+        let pos = self
+            .get_node(parent_id)
+            .unwrap()
+            .children
+            .iter()
+            .position(|&id| id == old_child_id)
+            .unwrap();
+
+        // Detach new_child if it has a parent
+        if new_parent.is_some() {
+            self.detach_node(new_child_id);
+        }
+
+        // Detach old_child
+        if let Some(old) = self.get_node_mut(old_child_id) {
+            old.parent = None;
+        }
+        self.clear_in_document_flag(old_child_id);
+
+        // Insert new_child at the old position
+        if let Some(parent) = self.get_node_mut(parent_id) {
+            // Remove old_child from children (it's at `pos`)
+            parent.children.remove(pos);
+            parent.children.insert(pos, new_child_id);
+            parent.set_dirty_descendants();
+        }
+
+        // Set new_child's parent
+        if let Some(new_child) = self.get_node_mut(new_child_id) {
+            new_child.parent = Some(parent_id);
+        }
+
+        // Propagate IS_IN_DOCUMENT flag
+        let parent_in_doc = self
+            .get_node(parent_id)
+            .map_or(false, |n| n.flags.contains(NodeFlags::IS_IN_DOCUMENT));
+        if parent_in_doc {
+            self.propagate_in_document_flag(new_child_id);
+        }
+
+        Ok(())
+    }
+
+    /// Returns the next sibling of the given node, or `None`.
+    pub(crate) fn get_next_sibling(&self, node_id: taffy::NodeId) -> Option<taffy::NodeId> {
+        let parent_id = self.get_node(node_id)?.parent?;
+        let parent = self.get_node(parent_id)?;
+        let pos = parent.children.iter().position(|&id| id == node_id)?;
+        parent.children.get(pos + 1).copied()
+    }
+
+    /// Returns the previous sibling of the given node, or `None`.
+    pub(crate) fn get_previous_sibling(&self, node_id: taffy::NodeId) -> Option<taffy::NodeId> {
+        let parent_id = self.get_node(node_id)?.parent?;
+        let parent = self.get_node(parent_id)?;
+        let pos = parent.children.iter().position(|&id| id == node_id)?;
+        if pos == 0 {
+            None
+        } else {
+            parent.children.get(pos - 1).copied()
+        }
+    }
+
     pub(crate) fn remove_node(&mut self, id: taffy::NodeId) -> Result<(), DomError> {
         if !self.nodes.contains(u64::from(id) as usize) {
             return Err(DomError::InvalidChild);

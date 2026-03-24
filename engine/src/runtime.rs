@@ -329,6 +329,164 @@ impl RuntimeState {
         }
         Ok(())
     }
+
+    /// Removes a child from its parent without deleting the child node.
+    pub fn remove_child(&mut self, parent: u32, child: u32) -> Result<(), HostErrorCode> {
+        self.doc
+            .remove_child(
+                taffy::NodeId::from(parent as u64),
+                taffy::NodeId::from(child as u64),
+            )
+            .map_err(dom_error_to_host)
+    }
+
+    /// Replaces an old child with a new child under a given parent.
+    pub fn replace_child(
+        &mut self,
+        parent: u32,
+        new_child: u32,
+        old_child: u32,
+    ) -> Result<(), HostErrorCode> {
+        self.doc
+            .replace_child(
+                taffy::NodeId::from(parent as u64),
+                taffy::NodeId::from(new_child as u64),
+                taffy::NodeId::from(old_child as u64),
+            )
+            .map_err(dom_error_to_host)
+    }
+
+    /// Returns the first child of the given node, or `None`.
+    pub fn get_first_child(&self, id: u32) -> Result<Option<u32>, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        Ok(node.children.first().map(|&id| u64::from(id) as u32))
+    }
+
+    /// Returns the last child of the given node, or `None`.
+    pub fn get_last_child(&self, id: u32) -> Result<Option<u32>, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        Ok(node.children.last().map(|&id| u64::from(id) as u32))
+    }
+
+    /// Returns the next sibling of the given node, or `None`.
+    pub fn get_next_sibling(&self, id: u32) -> Result<Option<u32>, HostErrorCode> {
+        if self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .is_none()
+        {
+            return Err(HostErrorCode::InvalidChild);
+        }
+        Ok(self
+            .doc
+            .get_next_sibling(taffy::NodeId::from(id as u64))
+            .map(|id| u64::from(id) as u32))
+    }
+
+    /// Returns the previous sibling of the given node, or `None`.
+    pub fn get_previous_sibling(&self, id: u32) -> Result<Option<u32>, HostErrorCode> {
+        if self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .is_none()
+        {
+            return Err(HostErrorCode::InvalidChild);
+        }
+        Ok(self
+            .doc
+            .get_previous_sibling(taffy::NodeId::from(id as u64))
+            .map(|id| u64::from(id) as u32))
+    }
+
+    /// Returns the parent element (only if it is an Element type).
+    pub fn get_parent_element(&self, id: u32) -> Result<Option<u32>, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        let parent_id = match node.parent {
+            Some(pid) => pid,
+            None => return Ok(None),
+        };
+        let parent = self.doc.get_node(parent_id);
+        match parent {
+            Some(p) if p.is_element() => Ok(Some(u64::from(parent_id) as u32)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Returns the parent node (any type).
+    pub fn get_parent_node(&self, id: u32) -> Result<Option<u32>, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        Ok(node.parent.map(|pid| u64::from(pid) as u32))
+    }
+
+    /// Returns whether the node is connected to the document.
+    pub fn is_connected(&self, id: u32) -> Result<bool, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        Ok(node
+            .flags
+            .contains(crate::dom::element::NodeFlags::IS_IN_DOCUMENT))
+    }
+
+    /// Returns whether the element has the named attribute.
+    pub fn has_attribute(&self, id: u32, name: &str) -> Result<bool, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        if !node.is_element() {
+            return Err(HostErrorCode::InvalidChild);
+        }
+        Ok(node.has_attribute(name))
+    }
+
+    /// Returns the value of the named attribute, or `None` if absent.
+    pub fn get_attribute(&self, id: u32, name: &str) -> Result<Option<String>, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        if !node.is_element() {
+            return Err(HostErrorCode::InvalidChild);
+        }
+        Ok(node.get_attribute(name).map(|s| s.to_string()))
+    }
+
+    /// Removes the named attribute from the element.
+    pub fn remove_attribute(&mut self, id: u32, name: &str) -> Result<(), HostErrorCode> {
+        let node = self
+            .doc
+            .get_node_mut(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        if !node.is_element() {
+            return Err(HostErrorCode::InvalidChild);
+        }
+        node.remove_attribute(name);
+        Ok(())
+    }
+}
+
+/// Maps a [`DomError`] to a [`HostErrorCode`] for FFI.
+fn dom_error_to_host(e: DomError) -> HostErrorCode {
+    match e {
+        DomError::InvalidParent => HostErrorCode::InvalidParent,
+        DomError::InvalidChild => HostErrorCode::InvalidChild,
+        DomError::CycleDetected => HostErrorCode::CycleDetected,
+        DomError::ChildAlreadyHasParent => HostErrorCode::ChildAlreadyHasParent,
+    }
 }
 
 #[cfg(test)]
