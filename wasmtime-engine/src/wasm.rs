@@ -3,120 +3,118 @@ use wasmtime::{Caller, Engine as WasmEngine, Linker};
 
 use engine::{HostErrorCode, RuntimeState};
 
-/// Reads a slice of the WASM module's linear memory.
+/// Resolves the WASM memory export **once** and passes the full linear-memory
+/// `&[u8]` into `f`.
 ///
 /// Handles both regular `Memory` exports (WAT tests) and `SharedMemory`
-/// exports (modules compiled with `wasm32-wasip1-threads`).
-fn read_memory_slice(
+/// exports (modules compiled with `wasm32-wasip1-threads`). The export lookup
+/// (`get_export("memory")`) and memory-type dispatch happen exactly once per
+/// call, regardless of how much data the callback reads.
+fn with_memory_data<T>(
     caller: &mut Caller<'_, RuntimeState>,
-    offset: usize,
-    len: usize,
-) -> Result<Vec<u8>> {
+    f: impl FnOnce(&[u8]) -> Result<T>,
+) -> Result<T> {
     let export = caller
         .get_export("memory")
         .ok_or_else(|| anyhow!("missing memory export"))?;
 
-    // Try regular Memory first, then SharedMemory
+    // Try regular Memory first (WAT / non-threaded modules).
     if let Some(memory) = export.clone().into_memory() {
-        let data = memory.data(caller);
-        let end = offset
-            .checked_add(len)
-            .ok_or_else(|| anyhow!("length overflow"))?;
-        if end > data.len() {
-            return Err(anyhow!("pointer out of bounds"));
-        }
-        return Ok(data[offset..end].to_vec());
+        let data = memory.data(&*caller);
+        return f(data);
     }
 
+    // Fall back to SharedMemory (wasm32-wasip1-threads modules).
     if let Some(shared) = export.into_shared_memory() {
-        let data = shared.data();
-        let end = offset
-            .checked_add(len)
-            .ok_or_else(|| anyhow!("length overflow"))?;
-        if end > data.len() {
-            return Err(anyhow!("pointer out of bounds"));
-        }
+        let raw = shared.data();
         // SAFETY: Shared memory may be concurrently modified, but in our
         // single-threaded WASM execution model no concurrent writes occur
         // during host function calls. We read a snapshot of the data.
-        let slice =
-            unsafe { &*std::ptr::slice_from_raw_parts(data.as_ptr() as *const u8, data.len()) };
-        return Ok(slice[offset..end].to_vec());
+        let data =
+            unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const u8, raw.len()) };
+        return f(data);
     }
 
     Err(anyhow!("memory export is neither Memory nor SharedMemory"))
 }
 
+/// Reads a null-terminated C string starting at `ptr` in WASM linear memory.
+///
+/// The memory export is resolved once. The full `&[u8]` slice is scanned
+/// in-place for the null terminator — no intermediate `Vec` allocations and
+/// no chunked reads.
 pub fn read_cstr(caller: &mut Caller<'_, RuntimeState>, ptr: i32) -> Result<String> {
     let start = ptr as usize;
 
-    let to_string = |bytes: &[u8]| {
-        std::str::from_utf8(bytes)
-            .map(|s| s.to_string())
-            .map_err(|_| anyhow!("invalid utf-8 string"))
-    };
-
-    // Read in chunks to find null terminator. Start with a reasonable size.
-    let chunk_size = 256;
-    let mut buf = read_memory_slice(caller, start, chunk_size)?;
-
-    // Find null terminator
-    if let Some(null_pos) = buf.iter().position(|&b| b == 0) {
-        return to_string(&buf[..null_pos]);
-    }
-
-    // If not found in first chunk, keep reading
-    let mut total_read = chunk_size;
-    loop {
-        let next_chunk = match read_memory_slice(caller, start + total_read, chunk_size) {
-            Ok(c) => c,
-            Err(_) => return Err(anyhow!("unterminated string")),
-        };
-        buf.extend_from_slice(&next_chunk);
-        total_read += chunk_size;
-        if let Some(null_pos) = buf.iter().position(|&b| b == 0) {
-            return to_string(&buf[..null_pos]);
+    with_memory_data(caller, |data| {
+        if start >= data.len() {
+            return Err(anyhow!("pointer out of bounds"));
         }
-    }
+        match data[start..].iter().position(|&b| b == 0) {
+            Some(null_pos) => std::str::from_utf8(&data[start..start + null_pos])
+                .map(|s| s.to_string())
+                .map_err(|_| anyhow!("invalid utf-8 string")),
+            None => Err(anyhow!("unterminated string")),
+        }
+    })
 }
 
+/// Reads a contiguous `i32` array from WASM linear memory and returns the
+/// values as `u32`s (after validating they are non-negative).
+///
+/// The memory export is resolved once; elements are read directly from the
+/// backing `&[u8]` slice without an intermediate copy.
 fn read_i32_slice(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> Result<Vec<u32>> {
     if ptr < 0 || len < 0 {
         return Err(anyhow!("pointer or length out of bounds"));
     }
     let start = ptr as usize;
-    let byte_len = (len as usize)
+    let count = len as usize;
+    let byte_len = count
         .checked_mul(std::mem::size_of::<i32>())
         .ok_or_else(|| anyhow!("length overflow"))?;
+    let end = start
+        .checked_add(byte_len)
+        .ok_or_else(|| anyhow!("length overflow"))?;
 
-    let data = read_memory_slice(caller, start, byte_len)?;
-
-    let mut values = Vec::with_capacity(len as usize);
-    for index in 0..len as usize {
-        let offset = index * 4;
-        let bytes = [
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ];
-        let value = i32::from_le_bytes(bytes);
-        if value < 0 {
-            return Err(anyhow!("negative child id"));
+    with_memory_data(caller, |data| {
+        if end > data.len() {
+            return Err(anyhow!("pointer out of bounds"));
         }
-        values.push(value as u32);
-    }
-
-    Ok(values)
+        let mut values = Vec::with_capacity(count);
+        for i in 0..count {
+            let off = start + i * 4;
+            let bytes = [data[off], data[off + 1], data[off + 2], data[off + 3]];
+            let value = i32::from_le_bytes(bytes);
+            if value < 0 {
+                return Err(anyhow!("negative child id"));
+            }
+            values.push(value as u32);
+        }
+        Ok(values)
+    })
 }
 
+/// Reads a raw byte region from WASM linear memory.
+///
+/// Unlike `read_cstr`, this function *does* allocate a `Vec<u8>` because the
+/// caller needs owned bytes. However, the memory export is resolved only once.
 fn read_byte_vec(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> Result<Vec<u8>> {
     if ptr < 0 || len < 0 {
         return Err(anyhow!("pointer or length out of bounds"));
     }
     let start = ptr as usize;
     let byte_len = len as usize;
-    read_memory_slice(caller, start, byte_len)
+    let end = start
+        .checked_add(byte_len)
+        .ok_or_else(|| anyhow!("length overflow"))?;
+
+    with_memory_data(caller, |data| {
+        if end > data.len() {
+            return Err(anyhow!("pointer out of bounds"));
+        }
+        Ok(data[start..end].to_vec())
+    })
 }
 
 pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
