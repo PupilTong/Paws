@@ -5,10 +5,10 @@
 /// - 4 children: `width:50px; height:50px` with red, green, blue, orange backgrounds
 let demoWat = """
 (module
-  (import "env" "__CreateElement" (func $create (param i32) (result i32)))
-  (import "env" "__SetInlineStyle" (func $style (param i32 i32 i32) (result i32)))
-  (import "env" "__AppendElement" (func $append (param i32 i32) (result i32)))
-  (import "env" "__Commit" (func $commit (result i32)))
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
   (memory (export "memory") 1)
 
   ;; String data laid out in linear memory.

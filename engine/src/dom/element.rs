@@ -190,6 +190,33 @@ impl PawsElement {
     pub(crate) fn has_class(&self, name: &Atom) -> bool {
         self.classes.contains(name)
     }
+
+    /// Returns `true` if the element has the named attribute.
+    pub(crate) fn has_attribute(&self, name: &str) -> bool {
+        self.attrs.contains_key(&Atom::from(name))
+    }
+
+    /// Returns the value of the named attribute, or `None` if absent.
+    pub(crate) fn get_attribute(&self, name: &str) -> Option<&str> {
+        self.attrs.get(&Atom::from(name)).map(|s| s.as_str())
+    }
+
+    /// Removes the named attribute from the element.
+    ///
+    /// Handles special attributes (`id`, `class`) by clearing the
+    /// corresponding cached fields.
+    pub(crate) fn remove_attribute(&mut self, name: &str) {
+        let atom_name = Atom::from(name);
+        self.attrs.remove(&atom_name);
+
+        if name == "id" {
+            self.id_attr = None;
+        }
+
+        if name == "class" {
+            self.classes.clear();
+        }
+    }
 }
 
 // Implement equality and hash based on ID (reference identity)
