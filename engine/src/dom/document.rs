@@ -333,7 +333,7 @@ impl Document {
         // Propagate IS_IN_DOCUMENT flag
         let parent_in_doc = self
             .get_node(parent_id)
-            .map_or(false, |n| n.flags.contains(NodeFlags::IS_IN_DOCUMENT));
+            .is_some_and(|n| n.flags.contains(NodeFlags::IS_IN_DOCUMENT));
         if parent_in_doc {
             self.propagate_in_document_flag(new_child_id);
         }
