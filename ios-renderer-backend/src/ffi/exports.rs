@@ -12,7 +12,7 @@ use std::ffi::{c_char, c_void, CStr};
 use std::sync::mpsc;
 
 use crate::error::RendererError;
-use crate::thread::{Command, CompletionFn, EngineHandle};
+use crate::thread::{CompletionFn, EngineHandle};
 
 /// Extracts a mutable reference to `PawsRenderer` from a raw pointer,
 /// returning the given error code if the pointer is null.
@@ -93,249 +93,36 @@ pub extern "C" fn paws_renderer_destroy(renderer: *mut PawsRenderer) {
     }
 }
 
-/// Asynchronously triggers style resolution + layout + op generation.
-///
-/// The completion callback (registered at creation) will be called from
-/// the background thread once ops are ready. Returns `0` immediately.
-#[no_mangle]
-pub extern "C" fn paws_renderer_post_commit(renderer: *mut PawsRenderer) -> i32 {
-    let renderer = get_renderer!(renderer);
-    match renderer.engine.tx.send(Command::Commit) {
-        Ok(()) => 0,
-        Err(_) => RendererError::EngineFailed.as_i32(),
-    }
-}
-
-/// Asynchronously compiles a WAT module and runs the named function,
+/// Asynchronously compiles a WASM binary module and runs the named function,
 /// then auto-commits.
 ///
 /// The completion callback will be called from the background thread
 /// once ops are ready. Returns `0` immediately.
 #[no_mangle]
-pub extern "C" fn paws_renderer_post_run_wat(
+pub extern "C" fn paws_renderer_post_run_wasm(
     renderer: *mut PawsRenderer,
-    wat_text: *const c_char,
+    wasm_bytes: *const u8,
+    wasm_len: usize,
     func_name: *const c_char,
 ) -> i32 {
     let renderer = get_renderer!(renderer);
-    let wat_str = get_cstr!(wat_text);
+    if wasm_bytes.is_null() {
+        return RendererError::InvalidHandle.as_i32();
+    }
+
+    // SAFETY: wasm_bytes is a valid pointer to wasm_len bytes.
+    let wasm_slice = unsafe { std::slice::from_raw_parts(wasm_bytes, wasm_len) };
+    let wasm_vec = wasm_slice.to_vec();
     let func_str = get_cstr!(func_name);
 
-    match renderer.engine.tx.send(Command::RunWat {
-        wat: wat_str.to_string(),
-        func_name: func_str.to_string(),
-    }) {
+    match renderer
+        .engine
+        .tx
+        .send(Some((wasm_vec, func_str.to_string())))
+    {
         Ok(()) => 0,
         Err(_) => RendererError::EngineFailed.as_i32(),
     }
-}
-
-/// Creates a DOM element with the given tag name.
-///
-/// Blocks until the background thread processes the request.
-/// Returns the element's node ID (>0) on success, or a negative error code.
-#[no_mangle]
-pub extern "C" fn paws_renderer_create_element(
-    renderer: *mut PawsRenderer,
-    tag: *const c_char,
-) -> i32 {
-    let renderer = get_renderer!(renderer);
-    let tag_str = get_cstr!(tag);
-
-    let (reply_tx, reply_rx) = mpsc::channel();
-    if renderer
-        .engine
-        .tx
-        .send(Command::CreateElement {
-            tag: tag_str.to_string(),
-            reply: reply_tx,
-        })
-        .is_err()
-    {
-        return RendererError::EngineFailed.as_i32();
-    }
-
-    match reply_rx.recv() {
-        Ok(id) => id as i32,
-        Err(_) => RendererError::EngineFailed.as_i32(),
-    }
-}
-
-/// Creates a text node with the given content.
-///
-/// Blocks until the background thread processes the request.
-/// Returns the node ID (>0) on success, or a negative error code.
-#[no_mangle]
-pub extern "C" fn paws_renderer_create_text_node(
-    renderer: *mut PawsRenderer,
-    text: *const c_char,
-) -> i32 {
-    let renderer = get_renderer!(renderer);
-    let text_str = get_cstr!(text);
-
-    let (reply_tx, reply_rx) = mpsc::channel();
-    if renderer
-        .engine
-        .tx
-        .send(Command::CreateTextNode {
-            text: text_str.to_string(),
-            reply: reply_tx,
-        })
-        .is_err()
-    {
-        return RendererError::EngineFailed.as_i32();
-    }
-
-    match reply_rx.recv() {
-        Ok(id) => id as i32,
-        Err(_) => RendererError::EngineFailed.as_i32(),
-    }
-}
-
-/// Appends a child element to a parent element.
-///
-/// Blocks until the background thread processes the request.
-/// Returns `0` on success, or a negative error code.
-#[no_mangle]
-pub extern "C" fn paws_renderer_append_element(
-    renderer: *mut PawsRenderer,
-    parent: u32,
-    child: u32,
-) -> i32 {
-    let renderer = get_renderer!(renderer);
-
-    let (reply_tx, reply_rx) = mpsc::channel();
-    if renderer
-        .engine
-        .tx
-        .send(Command::AppendElement {
-            parent,
-            child,
-            reply: reply_tx,
-        })
-        .is_err()
-    {
-        return RendererError::EngineFailed.as_i32();
-    }
-
-    reply_rx
-        .recv()
-        .unwrap_or(RendererError::EngineFailed.as_i32())
-}
-
-/// Sets an inline CSS property on an element.
-///
-/// Blocks until the background thread processes the request.
-/// Returns `0` on success, or a negative error code.
-#[no_mangle]
-pub extern "C" fn paws_renderer_set_inline_style(
-    renderer: *mut PawsRenderer,
-    id: u32,
-    name: *const c_char,
-    value: *const c_char,
-) -> i32 {
-    let renderer = get_renderer!(renderer);
-    let name_str = get_cstr!(name);
-    let value_str = get_cstr!(value);
-
-    let (reply_tx, reply_rx) = mpsc::channel();
-    if renderer
-        .engine
-        .tx
-        .send(Command::SetInlineStyle {
-            id,
-            name: name_str.to_string(),
-            value: value_str.to_string(),
-            reply: reply_tx,
-        })
-        .is_err()
-    {
-        return RendererError::EngineFailed.as_i32();
-    }
-
-    reply_rx
-        .recv()
-        .unwrap_or(RendererError::EngineFailed.as_i32())
-}
-
-/// Sets a DOM attribute on an element.
-///
-/// Blocks until the background thread processes the request.
-/// Returns `0` on success, or a negative error code.
-#[no_mangle]
-pub extern "C" fn paws_renderer_set_attribute(
-    renderer: *mut PawsRenderer,
-    id: u32,
-    name: *const c_char,
-    value: *const c_char,
-) -> i32 {
-    let renderer = get_renderer!(renderer);
-    let name_str = get_cstr!(name);
-    let value_str = get_cstr!(value);
-
-    let (reply_tx, reply_rx) = mpsc::channel();
-    if renderer
-        .engine
-        .tx
-        .send(Command::SetAttribute {
-            id,
-            name: name_str.to_string(),
-            value: value_str.to_string(),
-            reply: reply_tx,
-        })
-        .is_err()
-    {
-        return RendererError::EngineFailed.as_i32();
-    }
-
-    reply_rx
-        .recv()
-        .unwrap_or(RendererError::EngineFailed.as_i32())
-}
-
-/// Adds a CSS stylesheet to the document.
-///
-/// Fire-and-forget — does not block for a reply.
-#[no_mangle]
-pub extern "C" fn paws_renderer_add_stylesheet(
-    renderer: *mut PawsRenderer,
-    css: *const c_char,
-) -> i32 {
-    let renderer = get_renderer!(renderer);
-    let css_str = get_cstr!(css);
-
-    match renderer.engine.tx.send(Command::AddStylesheet {
-        css: css_str.to_string(),
-    }) {
-        Ok(()) => 0,
-        Err(_) => RendererError::EngineFailed.as_i32(),
-    }
-}
-
-/// Destroys an element and removes it from the DOM.
-///
-/// Blocks until the background thread processes the request.
-/// Returns `0` on success, or a negative error code.
-#[no_mangle]
-pub extern "C" fn paws_renderer_destroy_element(renderer: *mut PawsRenderer, id: u32) -> i32 {
-    let renderer = get_renderer!(renderer);
-
-    let (reply_tx, reply_rx) = mpsc::channel();
-    if renderer
-        .engine
-        .tx
-        .send(Command::DestroyElement {
-            id,
-            reply: reply_tx,
-        })
-        .is_err()
-    {
-        return RendererError::EngineFailed.as_i32();
-    }
-
-    reply_rx
-        .recv()
-        .unwrap_or(RendererError::EngineFailed.as_i32())
 }
 
 /// Converts a raw renderer pointer to a mutable reference.
@@ -441,63 +228,28 @@ mod tests {
     }
 
     #[test]
-    fn test_create_element_null_renderer() {
-        let tag = CString::new("div").unwrap();
-        let result = paws_renderer_create_element(std::ptr::null_mut(), tag.as_ptr());
-        assert_eq!(result, RendererError::InvalidHandle.as_i32());
-    }
-
-    #[test]
-    fn test_create_element_null_tag() {
-        let (renderer, _capture) = create_test_renderer();
-        let result = paws_renderer_create_element(renderer, std::ptr::null());
-        assert_eq!(result, RendererError::InvalidHandle.as_i32());
-        paws_renderer_destroy(renderer);
-    }
-
-    #[test]
-    fn test_create_element_valid() {
-        let (renderer, _capture) = create_test_renderer();
-        let tag = CString::new("div").unwrap();
-        let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
-        assert!(node_id > 0, "valid element should return positive node ID");
-        paws_renderer_destroy(renderer);
-    }
-
-    #[test]
-    fn test_post_commit_produces_ops() {
+    fn test_post_run_wasm_produces_ops() {
         let (renderer, capture) = create_test_renderer();
 
-        // Create an element and append to root.
-        let tag = CString::new("div").unwrap();
-        let node_id = paws_renderer_create_element(renderer, tag.as_ptr());
-        assert!(node_id > 0);
+        // A minimal valid WASM binary (header + text "0asm", version 1)
+        // or just "(module)" text which wasmtime handles via WAT compilation.
+        let wasm_bytes = b"(module)";
+        let func = CString::new("nonexistent").unwrap();
 
-        let result = paws_renderer_append_element(renderer, 0, node_id as u32);
-        assert_eq!(result, 0);
-
-        let name = CString::new("width").unwrap();
-        let value = CString::new("100px").unwrap();
-        let result =
-            paws_renderer_set_inline_style(renderer, node_id as u32, name.as_ptr(), value.as_ptr());
-        assert_eq!(result, 0);
-
-        // Commit.
-        let result = paws_renderer_post_commit(renderer);
-        assert_eq!(result, 0);
-
-        // Wait for the completion callback to fire (deterministic, no sleep).
-        let ops_bytes = capture.wait_for_ops();
-        assert!(
-            !ops_bytes.is_empty(),
-            "post_commit should produce a non-empty op buffer"
+        // Will fail because "nonexistent" export is missing, but it shouldn't crash.
+        let result = paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
         );
+        assert_eq!(result, 0, "post_run_wasm should return 0 immediately");
 
         paws_renderer_destroy(renderer);
     }
 
     #[test]
-    fn test_post_run_wat_produces_ops() {
+    fn test_post_run_wasm_produces_ops_with_wat_bytes() {
         let (renderer, capture) = create_test_renderer();
 
         let wat = CString::new(
@@ -521,34 +273,51 @@ mod tests {
 "#,
         )
         .unwrap();
+        let wasm_bytes = wat.as_bytes();
         let func = CString::new("run").unwrap();
 
-        let result = paws_renderer_post_run_wat(renderer, wat.as_ptr(), func.as_ptr());
-        assert_eq!(result, 0, "post_run_wat should return 0 immediately");
+        let result = paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
+        );
+        assert_eq!(result, 0, "post_run_wasm should return 0 immediately");
 
         // Wait for the completion callback to fire (deterministic, no sleep).
         let ops_bytes = capture.wait_for_ops();
         assert!(
             !ops_bytes.is_empty(),
-            "post_run_wat should produce a non-empty op buffer"
+            "post_run_wasm should produce a non-empty op buffer"
         );
 
         paws_renderer_destroy(renderer);
     }
 
     #[test]
-    fn test_post_run_wat_null_params() {
+    fn test_post_run_wasm_null_params() {
         let (renderer, _capture) = create_test_renderer();
 
         let func = CString::new("run").unwrap();
-        let result = paws_renderer_post_run_wat(renderer, std::ptr::null(), func.as_ptr());
+        let result = paws_renderer_post_run_wasm(renderer, std::ptr::null(), 0, func.as_ptr());
         assert_eq!(result, RendererError::InvalidHandle.as_i32());
 
         let wat = CString::new("(module)").unwrap();
-        let result = paws_renderer_post_run_wat(renderer, wat.as_ptr(), std::ptr::null());
+        let wasm_bytes = wat.as_bytes();
+        let result = paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            std::ptr::null(),
+        );
         assert_eq!(result, RendererError::InvalidHandle.as_i32());
 
-        let result = paws_renderer_post_run_wat(std::ptr::null_mut(), wat.as_ptr(), func.as_ptr());
+        let result = paws_renderer_post_run_wasm(
+            std::ptr::null_mut(),
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
+        );
         assert_eq!(result, RendererError::InvalidHandle.as_i32());
 
         paws_renderer_destroy(renderer);

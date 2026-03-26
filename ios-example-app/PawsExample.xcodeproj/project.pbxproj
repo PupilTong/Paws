@@ -8,9 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		A10001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20001 /* AppDelegate.swift */; };
+		A10008 /* demo.wasm in Resources */ = {isa = PBXBuildFile; fileRef = A20010 /* demo.wasm */; };
 		A10002 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20002 /* SceneDelegate.swift */; };
 		A10003 /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20003 /* ViewController.swift */; };
-		A10004 /* DemoWat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20004 /* DemoWat.swift */; };
 		A10005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20005 /* Assets.xcassets */; };
 		A10006 /* PawsExampleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20006 /* PawsExampleTests.swift */; };
 		A10007 /* PawsRenderer in Frameworks */ = {isa = PBXBuildFile; productRef = A40001 /* PawsRenderer */; };
@@ -28,9 +28,9 @@
 
 /* Begin PBXFileReference section */
 		A20001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A20010 /* demo.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = demo.wasm; sourceTree = "<group>"; };
 		A20002 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		A20003 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
-		A20004 /* DemoWat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoWat.swift; sourceTree = "<group>"; };
 		A20005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A20006 /* PawsExampleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PawsExampleTests.swift; sourceTree = "<group>"; };
 		A20007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -69,10 +69,10 @@
 		A80002 /* PawsExample */ = {
 			isa = PBXGroup;
 			children = (
+				A20010 /* demo.wasm */,
 				A20001 /* AppDelegate.swift */,
 				A20002 /* SceneDelegate.swift */,
 				A20003 /* ViewController.swift */,
-				A20004 /* DemoWat.swift */,
 				A20005 /* Assets.xcassets */,
 				A20007 /* Info.plist */,
 			);
@@ -174,6 +174,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10008 /* demo.wasm in Resources */,
 				A10005 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -194,7 +195,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n\n# Xcode strips the user PATH — ensure cargo is available.\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\n\n# Resolve DEVELOPER_DIR dynamically so builds work regardless of Xcode\n# install location (Xcode.app, Xcode-beta.app, custom path, etc.).\n# Fall back to xcode-select if DEVELOPER_DIR is not already set by Xcode.\nif [ -z \"$DEVELOPER_DIR\" ]; then\n    export DEVELOPER_DIR=$(xcode-select -p 2>/dev/null || echo /Applications/Xcode.app/Contents/Developer)\nfi\n\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    export SDKROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\nelse\n    export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    CARGO_FLAGS=\"--release\"\n    CARGO_PROFILE=\"release\"\nelse\n    CARGO_FLAGS=\"\"\n    CARGO_PROFILE=\"debug\"\nfi\n\nCARGO_TARGET_DIR=\"$SRCROOT/../target\"\ncd \"$SRCROOT/..\"\ncargo build --target \"$RUST_TARGET\" -p ios-renderer-backend $CARGO_FLAGS\n\n# Write the resolved library path so Xcode can find it without hardcoded search paths.\nmkdir -p \"$SRCROOT/../target/xcode\"\necho \"$CARGO_TARGET_DIR/$RUST_TARGET/$CARGO_PROFILE\" > \"$SRCROOT/../target/xcode/lib-path.txt\"\n";
+			shellScript = "set -e\n\n# Xcode strips the user PATH — ensure cargo is available.\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\n\n# Resolve DEVELOPER_DIR dynamically so builds work regardless of Xcode\n# install location (Xcode.app, Xcode-beta.app, custom path, etc.).\n# Fall back to xcode-select if DEVELOPER_DIR is not already set by Xcode.\nif [ -z \"$DEVELOPER_DIR\" ]; then\n    export DEVELOPER_DIR=$(xcode-select -p 2>/dev/null || echo /Applications/Xcode.app/Contents/Developer)\nfi\n\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    export SDKROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\nelse\n    export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    CARGO_FLAGS=\"--release\"\n    CARGO_PROFILE=\"release\"\nelse\n    CARGO_FLAGS=\"\"\n    CARGO_PROFILE=\"debug\"\nfi\n\nCARGO_TARGET_DIR=\"$SRCROOT/../target\"\ncd \"$SRCROOT/..\"\ncargo build --target \"$RUST_TARGET\" -p ios-renderer-backend $CARGO_FLAGS\n\n# Write the resolved library path so Xcode can find it without hardcoded search paths.\nmkdir -p \"$SRCROOT/../target/xcode\"\necho \"$CARGO_TARGET_DIR/$RUST_TARGET/$CARGO_PROFILE\" > \"$SRCROOT/../target/xcode/lib-path.txt\"\n\n# Build example WASM and inject it seamlessly as an Xcode resource payload\ncd \"$SRCROOT/../examples/example-styled-element\"\ncargo build --target wasm32-wasip1-threads --release\ncp \"$SRCROOT/../target/wasm32-wasip1-threads/release/example_styled_element.wasm\" \"$SRCROOT/PawsExample/demo.wasm\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -206,7 +207,6 @@
 				A10001 /* AppDelegate.swift in Sources */,
 				A10002 /* SceneDelegate.swift in Sources */,
 				A10003 /* ViewController.swift in Sources */,
-				A10004 /* DemoWat.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -28,67 +28,37 @@ pub fn create_engine() -> WasmEngine {
 /// The `RuntimeState` is moved into the wasmtime `Store` during execution
 /// and returned afterwards — even on error — so the caller can always
 /// recover it.
-/// Error returned by [`run_wat`] when WASM execution fails.
+/// Error returned by [`run_wasm`] when WASM execution fails.
 ///
 /// Contains the recovered `RuntimeState` so the caller can reuse it.
-pub struct RunWatError {
+pub struct RunWasmError {
     /// The `RuntimeState` recovered from the wasmtime `Store`.
     pub state: RuntimeState,
     /// The underlying error.
     pub error: anyhow::Error,
 }
 
-impl std::fmt::Debug for RunWatError {
+impl std::fmt::Debug for RunWasmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunWatError")
+        f.debug_struct("RunWasmError")
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
 }
 
-pub fn run_wat(
-    state: RuntimeState,
-    wat: &str,
-    func_name: &str,
-) -> Result<RuntimeState, Box<RunWatError>> {
-    let engine = create_engine();
-    let module = match Module::new(&engine, wat) {
-        Ok(m) => m,
-        Err(e) => {
-            return Err(Box::new(RunWatError { state, error: e }));
-        }
-    };
-    let linker = build_linker(&engine);
-    let mut store = Store::new(&engine, state);
-
-    let result = (|| -> anyhow::Result<()> {
-        let instance = linker.instantiate(&mut store, &module)?;
-        let run = instance.get_typed_func::<(), i32>(&mut store, func_name)?;
-        run.call(&mut store, ())?;
-        Ok(())
-    })();
-
-    let state = store.into_data();
-    match result {
-        Ok(()) => Ok(state),
-        Err(e) => Err(Box::new(RunWatError { state, error: e })),
-    }
-}
-
 /// Compiles and runs a binary WASM module against a [`RuntimeState`].
 ///
-/// Same as [`run_wat`] but accepts pre-compiled `.wasm` bytes instead of WAT
-/// text. The `RuntimeState` is always recovered, even on error.
+/// The `RuntimeState` is always recovered, even on error.
 pub fn run_wasm(
     state: RuntimeState,
     wasm_bytes: &[u8],
     func_name: &str,
-) -> Result<RuntimeState, Box<RunWatError>> {
+) -> Result<RuntimeState, Box<RunWasmError>> {
     let engine = create_engine();
     let module = match Module::new(&engine, wasm_bytes) {
         Ok(m) => m,
         Err(e) => {
-            return Err(Box::new(RunWatError { state, error: e }));
+            return Err(Box::new(RunWasmError { state, error: e }));
         }
     };
     let mut linker = build_linker(&engine);
@@ -103,7 +73,7 @@ pub fn run_wasm(
         Ok(())
     })() {
         let state = store.into_data();
-        return Err(Box::new(RunWatError { state, error: e }));
+        return Err(Box::new(RunWasmError { state, error: e }));
     }
 
     let result = (|| -> anyhow::Result<()> {
@@ -116,7 +86,7 @@ pub fn run_wasm(
     let state = store.into_data();
     match result {
         Ok(()) => Ok(state),
-        Err(e) => Err(Box::new(RunWatError { state, error: e })),
+        Err(e) => Err(Box::new(RunWasmError { state, error: e })),
     }
 }
 
@@ -160,7 +130,7 @@ pub fn hello_engine() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_linker, hello_engine, run_wat};
+    use super::{build_linker, hello_engine, run_wasm};
     use engine::{HostErrorCode, RuntimeState};
     use wasmtime::{Engine as WasmEngine, Module, Store};
 
@@ -623,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn run_wat_success() {
+    fn run_wasm_success() {
         let wat = r#"
 (module
   (import "env" "__create_element" (func $create (param i32) (result i32)))
@@ -643,17 +613,17 @@ mod tests {
 )
 "#;
         let state = RuntimeState::new("https://example.com".to_string());
-        let state = run_wat(state, wat, "run").expect("run_wat should succeed");
+        let state = run_wasm(state, wat.as_bytes(), "run").expect("run_wasm should succeed");
 
         // The created element should exist in the returned state.
         let node = state.doc.get_node(engine::NodeId::from(1_u64));
-        assert!(node.is_some(), "element should exist after run_wat");
+        assert!(node.is_some(), "element should exist after run_wasm");
     }
 
     #[test]
-    fn run_wat_invalid_wat_returns_error_with_state() {
+    fn run_wasm_invalid_wat_returns_error_with_state() {
         let state = RuntimeState::new("https://example.com".to_string());
-        match run_wat(state, "not valid wat!", "run") {
+        match run_wasm(state, b"not valid wat!", "run") {
             Ok(_) => panic!("should fail on invalid WAT"),
             Err(err) => {
                 // State should be recovered even on compilation error.
@@ -669,10 +639,10 @@ mod tests {
     }
 
     #[test]
-    fn run_wat_missing_export_returns_error_with_state() {
+    fn run_wasm_missing_export_returns_error_with_state() {
         let wat = "(module (memory (export \"memory\") 1))";
         let state = RuntimeState::new("https://example.com".to_string());
-        match run_wat(state, wat, "nonexistent") {
+        match run_wasm(state, wat.as_bytes(), "nonexistent") {
             Ok(_) => panic!("should fail on missing export"),
             Err(err) => {
                 // State should be recovered.

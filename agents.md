@@ -55,6 +55,7 @@ This repository supports LLM-based assistants. The working language is English.
 ## Project Design Overview
 
 - Cross-platform framework with a pure WASM VM for UI logic (`wasmtime-engine`).
+- **Native GUI Isolation**: The Native host (Swift/C) is not allowed to manually construct or mutate the rendering DOM tree directly via FFI. All UI logic and state mutations must be driven exclusively by WebAssembly execution.
 - Stylo provides web-standard CSS behavior and style computation.
 - Taffy provides box layout.
 - LynxJS native elements provide actual rendering.
