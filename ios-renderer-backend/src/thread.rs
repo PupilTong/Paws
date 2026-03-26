@@ -160,18 +160,6 @@ mod tests {
                 condvar: Condvar::new(),
             })
         }
-
-        /// Blocks until the completion callback fires, with a timeout.
-        fn wait_for_ops(&self) -> Vec<u8> {
-            let guard = self.ops.lock().unwrap();
-            let (guard, _timeout) = self
-                .condvar
-                .wait_timeout_while(guard, std::time::Duration::from_secs(5), |ops| {
-                    ops.is_empty()
-                })
-                .unwrap();
-            guard.clone()
-        }
     }
 
     extern "C" fn test_completion(ptr: *const u8, len: usize, ctx: *mut std::ffi::c_void) {

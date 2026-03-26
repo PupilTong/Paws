@@ -9,7 +9,6 @@
 //! that need a return value, blocks on a reply.
 
 use std::ffi::{c_char, c_void, CStr};
-use std::sync::mpsc;
 
 use crate::error::RendererError;
 use crate::thread::{CompletionFn, EngineHandle};
@@ -229,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_post_run_wasm_produces_ops() {
-        let (renderer, capture) = create_test_renderer();
+        let (renderer, _capture) = create_test_renderer();
 
         // A minimal valid WASM binary (header + text "0asm", version 1)
         // or just "(module)" text which wasmtime handles via WAT compilation.
