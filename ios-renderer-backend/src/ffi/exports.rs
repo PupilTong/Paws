@@ -95,20 +95,6 @@ pub extern "C" fn paws_renderer_destroy(renderer: *mut PawsRenderer) {
     }
 }
 
-/// Stops the engine's background thread if one is running.
-///
-/// Waits for the thread to finish before returning. After this call,
-/// no background work is active for this renderer. A subsequent
-/// [`paws_renderer_post_run_wasm`] call will spawn a new thread.
-///
-/// Returns `0` on success.
-#[no_mangle]
-pub extern "C" fn paws_renderer_stop_engine(renderer: *mut PawsRenderer) -> i32 {
-    let renderer = get_renderer!(renderer);
-    renderer.engine.stop_engine();
-    0
-}
-
 /// Spawns a fresh background thread to compile and run a WASM module,
 /// then auto-commits.
 ///
@@ -236,20 +222,6 @@ mod tests {
     #[test]
     fn test_destroy_null_is_noop() {
         paws_renderer_destroy(std::ptr::null_mut());
-    }
-
-    #[test]
-    fn test_stop_engine_null_renderer() {
-        let result = paws_renderer_stop_engine(std::ptr::null_mut());
-        assert_eq!(result, RendererError::InvalidHandle.as_i32());
-    }
-
-    #[test]
-    fn test_stop_engine_no_thread() {
-        let (renderer, _capture) = create_test_renderer();
-        let result = paws_renderer_stop_engine(renderer);
-        assert_eq!(result, 0);
-        paws_renderer_destroy(renderer);
     }
 
     #[test]
