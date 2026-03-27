@@ -14,8 +14,13 @@ class ViewController: UIViewController {
         )
         view.addSubview(rendererView)
 
-        // Run the demo WAT module — creates the flex container with 4 colored divs.
+        // Run the demo WASM module.
         // This is async: ops will be dispatched to the main thread when ready.
-        rendererView.renderer.postRunWat(demoWat, functionName: "run")
+        if let url = Bundle.main.url(forResource: "demo", withExtension: "wasm"),
+           let data = try? Data(contentsOf: url) {
+            rendererView.renderer.postRunWasm(data, functionName: "run")
+        } else {
+            print("Failed to load demo.wasm. Please ensure it is built and added to the app bundle.")
+        }
     }
 }
