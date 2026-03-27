@@ -3,10 +3,11 @@
 //! These form the public C API exposed via the cbindgen-generated header.
 //! Naming convention: `paws_renderer_*`.
 //!
-//! The engine thread is spawned once at [`paws_renderer_create`] time and
-//! stays alive until [`paws_renderer_destroy`] is called. All engine work
-//! (WASM execution, style resolution, layout, ViewTree processing) happens
-//! on that long-running background thread.
+//! The engine thread is spawned on the first [`paws_renderer_post_run_wasm`]
+//! call and stays alive until [`paws_renderer_destroy`] is called (or until
+//! the WASM module's own internal loop exits). A renderer accepts only one
+//! WASM module — subsequent calls to `post_run_wasm` on the same renderer
+//! return [`RendererError::EngineFailed`].
 
 use std::ffi::{c_char, c_void, CStr};
 
@@ -48,10 +49,10 @@ pub struct PawsRenderer {
     engine: EngineHandle,
 }
 
-/// Creates a new `PawsRenderer` and spawns its background engine thread.
+/// Creates a new `PawsRenderer`.
 ///
-/// The engine thread starts immediately and waits for WASM modules to be
-/// posted via [`paws_renderer_post_run_wasm`]. It owns all engine state
+/// No background thread is spawned yet — that happens on the first
+/// [`paws_renderer_post_run_wasm`] call. The renderer owns all engine state
 /// (DOM, styles, layout, view snapshots) for its full lifetime.
 ///
 /// - `base_url`: null-terminated UTF-8 string (document base URL).
@@ -97,15 +98,15 @@ pub extern "C" fn paws_renderer_destroy(renderer: *mut PawsRenderer) {
     }
 }
 
-/// Posts a WASM module to the engine thread for execution.
+/// Starts the rendering pipeline by loading and running a WASM module.
 ///
-/// The engine thread compiles and runs the named export against its
-/// persistent [`RuntimeState`], then commits the rendering pipeline and
-/// delivers op-codes via the completion callback. The call returns
-/// immediately — delivery is asynchronous.
+/// Spawns the background engine thread, which compiles the module and calls
+/// the named export. The WASM module is expected to run its own internal
+/// event loop — it drives all DOM mutations and op delivery from within.
 ///
-/// Successive calls queue behind each other on the same thread, so DOM
-/// state accumulates across calls (enabling incremental updates).
+/// This is a **one-shot** call per renderer. Calling it again on the same
+/// renderer returns [`RendererError::EngineFailed`] — create a new renderer
+/// to run a different module.
 ///
 /// Returns `0` on success, or a negative error code.
 #[no_mangle]
@@ -242,14 +243,46 @@ mod tests {
         let wasm_bytes = b"(module)";
         let func = CString::new("nonexistent").unwrap();
 
-        // Will fail because "nonexistent" export is missing, but it shouldn't crash.
+        // Thread spawns and WASM fails internally (missing export), but the
+        // FFI call itself succeeds — returns 0 because the thread was started.
         let result = paws_renderer_post_run_wasm(
             renderer,
             wasm_bytes.as_ptr(),
             wasm_bytes.len(),
             func.as_ptr(),
         );
-        assert_eq!(result, 0, "post_run_wasm should return 0 immediately");
+        assert_eq!(result, 0, "first call should succeed (thread spawned)");
+
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_post_run_wasm_second_call_returns_engine_failed() {
+        let (renderer, _capture) = create_test_renderer();
+
+        let wasm_bytes = b"(module)";
+        let func = CString::new("nonexistent").unwrap();
+
+        // First call — thread spawns.
+        paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
+        );
+
+        // Second call on the same renderer — one-shot, should fail.
+        let result = paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
+        );
+        assert_eq!(
+            result,
+            RendererError::EngineFailed.as_i32(),
+            "second call on same renderer should return EngineFailed"
+        );
 
         paws_renderer_destroy(renderer);
     }
