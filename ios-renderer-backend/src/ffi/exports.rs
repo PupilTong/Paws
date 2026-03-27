@@ -3,9 +3,10 @@
 //! These form the public C API exposed via the cbindgen-generated header.
 //! Naming convention: `paws_renderer_*`.
 //!
-//! All engine work (WASM execution, style resolution, layout, ViewTree
-//! processing) happens on a background thread spawned per
-//! [`paws_renderer_post_run_wasm`] call.
+//! The engine thread is spawned once at [`paws_renderer_create`] time and
+//! stays alive until [`paws_renderer_destroy`] is called. All engine work
+//! (WASM execution, style resolution, layout, ViewTree processing) happens
+//! on that long-running background thread.
 
 use std::ffi::{c_char, c_void, CStr};
 
@@ -47,22 +48,23 @@ pub struct PawsRenderer {
     engine: EngineHandle,
 }
 
-/// Creates a new `PawsRenderer`. No background thread is spawned yet —
-/// that happens on the first [`paws_renderer_post_run_wasm`] call.
+/// Creates a new `PawsRenderer` and spawns its background engine thread.
+///
+/// The engine thread starts immediately and waits for WASM modules to be
+/// posted via [`paws_renderer_post_run_wasm`]. It owns all engine state
+/// (DOM, styles, layout, view snapshots) for its full lifetime.
 ///
 /// - `base_url`: null-terminated UTF-8 string (document base URL).
 ///   Pass `null` to use `"about:blank"`.
-/// - `completion`: called from the background thread each time ops are
-///   ready after a commit. The `ops_ptr` and `ops_len` describe a buffer
-///   of 32-byte op-code slots. The pointer is only valid for the duration
-///   of the callback — copy or process before returning.
+/// - `completion`: called from the background thread each time ops are ready
+///   after a commit. `ops_ptr` and `ops_len` describe a buffer of 32-byte
+///   op-code slots valid only for the duration of the call — copy or process
+///   before returning. Swift must dispatch UIKit mutations to the main queue.
 /// - `context`: opaque pointer forwarded to every `completion` call.
-///   Typically an `Unmanaged<OpExecutor>` pointer on the Swift side.
+///   Typically an `Unmanaged<OpExecutor>` on the Swift side.
 ///
-/// Returns an opaque pointer. The caller (Swift) owns it and must call
-/// [`paws_renderer_destroy`] to free it.
-///
-/// Returns `null` on failure.
+/// Returns an opaque pointer owned by the caller. Must be freed with
+/// [`paws_renderer_destroy`]. Returns `null` on failure.
 #[no_mangle]
 pub extern "C" fn paws_renderer_create(
     base_url: *const c_char,
@@ -95,14 +97,17 @@ pub extern "C" fn paws_renderer_destroy(renderer: *mut PawsRenderer) {
     }
 }
 
-/// Spawns a fresh background thread to compile and run a WASM module,
-/// then auto-commits.
+/// Posts a WASM module to the engine thread for execution.
 ///
-/// If a previous thread is still running, it is joined first (waited
-/// for completion). The new thread creates fresh engine state, runs the
-/// module, and delivers op-codes via the completion callback.
+/// The engine thread compiles and runs the named export against its
+/// persistent [`RuntimeState`], then commits the rendering pipeline and
+/// delivers op-codes via the completion callback. The call returns
+/// immediately — delivery is asynchronous.
 ///
-/// Returns `0` on success (thread spawned).
+/// Successive calls queue behind each other on the same thread, so DOM
+/// state accumulates across calls (enabling incremental updates).
+///
+/// Returns `0` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_post_run_wasm(
     renderer: *mut PawsRenderer,
@@ -120,8 +125,14 @@ pub extern "C" fn paws_renderer_post_run_wasm(
     let wasm_vec = wasm_slice.to_vec();
     let func_str = get_cstr!(func_name);
 
-    renderer.engine.run_wasm(wasm_vec, func_str.to_string());
-    0
+    if renderer
+        .engine
+        .post_run_wasm(wasm_vec, func_str.to_string())
+    {
+        0
+    } else {
+        RendererError::EngineFailed.as_i32()
+    }
 }
 
 /// Converts a raw renderer pointer to a mutable reference.

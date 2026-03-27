@@ -6,6 +6,8 @@
 pub(crate) enum RendererError {
     /// A null or invalid opaque handle was passed.
     InvalidHandle = -100,
+    /// The engine thread has stopped and can no longer accept commands.
+    EngineFailed = -101,
 }
 
 impl RendererError {
@@ -21,5 +23,6 @@ mod tests {
     #[test]
     fn test_error_codes() {
         assert_eq!(RendererError::InvalidHandle.as_i32(), -100);
+        assert_eq!(RendererError::EngineFailed.as_i32(), -101);
     }
 }
