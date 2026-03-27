@@ -1,6 +1,10 @@
 import UIKit
 import PawsRenderer
 
+private enum WasmEntryPoint {
+    static let run = "run"
+}
+
 class ViewController: UIViewController {
     private var rendererView: PawsRendererView!
 
@@ -16,11 +20,16 @@ class ViewController: UIViewController {
 
         // Run the demo WASM module.
         // This is async: ops will be dispatched to the main thread when ready.
-        if let url = Bundle.main.url(forResource: "demo", withExtension: "wasm"),
-           let data = try? Data(contentsOf: url) {
-            rendererView.renderer.postRunWasm(data, functionName: "run")
-        } else {
-            print("Failed to load demo.wasm. Please ensure it is built and added to the app bundle.")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let url = Bundle.main.url(forResource: "demo", withExtension: "wasm") else {
+                fatalError("demo.wasm not found in bundle — ensure the Cargo build phase ran successfully.")
+            }
+            guard let data = try? Data(contentsOf: url) else {
+                fatalError("Failed to read demo.wasm from bundle.")
+            }
+            DispatchQueue.main.async {
+                self?.rendererView.renderer.postRunWasm(data, functionName: WasmEntryPoint.run)
+            }
         }
     }
 }
