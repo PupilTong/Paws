@@ -1,10 +1,15 @@
 //! Background engine thread that owns `RuntimeState` and `ViewTree`.
 //!
-//! Swift sends [`Command`]s via an `mpsc` channel. The thread processes
-//! each command, and after any commit produces an [`OpBuffer`] which it
-//! delivers to Swift via a completion callback.
+//! Each [`EngineHandle`] owns at most one background thread at a time.
+//! [`run_wasm`](EngineHandle::run_wasm) spawns a fresh thread that creates
+//! its own `RuntimeState`, runs the WASM module, commits, and delivers
+//! op-codes via the completion callback before exiting.
+//!
+//! Multiple `EngineHandle` instances can coexist — each owns an independent
+//! engine thread and UIKit area. Swift creates a new UI node + engine for
+//! each WASM file without needing to stop existing ones.
 
-use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 
 use engine::RuntimeState;
@@ -25,73 +30,15 @@ use crate::renderer::ViewTree;
 pub(crate) type CompletionFn =
     extern "C" fn(ops_ptr: *const u8, ops_len: usize, ctx: *mut std::ffi::c_void);
 
-/// Handle to the background engine thread.
-///
-/// Owned by `PawsRenderer` on the FFI side. Holds the channel sender
-/// and the join handle for clean shutdown.
-pub(crate) struct EngineHandle {
-    pub(crate) tx: mpsc::Sender<Option<(Vec<u8>, String)>>,
-    handle: Option<thread::JoinHandle<()>>,
-}
-
-impl EngineHandle {
-    /// Spawns a new background engine thread.
-    ///
-    /// `base_url` is passed to `RuntimeState::new()`.
-    /// `completion` is called from the background thread each time ops are ready.
-    /// `context` is an opaque pointer forwarded to the completion callback.
-    pub(crate) fn spawn(
-        base_url: String,
-        completion: CompletionFn,
-        context: *mut std::ffi::c_void,
-    ) -> Self {
-        let (tx, rx) = mpsc::channel::<Option<(Vec<u8>, String)>>();
-
-        // SAFETY: We wrap the callback + context in a single Send struct
-        // so they can cross the thread boundary. The Swift side guarantees
-        // the context pointer remains valid until paws_renderer_destroy.
-        let callback = SendCallback {
-            completion,
-            context,
-        };
-
-        let handle = thread::Builder::new()
-            .name("paws-engine".to_string())
-            .spawn(move || {
-                engine_loop(rx, base_url, callback);
-            })
-            .expect("failed to spawn paws-engine thread");
-
-        Self {
-            tx,
-            handle: Some(handle),
-        }
-    }
-
-    /// Sends a shutdown command and waits for the thread to exit.
-    pub(crate) fn shutdown(&mut self) {
-        let _ = self.tx.send(None);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-impl Drop for EngineHandle {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
-
 /// Bundles the completion callback and its context pointer for cross-thread
 /// transfer.
 ///
 /// # Safety
 ///
 /// The caller must ensure the `context` pointer remains valid until the
-/// engine thread is shut down. The completion callback must be safe to
+/// engine is stopped or destroyed. The completion callback must be safe to
 /// call from any thread (typically it dispatches to the main queue).
-struct SendCallback {
+pub(crate) struct SendCallback {
     completion: CompletionFn,
     context: *mut std::ffi::c_void,
 }
@@ -100,51 +47,113 @@ struct SendCallback {
 // `context` is forwarded to the callback which dispatches to the main
 // queue before touching UIKit.
 unsafe impl Send for SendCallback {}
+// SAFETY: The function pointer is immutable and the context pointer is
+// only read (forwarded to the callback), never mutated through &SendCallback.
+unsafe impl Sync for SendCallback {}
 
-/// The main loop of the background engine thread.
-fn engine_loop(rx: mpsc::Receiver<Option<(Vec<u8>, String)>>, base_url: String, cb: SendCallback) {
-    let mut state = RuntimeState::new(base_url);
-    let mut view_tree = ViewTree::new();
-    let mut ops = OpBuffer::new();
+/// Handle to the background engine thread.
+///
+/// Owned by `PawsRenderer` on the FFI side. Manages the lifecycle of
+/// a single background thread that runs WASM modules.
+///
+/// Multiple handles can coexist independently — each manages its own
+/// engine thread and associated UIKit area.
+pub(crate) struct EngineHandle {
+    handle: Option<thread::JoinHandle<()>>,
+    callback: Arc<SendCallback>,
+    base_url: String,
+}
 
-    // Receiving Some((wasm, func_name)) runs the module and auto-commits.
-    // Receiving None or channel closure shuts down the thread.
-    while let Ok(Some((wasm, func_name))) = rx.recv() {
-        let taken = std::mem::replace(&mut state, RuntimeState::new("about:blank".to_string()));
+impl EngineHandle {
+    /// Creates a new engine handle without spawning a thread.
+    ///
+    /// `base_url` is passed to `RuntimeState::new()` when a thread is spawned.
+    /// `completion` is called from the background thread each time ops are ready.
+    /// `context` is an opaque pointer forwarded to the completion callback.
+    pub(crate) fn new(
+        base_url: String,
+        completion: CompletionFn,
+        context: *mut std::ffi::c_void,
+    ) -> Self {
+        Self {
+            handle: None,
+            callback: Arc::new(SendCallback {
+                completion,
+                context,
+            }),
+            base_url,
+        }
+    }
 
-        match wasmtime_engine::run_wasm(taken, &wasm, &func_name) {
-            Ok(recovered) => {
-                state = recovered;
-                do_commit(&mut state, &mut view_tree, &mut ops, &cb);
-            }
-            Err(err) => {
-                state = err.state;
-                // TODO: surface error to Swift
-            }
+    /// Spawns a fresh background thread to run a WASM module.
+    ///
+    /// If a previous thread is still running, joins it first (waits for
+    /// completion). The new thread creates its own `RuntimeState`, `ViewTree`,
+    /// and `OpBuffer`, runs the WASM module, commits the rendering pipeline,
+    /// and delivers op-codes via the completion callback before exiting.
+    pub(crate) fn run_wasm(&mut self, wasm_bytes: Vec<u8>, func_name: String) {
+        // Join any previous thread before spawning a new one.
+        if let Some(prev) = self.handle.take() {
+            let _ = prev.join();
+        }
+
+        let base_url = self.base_url.clone();
+        let cb = Arc::clone(&self.callback);
+
+        let handle = thread::Builder::new()
+            .name("paws-engine".to_string())
+            .spawn(move || {
+                run_engine(base_url, &wasm_bytes, &func_name, &cb);
+            })
+            .expect("failed to spawn paws-engine thread");
+
+        self.handle = Some(handle);
+    }
+
+    /// Stops the engine thread if one is running.
+    ///
+    /// Joins the thread and waits for it to finish. After this call,
+    /// no background thread is active for this engine.
+    pub(crate) fn stop_engine(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
         }
     }
 }
 
-/// Runs the commit pipeline: style → layout → view tree → ops → callback.
-fn do_commit(
-    state: &mut RuntimeState,
-    view_tree: &mut ViewTree,
-    ops: &mut OpBuffer,
-    cb: &SendCallback,
-) {
-    let layout = state.commit();
-    view_tree.process(&layout, ops);
+impl Drop for EngineHandle {
+    fn drop(&mut self) {
+        self.stop_engine();
+    }
+}
 
-    // Deliver ops to Swift via the completion callback.
-    // The callback is responsible for copying or processing the buffer
-    // before returning, as the buffer will be reused on the next frame.
-    (cb.completion)(ops.as_ptr(), ops.len(), cb.context);
+/// Runs the full engine pipeline on the background thread:
+/// WASM execution → style resolution → layout → view tree → ops → callback.
+fn run_engine(base_url: String, wasm_bytes: &[u8], func_name: &str, cb: &SendCallback) {
+    let state = RuntimeState::new(base_url);
+    let mut view_tree = ViewTree::new();
+    let mut ops = OpBuffer::new();
+
+    match wasmtime_engine::run_wasm(state, wasm_bytes, func_name) {
+        Ok(mut state) => {
+            let layout = state.commit();
+            view_tree.process(&layout, &mut ops);
+
+            // Deliver ops to Swift via the completion callback.
+            // The callback is responsible for copying or processing the buffer
+            // before returning, as the buffer will not persist after this call.
+            (cb.completion)(ops.as_ptr(), ops.len(), cb.context);
+        }
+        Err(_err) => {
+            // TODO: surface error to Swift
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Condvar, Mutex};
+    use std::sync::{Condvar, Mutex};
 
     /// A test completion callback that captures the op buffer contents
     /// and signals a condvar so tests can wait deterministically.
@@ -159,6 +168,23 @@ mod tests {
                 ops: Mutex::new(Vec::new()),
                 condvar: Condvar::new(),
             })
+        }
+
+        /// Blocks until the completion callback fires, with a timeout.
+        fn wait_for_ops(&self) -> Vec<u8> {
+            let guard = self.ops.lock().unwrap();
+            let (guard, _timeout) = self
+                .condvar
+                .wait_timeout_while(guard, std::time::Duration::from_secs(5), |ops| {
+                    ops.is_empty()
+                })
+                .unwrap();
+            guard.clone()
+        }
+
+        /// Resets the captured ops for a new round.
+        fn reset(&self) {
+            *self.ops.lock().unwrap() = Vec::new();
         }
     }
 
@@ -176,13 +202,99 @@ mod tests {
     }
 
     #[test]
-    fn test_engine_handle_create_and_shutdown() {
+    fn test_engine_handle_new_no_thread() {
         let capture = TestCapture::new();
         let ctx = Arc::as_ptr(&capture) as *mut std::ffi::c_void;
 
-        let mut handle =
-            EngineHandle::spawn("https://example.com".to_string(), test_completion, ctx);
+        let handle = EngineHandle::new("https://example.com".to_string(), test_completion, ctx);
 
-        handle.shutdown();
+        // No thread should be running at creation time.
+        assert!(handle.handle.is_none());
+    }
+
+    #[test]
+    fn test_stop_engine_no_thread_is_noop() {
+        let capture = TestCapture::new();
+        let ctx = Arc::as_ptr(&capture) as *mut std::ffi::c_void;
+
+        let mut handle = EngineHandle::new("https://example.com".to_string(), test_completion, ctx);
+
+        // Stopping without a thread should not panic.
+        handle.stop_engine();
+        assert!(handle.handle.is_none());
+    }
+
+    #[test]
+    fn test_run_wasm_produces_ops() {
+        let capture = TestCapture::new();
+        let ctx = Arc::as_ptr(&capture) as *mut std::ffi::c_void;
+
+        let mut handle = EngineHandle::new("https://example.com".to_string(), test_completion, ctx);
+
+        let wat = r#"
+(module
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "div\00")
+  (data (i32.const 16) "width\00")
+  (data (i32.const 32) "100px\00")
+  (func (export "run") (result i32)
+    (local $id i32)
+    (local.set $id (call $create (i32.const 0)))
+    (drop (call $append (i32.const 0) (local.get $id)))
+    (drop (call $style (local.get $id) (i32.const 16) (i32.const 32)))
+    (i32.const 0)
+  )
+)
+"#;
+        handle.run_wasm(wat.as_bytes().to_vec(), "run".to_string());
+
+        let ops_bytes = capture.wait_for_ops();
+        assert!(
+            !ops_bytes.is_empty(),
+            "run_wasm should produce a non-empty op buffer"
+        );
+
+        handle.stop_engine();
+    }
+
+    #[test]
+    fn test_sequential_run_wasm_calls() {
+        let capture = TestCapture::new();
+        let ctx = Arc::as_ptr(&capture) as *mut std::ffi::c_void;
+
+        let mut handle = EngineHandle::new("https://example.com".to_string(), test_completion, ctx);
+
+        let wat = r#"
+(module
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "div\00")
+  (func (export "run") (result i32)
+    (local $id i32)
+    (local.set $id (call $create (i32.const 0)))
+    (drop (call $append (i32.const 0) (local.get $id)))
+    (i32.const 0)
+  )
+)
+"#;
+
+        // First call
+        handle.run_wasm(wat.as_bytes().to_vec(), "run".to_string());
+        let ops1 = capture.wait_for_ops();
+        assert!(!ops1.is_empty());
+
+        // Reset capture for second call
+        capture.reset();
+
+        // Second call — joins the first thread, then spawns a new one
+        handle.run_wasm(wat.as_bytes().to_vec(), "run".to_string());
+        let ops2 = capture.wait_for_ops();
+        assert!(!ops2.is_empty());
+
+        handle.stop_engine();
     }
 }

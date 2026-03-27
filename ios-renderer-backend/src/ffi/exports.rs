@@ -4,9 +4,8 @@
 //! Naming convention: `paws_renderer_*`.
 //!
 //! All engine work (WASM execution, style resolution, layout, ViewTree
-//! processing) happens on a background thread. The FFI layer sends
-//! [`Command`](crate::thread::Command)s via a channel and, for operations
-//! that need a return value, blocks on a reply.
+//! processing) happens on a background thread spawned per
+//! [`paws_renderer_post_run_wasm`] call.
 
 use std::ffi::{c_char, c_void, CStr};
 
@@ -38,14 +37,18 @@ macro_rules! get_cstr {
 /// Opaque handle to the Paws renderer.
 ///
 /// Owns the background engine thread via [`EngineHandle`]. All engine
-/// state lives on that thread — this struct only holds the channel sender.
+/// state lives on that thread.
+///
+/// Multiple instances can coexist — each manages an independent engine
+/// and UIKit area.
 ///
 /// Created by [`paws_renderer_create`] and destroyed by [`paws_renderer_destroy`].
 pub struct PawsRenderer {
     engine: EngineHandle,
 }
 
-/// Creates a new `PawsRenderer` with a background engine thread.
+/// Creates a new `PawsRenderer`. No background thread is spawned yet —
+/// that happens on the first [`paws_renderer_post_run_wasm`] call.
 ///
 /// - `base_url`: null-terminated UTF-8 string (document base URL).
 ///   Pass `null` to use `"about:blank"`.
@@ -76,12 +79,12 @@ pub extern "C" fn paws_renderer_create(
         }
     };
 
-    let engine = EngineHandle::spawn(url_str.to_string(), completion, context);
+    let engine = EngineHandle::new(url_str.to_string(), completion, context);
     let renderer = PawsRenderer { engine };
     Box::into_raw(Box::new(renderer))
 }
 
-/// Destroys a `PawsRenderer`, shutting down the background thread.
+/// Destroys a `PawsRenderer`, stopping the background thread if running.
 ///
 /// After this call the pointer is invalid. Passing `null` is a no-op.
 #[no_mangle]
@@ -92,11 +95,28 @@ pub extern "C" fn paws_renderer_destroy(renderer: *mut PawsRenderer) {
     }
 }
 
-/// Asynchronously compiles a WASM binary module and runs the named function,
+/// Stops the engine's background thread if one is running.
+///
+/// Waits for the thread to finish before returning. After this call,
+/// no background work is active for this renderer. A subsequent
+/// [`paws_renderer_post_run_wasm`] call will spawn a new thread.
+///
+/// Returns `0` on success.
+#[no_mangle]
+pub extern "C" fn paws_renderer_stop_engine(renderer: *mut PawsRenderer) -> i32 {
+    let renderer = get_renderer!(renderer);
+    renderer.engine.stop_engine();
+    0
+}
+
+/// Spawns a fresh background thread to compile and run a WASM module,
 /// then auto-commits.
 ///
-/// The completion callback will be called from the background thread
-/// once ops are ready. Returns `0` immediately.
+/// If a previous thread is still running, it is joined first (waited
+/// for completion). The new thread creates fresh engine state, runs the
+/// module, and delivers op-codes via the completion callback.
+///
+/// Returns `0` on success (thread spawned).
 #[no_mangle]
 pub extern "C" fn paws_renderer_post_run_wasm(
     renderer: *mut PawsRenderer,
@@ -114,14 +134,8 @@ pub extern "C" fn paws_renderer_post_run_wasm(
     let wasm_vec = wasm_slice.to_vec();
     let func_str = get_cstr!(func_name);
 
-    match renderer
-        .engine
-        .tx
-        .send(Some((wasm_vec, func_str.to_string())))
-    {
-        Ok(()) => 0,
-        Err(_) => RendererError::EngineFailed.as_i32(),
-    }
+    renderer.engine.run_wasm(wasm_vec, func_str.to_string());
+    0
 }
 
 /// Converts a raw renderer pointer to a mutable reference.
@@ -132,9 +146,7 @@ fn unsafe_renderer<'a>(ptr: *mut PawsRenderer) -> Option<&'a mut PawsRenderer> {
         None
     } else {
         // SAFETY: The pointer was created by Box::into_raw. Exclusive access
-        // is guaranteed because the struct only holds a channel sender (which
-        // is safe to use from multiple threads, though in practice Swift calls
-        // FFI functions from a single thread).
+        // is guaranteed because Swift calls FFI functions from a single thread.
         Some(unsafe { &mut *ptr })
     }
 }
@@ -227,11 +239,23 @@ mod tests {
     }
 
     #[test]
-    fn test_post_run_wasm_produces_ops() {
+    fn test_stop_engine_null_renderer() {
+        let result = paws_renderer_stop_engine(std::ptr::null_mut());
+        assert_eq!(result, RendererError::InvalidHandle.as_i32());
+    }
+
+    #[test]
+    fn test_stop_engine_no_thread() {
+        let (renderer, _capture) = create_test_renderer();
+        let result = paws_renderer_stop_engine(renderer);
+        assert_eq!(result, 0);
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_post_run_wasm_missing_export() {
         let (renderer, _capture) = create_test_renderer();
 
-        // A minimal valid WASM binary (header + text "0asm", version 1)
-        // or just "(module)" text which wasmtime handles via WAT compilation.
         let wasm_bytes = b"(module)";
         let func = CString::new("nonexistent").unwrap();
 
@@ -281,7 +305,7 @@ mod tests {
             wasm_bytes.len(),
             func.as_ptr(),
         );
-        assert_eq!(result, 0, "post_run_wasm should return 0 immediately");
+        assert_eq!(result, 0, "post_run_wasm should return 0");
 
         // Wait for the completion callback to fire (deterministic, no sleep).
         let ops_bytes = capture.wait_for_ops();
