@@ -9,7 +9,7 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
-taffy = { version = "0.9.2", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "calc"] }
+taffy = { version = "0.9.2", default-features = false, features = ["std", "flexbox", "grid", "block_layout", "calc"] }
 # Note: Stylo is a complex crate from Mozilla; this is a light-weight usage surface.
 # The crate name is `style` in Gecko; here we use `stylo` when available on crates.io.
 stylo = "0.13"

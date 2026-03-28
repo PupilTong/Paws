@@ -1,15 +1,35 @@
-use style::servo_arc::Arc;
+//! Layout computation via Taffy's `LayoutPartialTree` trait hierarchy.
+//!
+//! Instead of copying the DOM into an intermediate `TaffyTree`, we implement
+//! Taffy's traits directly on a thin adapter ([`PawsLayoutTree`]) that wraps
+//! `&mut Document`. Layout data (cache, unrounded/final layouts) lives on
+//! [`PawsElement`] for persistence across passes (future CSS Containment).
 
+use style::servo_arc::Arc;
+use style::values::computed::length::CSSPixelLength;
+use style::values::computed::length_percentage::CalcLengthPercentage;
+use style::values::specified::font::FONT_MEDIUM_PX;
+
+use crate::dom::document::Document;
+use crate::dom::element::PawsElement;
 use crate::dom::NodeType;
 use crate::layout::text::TextMeasurer;
-use crate::style::to_taffy_style;
-use style::values::specified::font::FONT_MEDIUM_PX;
+
 use taffy::prelude::*;
+use taffy::tree::{Layout, LayoutInput, LayoutOutput};
+use taffy::{
+    compute_cached_layout, compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
+    compute_leaf_layout, compute_root_layout, round_layout, CacheTree,
+};
+
+use taffy::compute_block_layout;
+
+// ─── Public output type ──────────────────────────────────────────────
 
 /// A fully-resolved layout node with absolute position, size, and children.
 ///
-/// Produced by [`LayoutState::compute_layout`] and consumed by
-/// the iOS renderer backend's conversion layer to build `LayoutNode` trees.
+/// Produced by [`compute_layout`] and consumed by the iOS renderer backend's
+/// conversion layer to build `LayoutNode` trees.
 ///
 /// Style-derived values (overflow, background color, etc.) are accessible
 /// through [`computed_values`](Self::computed_values) rather than being
@@ -45,141 +65,382 @@ impl Default for LayoutBox {
     }
 }
 
-pub struct LayoutState {
-    pub taffy: TaffyTree<taffy::NodeId>,
+// ─── Public API ──────────────────────────────────────────────────────
+
+/// Computes layout for a subtree rooted at `root_id`.
+///
+/// Layout data is written directly onto DOM nodes (`PawsElement` fields:
+/// `layout_cache`, `unrounded_layout`, `final_layout`).
+pub fn compute_layout(
+    doc: &mut Document,
+    root_id: NodeId,
+    text_measurer: &dyn TextMeasurer,
+) -> Option<LayoutBox> {
+    // Bail early if the root node has no style.
+    doc.get_node(root_id).and_then(|n| n.taffy_style.as_ref())?;
+
+    let mut tree = PawsLayoutTree { doc, text_measurer };
+    compute_root_layout(&mut tree, root_id, Size::MAX_CONTENT);
+    round_layout(&mut tree, root_id);
+    extract_layout_tree(tree.doc, root_id)
 }
 
-impl Default for LayoutState {
-    fn default() -> Self {
-        Self::new()
+// ─── Adapter ─────────────────────────────────────────────────────────
+
+/// Thin adapter implementing Taffy's layout traits over the DOM.
+///
+/// Borrows `Document` mutably for cache/layout writes. Short-lived: constructed
+/// per layout pass in [`compute_layout`].
+struct PawsLayoutTree<'a> {
+    doc: &'a mut Document,
+    text_measurer: &'a dyn TextMeasurer,
+}
+
+impl PawsLayoutTree<'_> {
+    #[inline]
+    fn node(&self, id: NodeId) -> &PawsElement {
+        self.doc.get_node(id).expect("valid node id during layout")
+    }
+
+    #[inline]
+    fn node_mut(&mut self, id: NodeId) -> &mut PawsElement {
+        self.doc
+            .get_node_mut(id)
+            .expect("valid node id during layout")
     }
 }
 
-impl LayoutState {
-    pub fn new() -> Self {
-        Self {
-            taffy: TaffyTree::new(),
-        }
+// ─── ChildIter ───────────────────────────────────────────────────────
+
+/// Zero-allocation iterator over a node's children.
+///
+/// Wraps a slice iterator directly — no Vec allocation per traversal call.
+/// All children of styled elements are expected to have `taffy_style` set
+/// by `resolve_style`, so no filtering is needed.
+struct ChildIter<'a>(std::slice::Iter<'a, NodeId>);
+
+impl Iterator for ChildIter<'_> {
+    type Item = NodeId;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().copied()
+    }
+}
+
+// ─── TraversePartialTree ─────────────────────────────────────────────
+
+impl taffy::TraversePartialTree for PawsLayoutTree<'_> {
+    type ChildIter<'a>
+        = ChildIter<'a>
+    where
+        Self: 'a;
+
+    #[inline]
+    fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
+        ChildIter(self.node(parent_node_id).children.iter())
     }
 
-    /// Computes the layout for a subtree rooted at `id`, returning its full tree.
-    /// Uses a persistent Taffy instance to reuse allocations.
-    pub fn compute_layout(
-        &mut self,
-        doc: &crate::dom::Document,
-        id: taffy::NodeId,
-        text_measurer: &dyn TextMeasurer,
-    ) -> Option<LayoutBox> {
-        self.taffy.clear();
-        let root_node = build_layout_tree(doc, id, &mut self.taffy, text_measurer)?;
-        self.taffy
-            .compute_layout(root_node, Size::MAX_CONTENT)
-            .ok()?;
-        self.extract_tree(root_node, doc)
+    #[inline]
+    fn child_count(&self, parent_node_id: NodeId) -> usize {
+        self.node(parent_node_id).children.len()
     }
 
-    /// Recursively extracts the positioned layout tree from Taffy's results.
-    fn extract_tree(&self, taffy_node: NodeId, doc: &crate::dom::Document) -> Option<LayoutBox> {
-        let layout = self.taffy.layout(taffy_node).ok()?;
-        let node_id = self.taffy.get_node_context(taffy_node).copied()?;
+    #[inline]
+    fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId {
+        self.node(parent_node_id).children[child_index]
+    }
+}
 
-        let children: Vec<LayoutBox> = self
-            .taffy
-            .children(taffy_node)
-            .ok()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|child| self.extract_tree(child, doc))
-            .collect();
+// ─── TraverseTree (marker) ───────────────────────────────────────────
 
-        // Extract z-index and computed values from the DOM node.
-        let (z_index, computed_values) = doc
-            .get_node(node_id)
-            .and_then(|node| node.computed_values.as_ref())
-            .map(|cv| {
-                use style::values::generics::position::ZIndex;
-                let z = match cv.clone_z_index() {
-                    ZIndex::Integer(n) => Some(n),
-                    ZIndex::Auto => None,
-                };
-                (z, Some(Arc::clone(cv)))
-            })
-            .unwrap_or((None, None));
+impl taffy::TraverseTree for PawsLayoutTree<'_> {}
 
-        Some(LayoutBox {
-            node_id,
-            x: layout.location.x,
-            y: layout.location.y,
-            width: layout.size.width,
-            height: layout.size.height,
-            z_index,
-            computed_values,
-            children,
+// ─── LayoutPartialTree ───────────────────────────────────────────────
+
+impl taffy::LayoutPartialTree for PawsLayoutTree<'_> {
+    type CoreContainerStyle<'a>
+        = &'a taffy::Style
+    where
+        Self: 'a;
+
+    type CustomIdent = String;
+
+    fn get_core_container_style(&self, node_id: NodeId) -> Self::CoreContainerStyle<'_> {
+        self.node(node_id)
+            .taffy_style
+            .as_ref()
+            .expect("node must have taffy_style for layout")
+    }
+
+    fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
+        // SAFETY: `val` was created by `CompactLength::calc(ptr)` in
+        // `style::convert::length::length_percentage()`, where `ptr` is a
+        // `*const CalcLengthPercentage`. The pointee remains live because the
+        // `ComputedValues` (which owns it via `Arc`) are borrowed through the
+        // `Document` reference held by this adapter.
+        let calc = unsafe { &*(val as *const CalcLengthPercentage) };
+        calc.resolve(CSSPixelLength::new(basis)).px()
+    }
+
+    fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
+        self.node_mut(node_id).unrounded_layout = *layout;
+    }
+
+    fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
+        compute_cached_layout(self, node_id, inputs, |tree, node_id, inputs| {
+            let node = tree.node(node_id);
+            let style = node
+                .taffy_style
+                .as_ref()
+                .expect("node must have taffy_style");
+            let display = style.display;
+            let is_text = node.node_type == NodeType::Text;
+            let has_children = tree.child_count(node_id) > 0;
+
+            if display == Display::None {
+                return compute_hidden_layout(tree, node_id);
+            }
+
+            if is_text {
+                return compute_text_leaf(tree, node_id, inputs);
+            }
+
+            if !has_children {
+                // Non-text leaf with no children — reuse `style` from above.
+                return compute_leaf_layout(
+                    inputs,
+                    style,
+                    |val, basis| tree.resolve_calc_value(val, basis),
+                    |_known_dimensions, _available_space| Size::ZERO,
+                );
+            }
+
+            match display {
+                Display::Flex => compute_flexbox_layout(tree, node_id, inputs),
+                Display::Grid => compute_grid_layout(tree, node_id, inputs),
+                _ => compute_block_layout(tree, node_id, inputs),
+            }
         })
     }
 }
 
-/// Builds a Taffy layout tree from the DOM subtree rooted at `root_id`.
-pub(crate) fn build_layout_tree(
-    doc: &crate::dom::Document,
-    root_id: taffy::NodeId,
-    taffy: &mut TaffyTree<taffy::NodeId>,
-    text_measurer: &dyn TextMeasurer,
-) -> Option<NodeId> {
-    build_subtree(doc, root_id, taffy, text_measurer)
-}
-
-fn build_subtree(
-    doc: &crate::dom::Document,
-    node_id: taffy::NodeId,
-    taffy: &mut TaffyTree<taffy::NodeId>,
-    text_measurer: &dyn TextMeasurer,
-) -> Option<NodeId> {
-    let node = doc.get_node(node_id)?;
-
-    // Direct type-level conversion — no string round-trip.
-    let computed = node.computed_values.as_ref()?;
-    let mut style = to_taffy_style(computed);
-
-    match node.node_type {
-        NodeType::Element => {
-            let mut children = Vec::new();
-            for &child_id in &node.children {
-                if let Some(child_node) = build_subtree(doc, child_id, taffy, text_measurer) {
-                    children.push(child_node);
-                }
-            }
-            let taffy_id = taffy.new_with_children(style, &children).ok()?;
-            let _ = taffy.set_node_context(taffy_id, Some(node_id));
-            Some(taffy_id)
-        }
-        NodeType::Text => {
-            let font_size = computed.clone_font_size().computed_size().px();
-            let font_size = if font_size > 0.0 {
-                font_size
+/// Computes layout for a text leaf node using the text measurer.
+fn compute_text_leaf(
+    tree: &mut PawsLayoutTree<'_>,
+    node_id: NodeId,
+    inputs: LayoutInput,
+) -> LayoutOutput {
+    let node = tree.node(node_id);
+    let font_size = node
+        .computed_values
+        .as_ref()
+        .map(|cv| {
+            let fs = cv.clone_font_size().computed_size().px();
+            if fs > 0.0 {
+                fs
             } else {
                 FONT_MEDIUM_PX
-            };
-            let text = node.text_content.as_deref().unwrap_or("");
-            let (width, height) = text_measurer.measure_text(text, font_size, None);
+            }
+        })
+        .unwrap_or(FONT_MEDIUM_PX);
+    let text = node.text_content.as_deref().unwrap_or("");
 
-            let w_lp: taffy::LengthPercentage = taffy::style_helpers::length(width);
-            let h_lp: taffy::LengthPercentage = taffy::style_helpers::length(height);
-            style.size.width = w_lp.into();
-            style.size.height = h_lp.into();
+    // Pre-measure to get fixed dimensions (matching the previous eager approach).
+    let (width, height) = tree.text_measurer.measure_text(text, font_size, None);
 
-            let taffy_id = taffy.new_leaf_with_context(style, node_id).ok()?;
-            Some(taffy_id)
-        }
-        _ => None,
+    let style = tree
+        .node(node_id)
+        .taffy_style
+        .as_ref()
+        .expect("text node must have taffy_style");
+
+    compute_leaf_layout(
+        inputs,
+        style,
+        |val, basis| tree.resolve_calc_value(val, basis),
+        |_known_dimensions, _available_space| Size { width, height },
+    )
+}
+
+// ─── CacheTree ───────────────────────────────────────────────────────
+
+impl CacheTree for PawsLayoutTree<'_> {
+    fn cache_get(
+        &self,
+        node_id: NodeId,
+        known_dimensions: Size<Option<f32>>,
+        available_space: Size<AvailableSpace>,
+        run_mode: taffy::RunMode,
+    ) -> Option<LayoutOutput> {
+        self.node(node_id)
+            .layout_cache
+            .get(known_dimensions, available_space, run_mode)
+    }
+
+    fn cache_store(
+        &mut self,
+        node_id: NodeId,
+        known_dimensions: Size<Option<f32>>,
+        available_space: Size<AvailableSpace>,
+        run_mode: taffy::RunMode,
+        layout_output: LayoutOutput,
+    ) {
+        self.node_mut(node_id).layout_cache.store(
+            known_dimensions,
+            available_space,
+            run_mode,
+            layout_output,
+        );
+    }
+
+    fn cache_clear(&mut self, node_id: NodeId) {
+        self.node_mut(node_id).layout_cache.clear();
     }
 }
+
+// ─── LayoutFlexboxContainer ──────────────────────────────────────────
+
+impl taffy::LayoutFlexboxContainer for PawsLayoutTree<'_> {
+    type FlexboxContainerStyle<'a>
+        = &'a taffy::Style
+    where
+        Self: 'a;
+
+    type FlexboxItemStyle<'a>
+        = &'a taffy::Style
+    where
+        Self: 'a;
+
+    fn get_flexbox_container_style(&self, node_id: NodeId) -> Self::FlexboxContainerStyle<'_> {
+        self.node(node_id)
+            .taffy_style
+            .as_ref()
+            .expect("flexbox container must have taffy_style")
+    }
+
+    fn get_flexbox_child_style(&self, child_node_id: NodeId) -> Self::FlexboxItemStyle<'_> {
+        self.node(child_node_id)
+            .taffy_style
+            .as_ref()
+            .expect("flexbox child must have taffy_style")
+    }
+}
+
+// ─── LayoutGridContainer ─────────────────────────────────────────────
+
+impl taffy::LayoutGridContainer for PawsLayoutTree<'_> {
+    type GridContainerStyle<'a>
+        = &'a taffy::Style
+    where
+        Self: 'a;
+
+    type GridItemStyle<'a>
+        = &'a taffy::Style
+    where
+        Self: 'a;
+
+    fn get_grid_container_style(&self, node_id: NodeId) -> Self::GridContainerStyle<'_> {
+        self.node(node_id)
+            .taffy_style
+            .as_ref()
+            .expect("grid container must have taffy_style")
+    }
+
+    fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_> {
+        self.node(child_node_id)
+            .taffy_style
+            .as_ref()
+            .expect("grid child must have taffy_style")
+    }
+}
+
+// ─── LayoutBlockContainer ────────────────────────────────────────────
+
+impl taffy::LayoutBlockContainer for PawsLayoutTree<'_> {
+    type BlockContainerStyle<'a>
+        = &'a taffy::Style
+    where
+        Self: 'a;
+
+    type BlockItemStyle<'a>
+        = &'a taffy::Style
+    where
+        Self: 'a;
+
+    fn get_block_container_style(&self, node_id: NodeId) -> Self::BlockContainerStyle<'_> {
+        self.node(node_id)
+            .taffy_style
+            .as_ref()
+            .expect("block container must have taffy_style")
+    }
+
+    fn get_block_child_style(&self, child_node_id: NodeId) -> Self::BlockItemStyle<'_> {
+        self.node(child_node_id)
+            .taffy_style
+            .as_ref()
+            .expect("block child must have taffy_style")
+    }
+}
+
+// ─── RoundTree ───────────────────────────────────────────────────────
+
+impl taffy::RoundTree for PawsLayoutTree<'_> {
+    fn get_unrounded_layout(&self, node_id: NodeId) -> Layout {
+        self.node(node_id).unrounded_layout
+    }
+
+    fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout) {
+        self.node_mut(node_id).final_layout = *layout;
+    }
+}
+
+// ─── Result extraction ───────────────────────────────────────────────
+
+/// Recursively extracts the positioned layout tree from DOM nodes.
+fn extract_layout_tree(doc: &Document, node_id: NodeId) -> Option<LayoutBox> {
+    let node = doc.get_node(node_id)?;
+    node.taffy_style.as_ref()?;
+
+    let layout = &node.final_layout;
+
+    let children: Vec<LayoutBox> = node
+        .children
+        .iter()
+        .filter_map(|&child_id| extract_layout_tree(doc, child_id))
+        .collect();
+
+    // Extract z-index and computed values from the DOM node.
+    let (z_index, computed_values) = node
+        .computed_values
+        .as_ref()
+        .map(|cv| {
+            use style::values::generics::position::ZIndex;
+            let z = match cv.clone_z_index() {
+                ZIndex::Integer(n) => Some(n),
+                ZIndex::Auto => None,
+            };
+            (z, Some(Arc::clone(cv)))
+        })
+        .unwrap_or((None, None));
+
+    Some(LayoutBox {
+        node_id,
+        x: layout.location.x,
+        y: layout.location.y,
+        width: layout.size.width,
+        height: layout.size.height,
+        z_index,
+        computed_values,
+        children,
+    })
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dom::Document;
     use crate::layout::text::MockTextMeasurer;
+    use crate::runtime::RuntimeState;
     use markup5ever::QualName;
     use style::shared_lock::SharedRwLock;
     use url::Url;
@@ -188,7 +449,6 @@ mod tests {
     fn test_compute_layout_extract_tree() {
         let guard = SharedRwLock::new();
         let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
-        let mut state = LayoutState::new();
         let measurer = MockTextMeasurer;
 
         let elem1 = doc.create_element(QualName::new(None, "".into(), "div".into()));
@@ -201,9 +461,153 @@ mod tests {
         let style_ctx = crate::style::StyleContext::new(url);
         doc.resolve_style(&style_ctx);
 
-        let layout = state.compute_layout(&doc, elem1, &measurer);
+        let layout = compute_layout(&mut doc, elem1, &measurer);
         assert!(layout.is_some());
         let layout = layout.unwrap();
+        assert_eq!(layout.children.len(), 1);
+    }
+
+    #[test]
+    fn test_layout_no_style_returns_none() {
+        let guard = SharedRwLock::new();
+        let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
+        let measurer = MockTextMeasurer;
+        // Don't resolve styles — taffy_style will be None.
+        let el = doc.create_element(QualName::new(None, "".into(), "div".into()));
+        doc.append_child(doc.root, el).unwrap();
+        assert!(compute_layout(&mut doc, el, &measurer).is_none());
+    }
+
+    #[test]
+    fn test_layout_display_none_zero_size() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let parent = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+        state
+            .set_inline_style(parent, "display".into(), "flex".into())
+            .unwrap();
+
+        let hidden = state.create_element("div".to_string());
+        state.append_element(parent, hidden).unwrap();
+        state
+            .set_inline_style(hidden, "display".into(), "none".into())
+            .unwrap();
+
+        let visible = state.create_element("div".to_string());
+        state.append_element(parent, visible).unwrap();
+        state
+            .set_inline_style(visible, "width".into(), "50px".into())
+            .unwrap();
+        state
+            .set_inline_style(visible, "height".into(), "50px".into())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout = compute_layout(
+            &mut state.doc,
+            NodeId::from(parent as u64),
+            &MockTextMeasurer,
+        )
+        .unwrap();
+
+        // Hidden child should have zero dimensions.
+        let hidden_box = &layout.children[0];
+        assert_eq!(hidden_box.width, 0.0);
+        assert_eq!(hidden_box.height, 0.0);
+    }
+
+    #[test]
+    fn test_layout_grid_container() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let grid = state.create_element("div".to_string());
+        state.append_element(0, grid).unwrap();
+        state
+            .set_inline_style(grid, "display".into(), "grid".into())
+            .unwrap();
+
+        let child = state.create_element("div".to_string());
+        state.append_element(grid, child).unwrap();
+        state
+            .set_inline_style(child, "width".into(), "80px".into())
+            .unwrap();
+        state
+            .set_inline_style(child, "height".into(), "40px".into())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout =
+            compute_layout(&mut state.doc, NodeId::from(grid as u64), &MockTextMeasurer).unwrap();
+        assert_eq!(layout.children.len(), 1);
+        assert!(layout.height > 0.0, "grid should have positive height");
+    }
+
+    #[test]
+    fn test_layout_childless_element() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "width".into(), "100px".into())
+            .unwrap();
+        state
+            .set_inline_style(el, "height".into(), "60px".into())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout =
+            compute_layout(&mut state.doc, NodeId::from(el as u64), &MockTextMeasurer).unwrap();
+        assert_eq!(layout.width, 100.0);
+        assert_eq!(layout.height, 60.0);
+        assert!(layout.children.is_empty());
+    }
+
+    #[test]
+    fn test_layout_block_container_with_child() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let block = state.create_element("div".to_string());
+        state.append_element(0, block).unwrap();
+        state
+            .set_inline_style(block, "display".into(), "block".into())
+            .unwrap();
+        state
+            .set_inline_style(block, "width".into(), "200px".into())
+            .unwrap();
+
+        let child = state.create_element("div".to_string());
+        state.append_element(block, child).unwrap();
+        state
+            .set_inline_style(child, "height".into(), "30px".into())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout = compute_layout(
+            &mut state.doc,
+            NodeId::from(block as u64),
+            &MockTextMeasurer,
+        )
+        .unwrap();
+        assert_eq!(layout.width, 200.0);
+        assert_eq!(layout.children.len(), 1);
+        assert_eq!(layout.children[0].height, 30.0);
+    }
+
+    #[test]
+    fn test_layout_flex_with_childless_leaf() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let flex = state.create_element("div".to_string());
+        state.append_element(0, flex).unwrap();
+        state
+            .set_inline_style(flex, "display".into(), "flex".into())
+            .unwrap();
+
+        // Childless leaf — exercises the !has_children branch in compute_child_layout.
+        let leaf = state.create_element("div".to_string());
+        state.append_element(flex, leaf).unwrap();
+        // No children, no text — pure leaf.
+
+        state.doc.resolve_style(&state.style_context);
+        let layout =
+            compute_layout(&mut state.doc, NodeId::from(flex as u64), &MockTextMeasurer).unwrap();
         assert_eq!(layout.children.len(), 1);
     }
 }

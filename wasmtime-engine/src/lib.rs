@@ -115,12 +115,14 @@ pub fn hello_engine() -> String {
     // Resolve styles first
     state.doc.resolve_style(&state.style_context);
 
-    // 3) Layout: build Taffy tree
+    // 3) Layout
     let text_measurer = engine::layout::MockTextMeasurer;
-    let mut layout_state = engine::layout::LayoutState::new();
-    let layout = layout_state
-        .compute_layout(&state.doc, engine::NodeId::from(id as u64), &text_measurer)
-        .expect("get layout");
+    let layout = engine::layout::compute_layout(
+        &mut state.doc,
+        engine::NodeId::from(id as u64),
+        &text_measurer,
+    )
+    .expect("get layout");
 
     format!(
         "wasm module ok\nlayout={{w:{}, h:{}}}",
@@ -185,14 +187,12 @@ mod tests {
         // Resolve styles first
         state.doc.resolve_style(&state.style_context);
 
-        let mut layout_state = engine::layout::LayoutState::new();
-        let layout = layout_state
-            .compute_layout(
-                &state.doc,
-                engine::NodeId::from(id as u64),
-                &engine::layout::MockTextMeasurer,
-            )
-            .expect("layout");
+        let layout = engine::layout::compute_layout(
+            &mut state.doc,
+            engine::NodeId::from(id as u64),
+            &engine::layout::MockTextMeasurer,
+        )
+        .expect("layout");
         assert_eq!(layout.height, 100.0);
     }
 
@@ -515,14 +515,12 @@ mod tests {
         // Resolve styles first
         state.doc.resolve_style(&state.style_context);
 
-        let mut layout_state = engine::layout::LayoutState::new();
-        let layout = layout_state
-            .compute_layout(
-                &state.doc,
-                engine::NodeId::from(id as u64),
-                &engine::layout::MockTextMeasurer,
-            )
-            .expect("layout");
+        let layout = engine::layout::compute_layout(
+            &mut state.doc,
+            engine::NodeId::from(id as u64),
+            &engine::layout::MockTextMeasurer,
+        )
+        .expect("layout");
         assert_eq!(layout.height, 77.0);
     }
 

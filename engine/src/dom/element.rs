@@ -84,6 +84,16 @@ pub struct PawsElement {
 
     /// Dirty descendants flag for Stylo.
     pub(crate) dirty_descendants: AtomicBool,
+
+    // ── Layout data (persists across passes for CSS Containment) ──
+    /// Cached Taffy style, recomputed when `computed_values` change.
+    pub(crate) taffy_style: Option<taffy::Style>,
+    /// Taffy layout cache (persists across passes for incremental re-layout).
+    pub(crate) layout_cache: taffy::Cache,
+    /// Unrounded layout from the current pass.
+    pub(crate) unrounded_layout: taffy::tree::Layout,
+    /// Pixel-snapped final layout.
+    pub(crate) final_layout: taffy::tree::Layout,
 }
 
 impl PawsElement {
@@ -115,6 +125,11 @@ impl PawsElement {
             guard,
             element_state: ElementState::empty(),
             dirty_descendants: AtomicBool::new(true),
+
+            taffy_style: None,
+            layout_cache: taffy::Cache::new(),
+            unrounded_layout: taffy::tree::Layout::with_order(0),
+            final_layout: taffy::tree::Layout::with_order(0),
         }
     }
 
