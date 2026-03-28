@@ -205,12 +205,7 @@ impl taffy::LayoutPartialTree for PawsLayoutTree<'_> {
             }
 
             if !has_children {
-                // Non-text leaf with no children.
-                let style = tree
-                    .node(node_id)
-                    .taffy_style
-                    .as_ref()
-                    .expect("node must have taffy_style");
+                // Non-text leaf with no children — reuse `style` from above.
                 return compute_leaf_layout(
                     inputs,
                     style,
@@ -445,6 +440,7 @@ fn extract_layout_tree(doc: &Document, node_id: NodeId) -> Option<LayoutBox> {
 mod tests {
     use super::*;
     use crate::layout::text::MockTextMeasurer;
+    use crate::runtime::RuntimeState;
     use markup5ever::QualName;
     use style::shared_lock::SharedRwLock;
     use url::Url;
@@ -468,6 +464,150 @@ mod tests {
         let layout = compute_layout(&mut doc, elem1, &measurer);
         assert!(layout.is_some());
         let layout = layout.unwrap();
+        assert_eq!(layout.children.len(), 1);
+    }
+
+    #[test]
+    fn test_layout_no_style_returns_none() {
+        let guard = SharedRwLock::new();
+        let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
+        let measurer = MockTextMeasurer;
+        // Don't resolve styles — taffy_style will be None.
+        let el = doc.create_element(QualName::new(None, "".into(), "div".into()));
+        doc.append_child(doc.root, el).unwrap();
+        assert!(compute_layout(&mut doc, el, &measurer).is_none());
+    }
+
+    #[test]
+    fn test_layout_display_none_zero_size() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let parent = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+        state
+            .set_inline_style(parent, "display".into(), "flex".into())
+            .unwrap();
+
+        let hidden = state.create_element("div".to_string());
+        state.append_element(parent, hidden).unwrap();
+        state
+            .set_inline_style(hidden, "display".into(), "none".into())
+            .unwrap();
+
+        let visible = state.create_element("div".to_string());
+        state.append_element(parent, visible).unwrap();
+        state
+            .set_inline_style(visible, "width".into(), "50px".into())
+            .unwrap();
+        state
+            .set_inline_style(visible, "height".into(), "50px".into())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout = compute_layout(
+            &mut state.doc,
+            NodeId::from(parent as u64),
+            &MockTextMeasurer,
+        )
+        .unwrap();
+
+        // Hidden child should have zero dimensions.
+        let hidden_box = &layout.children[0];
+        assert_eq!(hidden_box.width, 0.0);
+        assert_eq!(hidden_box.height, 0.0);
+    }
+
+    #[test]
+    fn test_layout_grid_container() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let grid = state.create_element("div".to_string());
+        state.append_element(0, grid).unwrap();
+        state
+            .set_inline_style(grid, "display".into(), "grid".into())
+            .unwrap();
+
+        let child = state.create_element("div".to_string());
+        state.append_element(grid, child).unwrap();
+        state
+            .set_inline_style(child, "width".into(), "80px".into())
+            .unwrap();
+        state
+            .set_inline_style(child, "height".into(), "40px".into())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout =
+            compute_layout(&mut state.doc, NodeId::from(grid as u64), &MockTextMeasurer).unwrap();
+        assert_eq!(layout.children.len(), 1);
+        assert!(layout.height > 0.0, "grid should have positive height");
+    }
+
+    #[test]
+    fn test_layout_childless_element() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+        state
+            .set_inline_style(el, "width".into(), "100px".into())
+            .unwrap();
+        state
+            .set_inline_style(el, "height".into(), "60px".into())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout =
+            compute_layout(&mut state.doc, NodeId::from(el as u64), &MockTextMeasurer).unwrap();
+        assert_eq!(layout.width, 100.0);
+        assert_eq!(layout.height, 60.0);
+        assert!(layout.children.is_empty());
+    }
+
+    #[test]
+    fn test_layout_block_container_with_child() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let block = state.create_element("div".to_string());
+        state.append_element(0, block).unwrap();
+        state
+            .set_inline_style(block, "display".into(), "block".into())
+            .unwrap();
+        state
+            .set_inline_style(block, "width".into(), "200px".into())
+            .unwrap();
+
+        let child = state.create_element("div".to_string());
+        state.append_element(block, child).unwrap();
+        state
+            .set_inline_style(child, "height".into(), "30px".into())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout = compute_layout(
+            &mut state.doc,
+            NodeId::from(block as u64),
+            &MockTextMeasurer,
+        )
+        .unwrap();
+        assert_eq!(layout.width, 200.0);
+        assert_eq!(layout.children.len(), 1);
+        assert_eq!(layout.children[0].height, 30.0);
+    }
+
+    #[test]
+    fn test_layout_flex_with_childless_leaf() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let flex = state.create_element("div".to_string());
+        state.append_element(0, flex).unwrap();
+        state
+            .set_inline_style(flex, "display".into(), "flex".into())
+            .unwrap();
+
+        // Childless leaf — exercises the !has_children branch in compute_child_layout.
+        let leaf = state.create_element("div".to_string());
+        state.append_element(flex, leaf).unwrap();
+        // No children, no text — pure leaf.
+
+        state.doc.resolve_style(&state.style_context);
+        let layout =
+            compute_layout(&mut state.doc, NodeId::from(flex as u64), &MockTextMeasurer).unwrap();
         assert_eq!(layout.children.len(), 1);
     }
 }
