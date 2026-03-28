@@ -112,13 +112,17 @@ impl PawsLayoutTree<'_> {
 
 // ─── ChildIter ───────────────────────────────────────────────────────
 
-/// Iterator over a node's children that have a cached `taffy_style`.
-struct ChildIter(std::vec::IntoIter<NodeId>);
+/// Zero-allocation iterator over a node's children.
+///
+/// Wraps a slice iterator directly — no Vec allocation per traversal call.
+/// All children of styled elements are expected to have `taffy_style` set
+/// by `resolve_style`, so no filtering is needed.
+struct ChildIter<'a>(std::slice::Iter<'a, NodeId>);
 
-impl Iterator for ChildIter {
+impl Iterator for ChildIter<'_> {
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
+        self.0.next().copied()
     }
 }
 
@@ -126,50 +130,23 @@ impl Iterator for ChildIter {
 
 impl taffy::TraversePartialTree for PawsLayoutTree<'_> {
     type ChildIter<'a>
-        = ChildIter
+        = ChildIter<'a>
     where
         Self: 'a;
 
+    #[inline]
     fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
-        let node = self.node(parent_node_id);
-        // Only yield children that have a taffy_style (i.e. participated in style resolution).
-        let children: Vec<NodeId> = node
-            .children
-            .iter()
-            .copied()
-            .filter(|&cid| {
-                self.doc
-                    .get_node(cid)
-                    .is_some_and(|n| n.taffy_style.is_some())
-            })
-            .collect();
-        ChildIter(children.into_iter())
+        ChildIter(self.node(parent_node_id).children.iter())
     }
 
+    #[inline]
     fn child_count(&self, parent_node_id: NodeId) -> usize {
-        let node = self.node(parent_node_id);
-        node.children
-            .iter()
-            .filter(|&&cid| {
-                self.doc
-                    .get_node(cid)
-                    .is_some_and(|n| n.taffy_style.is_some())
-            })
-            .count()
+        self.node(parent_node_id).children.len()
     }
 
+    #[inline]
     fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId {
-        let node = self.node(parent_node_id);
-        node.children
-            .iter()
-            .copied()
-            .filter(|&cid| {
-                self.doc
-                    .get_node(cid)
-                    .is_some_and(|n| n.taffy_style.is_some())
-            })
-            .nth(child_index)
-            .expect("child index out of bounds")
+        self.node(parent_node_id).children[child_index]
     }
 }
 
