@@ -20,3 +20,38 @@ mod ops;
 #[allow(dead_code)]
 mod renderer;
 mod thread;
+
+/// Shared test utilities used by `thread::tests` and `ffi::exports::tests`.
+#[cfg(test)]
+pub(crate) mod test_util {
+    /// No-op completion callback. Op delivery from `__commit` is not yet wired,
+    /// so this is never called in the current implementation.
+    pub(crate) extern "C" fn noop_completion(_: *const u8, _: usize, _: *mut std::ffi::c_void) {}
+
+    /// WAT module that creates a styled div and commits.
+    ///
+    /// Creates a `<div>` with `width: 100px`, appends it to the document root,
+    /// and calls `__commit` to trigger the rendering pipeline.
+    pub(crate) fn make_wat_module() -> &'static str {
+        r#"
+(module
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__set_inline_style" (func $style (param i32 i32 i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__commit" (func $commit (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "div\00")
+  (data (i32.const 16) "width\00")
+  (data (i32.const 32) "100px\00")
+  (func (export "run") (result i32)
+    (local $id i32)
+    (local.set $id (call $create (i32.const 0)))
+    (drop (call $append (i32.const 0) (local.get $id)))
+    (drop (call $style (local.get $id) (i32.const 16) (i32.const 32)))
+    (drop (call $commit))
+    (i32.const 0)
+  )
+)
+"#
+    }
+}

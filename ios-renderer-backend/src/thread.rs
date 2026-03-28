@@ -143,33 +143,7 @@ fn run_engine(base_url: String, wasm_bytes: Vec<u8>, func_name: String, _cb: Sen
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A no-op completion callback for tests. Op delivery from `__commit` is
-    /// not yet wired up, so this is never called in the current implementation.
-    extern "C" fn noop_completion(_: *const u8, _: usize, _: *mut std::ffi::c_void) {}
-
-    fn make_wat_module() -> &'static str {
-        r#"
-(module
-  (import "env" "__create_element" (func $create (param i32) (result i32)))
-  (import "env" "__set_inline_style" (func $style (param i32 i32 i32) (result i32)))
-  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
-  (import "env" "__commit" (func $commit (result i32)))
-  (memory (export "memory") 1)
-  (data (i32.const 0) "div\00")
-  (data (i32.const 16) "width\00")
-  (data (i32.const 32) "100px\00")
-  (func (export "run") (result i32)
-    (local $id i32)
-    (local.set $id (call $create (i32.const 0)))
-    (drop (call $append (i32.const 0) (local.get $id)))
-    (drop (call $style (local.get $id) (i32.const 16) (i32.const 32)))
-    (drop (call $commit))
-    (i32.const 0)
-  )
-)
-"#
-    }
+    use crate::test_util::{make_wat_module, noop_completion};
 
     #[test]
     fn test_engine_handle_new_no_thread() {

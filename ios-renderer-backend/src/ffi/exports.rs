@@ -164,10 +164,7 @@ mod tests {
     use std::ffi::CString;
 
     use super::*;
-
-    /// No-op completion callback. Op delivery from `__commit` is not yet wired,
-    /// so this is never called in the current implementation.
-    extern "C" fn noop_completion(_: *const u8, _: usize, _: *mut c_void) {}
+    use crate::test_util::noop_completion;
 
     fn create_test_renderer() -> *mut PawsRenderer {
         let renderer =
