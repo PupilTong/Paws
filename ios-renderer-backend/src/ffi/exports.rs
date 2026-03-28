@@ -3,10 +3,11 @@
 //! These form the public C API exposed via the cbindgen-generated header.
 //! Naming convention: `paws_renderer_*`.
 //!
-//! All engine work (WASM execution, style resolution, layout, ViewTree
-//! processing) happens on a background thread. The FFI layer sends
-//! [`Command`](crate::thread::Command)s via a channel and, for operations
-//! that need a return value, blocks on a reply.
+//! The engine thread is spawned on the first [`paws_renderer_post_run_wasm`]
+//! call and stays alive until [`paws_renderer_destroy`] is called (or until
+//! the WASM module's own internal loop exits). A renderer accepts only one
+//! WASM module — subsequent calls to `post_run_wasm` on the same renderer
+//! return [`RendererError::EngineFailed`].
 
 use std::ffi::{c_char, c_void, CStr};
 
@@ -38,28 +39,33 @@ macro_rules! get_cstr {
 /// Opaque handle to the Paws renderer.
 ///
 /// Owns the background engine thread via [`EngineHandle`]. All engine
-/// state lives on that thread — this struct only holds the channel sender.
+/// state lives on that thread.
+///
+/// Multiple instances can coexist — each manages an independent engine
+/// and UIKit area.
 ///
 /// Created by [`paws_renderer_create`] and destroyed by [`paws_renderer_destroy`].
 pub struct PawsRenderer {
     engine: EngineHandle,
 }
 
-/// Creates a new `PawsRenderer` with a background engine thread.
+/// Creates a new `PawsRenderer`.
+///
+/// No background thread is spawned yet — that happens on the first
+/// [`paws_renderer_post_run_wasm`] call. The renderer owns all engine state
+/// (DOM, styles, layout, view snapshots) for its full lifetime.
 ///
 /// - `base_url`: null-terminated UTF-8 string (document base URL).
 ///   Pass `null` to use `"about:blank"`.
-/// - `completion`: called from the background thread each time ops are
-///   ready after a commit. The `ops_ptr` and `ops_len` describe a buffer
-///   of 32-byte op-code slots. The pointer is only valid for the duration
-///   of the callback — copy or process before returning.
+/// - `completion`: called from the background thread each time ops are ready
+///   after a commit. `ops_ptr` and `ops_len` describe a buffer of 32-byte
+///   op-code slots valid only for the duration of the call — copy or process
+///   before returning. Swift must dispatch UIKit mutations to the main queue.
 /// - `context`: opaque pointer forwarded to every `completion` call.
-///   Typically an `Unmanaged<OpExecutor>` pointer on the Swift side.
+///   Typically an `Unmanaged<OpExecutor>` on the Swift side.
 ///
-/// Returns an opaque pointer. The caller (Swift) owns it and must call
-/// [`paws_renderer_destroy`] to free it.
-///
-/// Returns `null` on failure.
+/// Returns an opaque pointer owned by the caller. Must be freed with
+/// [`paws_renderer_destroy`]. Returns `null` on failure.
 #[no_mangle]
 pub extern "C" fn paws_renderer_create(
     base_url: *const c_char,
@@ -76,12 +82,12 @@ pub extern "C" fn paws_renderer_create(
         }
     };
 
-    let engine = EngineHandle::spawn(url_str.to_string(), completion, context);
+    let engine = EngineHandle::new(url_str.to_string(), completion, context);
     let renderer = PawsRenderer { engine };
     Box::into_raw(Box::new(renderer))
 }
 
-/// Destroys a `PawsRenderer`, shutting down the background thread.
+/// Destroys a `PawsRenderer`, stopping the background thread if running.
 ///
 /// After this call the pointer is invalid. Passing `null` is a no-op.
 #[no_mangle]
@@ -92,11 +98,17 @@ pub extern "C" fn paws_renderer_destroy(renderer: *mut PawsRenderer) {
     }
 }
 
-/// Asynchronously compiles a WASM binary module and runs the named function,
-/// then auto-commits.
+/// Starts the rendering pipeline by loading and running a WASM module.
 ///
-/// The completion callback will be called from the background thread
-/// once ops are ready. Returns `0` immediately.
+/// Spawns the background engine thread, which compiles the module and calls
+/// the named export. The WASM module is expected to run its own internal
+/// event loop — it drives all DOM mutations and op delivery from within.
+///
+/// This is a **one-shot** call per renderer. Calling it again on the same
+/// renderer returns [`RendererError::EngineFailed`] — create a new renderer
+/// to run a different module.
+///
+/// Returns `0` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn paws_renderer_post_run_wasm(
     renderer: *mut PawsRenderer,
@@ -114,13 +126,13 @@ pub extern "C" fn paws_renderer_post_run_wasm(
     let wasm_vec = wasm_slice.to_vec();
     let func_str = get_cstr!(func_name);
 
-    match renderer
+    if renderer
         .engine
-        .tx
-        .send(Some((wasm_vec, func_str.to_string())))
+        .post_run_wasm(wasm_vec, func_str.to_string())
     {
-        Ok(()) => 0,
-        Err(_) => RendererError::EngineFailed.as_i32(),
+        0
+    } else {
+        RendererError::EngineFailed.as_i32()
     }
 }
 
@@ -132,9 +144,7 @@ fn unsafe_renderer<'a>(ptr: *mut PawsRenderer) -> Option<&'a mut PawsRenderer> {
         None
     } else {
         // SAFETY: The pointer was created by Box::into_raw. Exclusive access
-        // is guaranteed because the struct only holds a channel sender (which
-        // is safe to use from multiple threads, though in practice Swift calls
-        // FFI functions from a single thread).
+        // is guaranteed because Swift calls FFI functions from a single thread.
         Some(unsafe { &mut *ptr })
     }
 }
@@ -152,71 +162,27 @@ fn read_cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;
-    use std::sync::{Arc, Condvar, Mutex};
 
     use super::*;
+    use crate::test_util::noop_completion;
 
-    /// Test capture for the completion callback. Uses a condvar so tests
-    /// can wait deterministically instead of sleeping.
-    struct TestCapture {
-        ops: Mutex<Vec<u8>>,
-        condvar: Condvar,
-    }
-
-    impl TestCapture {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                ops: Mutex::new(Vec::new()),
-                condvar: Condvar::new(),
-            })
-        }
-
-        /// Blocks until the completion callback fires, with a timeout.
-        fn wait_for_ops(&self) -> Vec<u8> {
-            let guard = self.ops.lock().unwrap();
-            let (guard, _timeout) = self
-                .condvar
-                .wait_timeout_while(guard, std::time::Duration::from_secs(5), |ops| {
-                    ops.is_empty()
-                })
-                .unwrap();
-            guard.clone()
-        }
-    }
-
-    extern "C" fn test_completion(ptr: *const u8, len: usize, ctx: *mut c_void) {
-        // SAFETY: ctx points to a valid Arc<TestCapture>.
-        let capture = unsafe { &*(ctx as *const TestCapture) };
-        let bytes = if len > 0 && !ptr.is_null() {
-            // SAFETY: ptr is valid for len bytes during this callback.
-            unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
-        } else {
-            Vec::new()
-        };
-        *capture.ops.lock().unwrap() = bytes;
-        capture.condvar.notify_all();
-    }
-
-    fn create_test_renderer() -> (*mut PawsRenderer, Arc<TestCapture>) {
-        let capture = TestCapture::new();
-        let ctx = Arc::as_ptr(&capture) as *mut c_void;
-        let renderer = paws_renderer_create(std::ptr::null(), test_completion, ctx);
+    fn create_test_renderer() -> *mut PawsRenderer {
+        let renderer =
+            paws_renderer_create(std::ptr::null(), noop_completion, std::ptr::null_mut());
         assert!(!renderer.is_null());
-        (renderer, capture)
+        renderer
     }
 
     #[test]
     fn test_create_renderer_null_url() {
-        let (renderer, _capture) = create_test_renderer();
+        let renderer = create_test_renderer();
         paws_renderer_destroy(renderer);
     }
 
     #[test]
     fn test_create_renderer_valid_url() {
-        let capture = TestCapture::new();
-        let ctx = Arc::as_ptr(&capture) as *mut c_void;
         let url = CString::new("https://example.com").unwrap();
-        let renderer = paws_renderer_create(url.as_ptr(), test_completion, ctx);
+        let renderer = paws_renderer_create(url.as_ptr(), noop_completion, std::ptr::null_mut());
         assert!(!renderer.is_null());
         paws_renderer_destroy(renderer);
     }
@@ -227,67 +193,51 @@ mod tests {
     }
 
     #[test]
-    fn test_post_run_wasm_produces_ops() {
-        let (renderer, _capture) = create_test_renderer();
+    fn test_post_run_wasm_missing_export() {
+        let renderer = create_test_renderer();
 
-        // A minimal valid WASM binary (header + text "0asm", version 1)
-        // or just "(module)" text which wasmtime handles via WAT compilation.
         let wasm_bytes = b"(module)";
         let func = CString::new("nonexistent").unwrap();
 
-        // Will fail because "nonexistent" export is missing, but it shouldn't crash.
+        // Thread spawns and WASM fails internally (missing export), but the
+        // FFI call itself succeeds — returns 0 because the thread was started.
         let result = paws_renderer_post_run_wasm(
             renderer,
             wasm_bytes.as_ptr(),
             wasm_bytes.len(),
             func.as_ptr(),
         );
-        assert_eq!(result, 0, "post_run_wasm should return 0 immediately");
+        assert_eq!(result, 0, "first call should succeed (thread spawned)");
 
         paws_renderer_destroy(renderer);
     }
 
     #[test]
-    fn test_post_run_wasm_produces_ops_with_wat_bytes() {
-        let (renderer, capture) = create_test_renderer();
+    fn test_post_run_wasm_second_call_returns_engine_failed() {
+        let renderer = create_test_renderer();
 
-        let wat = CString::new(
-            r#"
-(module
-  (import "env" "__create_element" (func $create (param i32) (result i32)))
-  (import "env" "__set_inline_style" (func $style (param i32 i32 i32) (result i32)))
-  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
-  (memory (export "memory") 1)
-  (data (i32.const 0) "div\00")
-  (data (i32.const 16) "width\00")
-  (data (i32.const 32) "100px\00")
-  (func (export "run") (result i32)
-    (local $id i32)
-    (local.set $id (call $create (i32.const 0)))
-    (drop (call $append (i32.const 0) (local.get $id)))
-    (drop (call $style (local.get $id) (i32.const 16) (i32.const 32)))
-    (i32.const 0)
-  )
-)
-"#,
-        )
-        .unwrap();
-        let wasm_bytes = wat.as_bytes();
-        let func = CString::new("run").unwrap();
+        let wasm_bytes = b"(module)";
+        let func = CString::new("nonexistent").unwrap();
 
+        // First call — thread spawns.
+        paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
+        );
+
+        // Second call on the same renderer — one-shot, should fail.
         let result = paws_renderer_post_run_wasm(
             renderer,
             wasm_bytes.as_ptr(),
             wasm_bytes.len(),
             func.as_ptr(),
         );
-        assert_eq!(result, 0, "post_run_wasm should return 0 immediately");
-
-        // Wait for the completion callback to fire (deterministic, no sleep).
-        let ops_bytes = capture.wait_for_ops();
-        assert!(
-            !ops_bytes.is_empty(),
-            "post_run_wasm should produce a non-empty op buffer"
+        assert_eq!(
+            result,
+            RendererError::EngineFailed.as_i32(),
+            "second call on same renderer should return EngineFailed"
         );
 
         paws_renderer_destroy(renderer);
@@ -295,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_post_run_wasm_null_params() {
-        let (renderer, _capture) = create_test_renderer();
+        let renderer = create_test_renderer();
 
         let func = CString::new("run").unwrap();
         let result = paws_renderer_post_run_wasm(renderer, std::ptr::null(), 0, func.as_ptr());
