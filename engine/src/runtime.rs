@@ -1,7 +1,7 @@
 use markup5ever::{LocalName, QualName};
 
 use crate::dom::{Document, DomError};
-use crate::layout::{LayoutBox, LayoutState};
+use crate::layout::LayoutBox;
 use crate::style::StyleContext;
 
 /// Error codes returned from host functions to WASM guests.
@@ -52,7 +52,6 @@ pub struct RuntimeState {
     pub last_error: Option<HostError>,
     pub style_context: StyleContext,
     pub(crate) stylesheet_cache: crate::style::StylesheetCache,
-    pub layout_state: LayoutState,
 }
 
 impl RuntimeState {
@@ -72,7 +71,6 @@ impl RuntimeState {
             last_error: None,
             style_context: context,
             stylesheet_cache,
-            layout_state: LayoutState::new(),
         }
     }
     /// Creates a new HTML element with the given tag name. Returns the node ID.
@@ -234,8 +232,7 @@ impl RuntimeState {
 
         // 3. Layout from the root element
         let text_measurer = crate::layout::MockTextMeasurer;
-        self.layout_state
-            .compute_layout(&self.doc, root_element_id, &text_measurer)
+        crate::layout::compute_layout(&mut self.doc, root_element_id, &text_measurer)
             .unwrap_or_default()
     }
 
@@ -2422,9 +2419,8 @@ mod tests {
         let map = state.computed_style_map(container).unwrap();
         let _ = map.get("display", &mut state.doc, &state.style_context);
 
-        let mut layout_state = crate::layout::block::LayoutState::new();
-        let result = layout_state.compute_layout(
-            &state.doc,
+        let result = crate::layout::compute_layout(
+            &mut state.doc,
             taffy::NodeId::from(container as u64),
             &crate::layout::text::MockTextMeasurer,
         );
@@ -2467,9 +2463,8 @@ mod tests {
         let map = state.computed_style_map(container).unwrap();
         let _ = map.get("display", &mut state.doc, &state.style_context);
 
-        let mut layout_state = crate::layout::block::LayoutState::new();
-        let result = layout_state.compute_layout(
-            &state.doc,
+        let result = crate::layout::compute_layout(
+            &mut state.doc,
             taffy::NodeId::from(container as u64),
             &crate::layout::text::MockTextMeasurer,
         );
@@ -2509,9 +2504,8 @@ mod tests {
         );
 
         // Verify layout computes
-        let mut layout_state = crate::layout::block::LayoutState::new();
-        let result = layout_state.compute_layout(
-            &state.doc,
+        let result = crate::layout::compute_layout(
+            &mut state.doc,
             taffy::NodeId::from(el as u64),
             &crate::layout::text::MockTextMeasurer,
         );

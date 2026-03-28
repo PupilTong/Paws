@@ -440,6 +440,7 @@ impl Document {
                         queue.push_back(child_id);
                     }
                     if let Some(mut_node) = self.get_node_mut(id) {
+                        mut_node.taffy_style = Some(crate::style::to_taffy_style(&computed));
                         mut_node.computed_values = Some(computed);
                         mut_node.unset_dirty_descendants();
                     }

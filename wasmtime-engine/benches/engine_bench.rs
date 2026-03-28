@@ -36,13 +36,12 @@ fn bench_computed_style(c: &mut Criterion) {
         .get_node(engine::NodeId::from(id as u64))
         .is_some());
 
-    let mut layout_state = engine::layout::LayoutState::new();
     let text_measurer = engine::layout::MockTextMeasurer;
 
     c.bench_function("layout_simple", |b| {
         b.iter(|| {
-            layout_state.compute_layout(
-                black_box(&state.doc),
+            engine::layout::compute_layout(
+                black_box(&mut state.doc),
                 black_box(engine::NodeId::from(id as u64)),
                 &text_measurer,
             );
