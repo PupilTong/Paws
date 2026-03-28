@@ -12,6 +12,11 @@
 
 mod error;
 pub(crate) mod ffi;
+// TODO: ops and renderer are temporarily unused at the crate root because
+// op delivery is not yet wired into __commit. They are still tested
+// independently and will be re-integrated when __commit delivers ops.
+#[allow(dead_code)]
 mod ops;
+#[allow(dead_code)]
 mod renderer;
 mod thread;

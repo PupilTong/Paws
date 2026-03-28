@@ -162,71 +162,30 @@ fn read_cstr<'a>(ptr: *const c_char) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;
-    use std::sync::{Arc, Condvar, Mutex};
 
     use super::*;
 
-    /// Test capture for the completion callback. Uses a condvar so tests
-    /// can wait deterministically instead of sleeping.
-    struct TestCapture {
-        ops: Mutex<Vec<u8>>,
-        condvar: Condvar,
-    }
+    /// No-op completion callback. Op delivery from `__commit` is not yet wired,
+    /// so this is never called in the current implementation.
+    extern "C" fn noop_completion(_: *const u8, _: usize, _: *mut c_void) {}
 
-    impl TestCapture {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                ops: Mutex::new(Vec::new()),
-                condvar: Condvar::new(),
-            })
-        }
-
-        /// Blocks until the completion callback fires, with a timeout.
-        fn wait_for_ops(&self) -> Vec<u8> {
-            let guard = self.ops.lock().unwrap();
-            let (guard, _timeout) = self
-                .condvar
-                .wait_timeout_while(guard, std::time::Duration::from_secs(5), |ops| {
-                    ops.is_empty()
-                })
-                .unwrap();
-            guard.clone()
-        }
-    }
-
-    extern "C" fn test_completion(ptr: *const u8, len: usize, ctx: *mut c_void) {
-        // SAFETY: ctx points to a valid Arc<TestCapture>.
-        let capture = unsafe { &*(ctx as *const TestCapture) };
-        let bytes = if len > 0 && !ptr.is_null() {
-            // SAFETY: ptr is valid for len bytes during this callback.
-            unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
-        } else {
-            Vec::new()
-        };
-        *capture.ops.lock().unwrap() = bytes;
-        capture.condvar.notify_all();
-    }
-
-    fn create_test_renderer() -> (*mut PawsRenderer, Arc<TestCapture>) {
-        let capture = TestCapture::new();
-        let ctx = Arc::as_ptr(&capture) as *mut c_void;
-        let renderer = paws_renderer_create(std::ptr::null(), test_completion, ctx);
+    fn create_test_renderer() -> *mut PawsRenderer {
+        let renderer =
+            paws_renderer_create(std::ptr::null(), noop_completion, std::ptr::null_mut());
         assert!(!renderer.is_null());
-        (renderer, capture)
+        renderer
     }
 
     #[test]
     fn test_create_renderer_null_url() {
-        let (renderer, _capture) = create_test_renderer();
+        let renderer = create_test_renderer();
         paws_renderer_destroy(renderer);
     }
 
     #[test]
     fn test_create_renderer_valid_url() {
-        let capture = TestCapture::new();
-        let ctx = Arc::as_ptr(&capture) as *mut c_void;
         let url = CString::new("https://example.com").unwrap();
-        let renderer = paws_renderer_create(url.as_ptr(), test_completion, ctx);
+        let renderer = paws_renderer_create(url.as_ptr(), noop_completion, std::ptr::null_mut());
         assert!(!renderer.is_null());
         paws_renderer_destroy(renderer);
     }
@@ -238,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_post_run_wasm_missing_export() {
-        let (renderer, _capture) = create_test_renderer();
+        let renderer = create_test_renderer();
 
         let wasm_bytes = b"(module)";
         let func = CString::new("nonexistent").unwrap();
@@ -258,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_post_run_wasm_second_call_returns_engine_failed() {
-        let (renderer, _capture) = create_test_renderer();
+        let renderer = create_test_renderer();
 
         let wasm_bytes = b"(module)";
         let func = CString::new("nonexistent").unwrap();
@@ -288,54 +247,8 @@ mod tests {
     }
 
     #[test]
-    fn test_post_run_wasm_produces_ops_with_wat_bytes() {
-        let (renderer, capture) = create_test_renderer();
-
-        let wat = CString::new(
-            r#"
-(module
-  (import "env" "__create_element" (func $create (param i32) (result i32)))
-  (import "env" "__set_inline_style" (func $style (param i32 i32 i32) (result i32)))
-  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
-  (memory (export "memory") 1)
-  (data (i32.const 0) "div\00")
-  (data (i32.const 16) "width\00")
-  (data (i32.const 32) "100px\00")
-  (func (export "run") (result i32)
-    (local $id i32)
-    (local.set $id (call $create (i32.const 0)))
-    (drop (call $append (i32.const 0) (local.get $id)))
-    (drop (call $style (local.get $id) (i32.const 16) (i32.const 32)))
-    (i32.const 0)
-  )
-)
-"#,
-        )
-        .unwrap();
-        let wasm_bytes = wat.as_bytes();
-        let func = CString::new("run").unwrap();
-
-        let result = paws_renderer_post_run_wasm(
-            renderer,
-            wasm_bytes.as_ptr(),
-            wasm_bytes.len(),
-            func.as_ptr(),
-        );
-        assert_eq!(result, 0, "post_run_wasm should return 0");
-
-        // Wait for the completion callback to fire (deterministic, no sleep).
-        let ops_bytes = capture.wait_for_ops();
-        assert!(
-            !ops_bytes.is_empty(),
-            "post_run_wasm should produce a non-empty op buffer"
-        );
-
-        paws_renderer_destroy(renderer);
-    }
-
-    #[test]
     fn test_post_run_wasm_null_params() {
-        let (renderer, _capture) = create_test_renderer();
+        let renderer = create_test_renderer();
 
         let func = CString::new("run").unwrap();
         let result = paws_renderer_post_run_wasm(renderer, std::ptr::null(), 0, func.as_ptr());
