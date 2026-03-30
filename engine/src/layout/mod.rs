@@ -8,21 +8,22 @@ Layout Module Architecture & Socratic Reasoning
 
 2. 总结和解释当前的思路 (Summary & Rationality):
    - Layout is strictly decoupled from the DOM. `Taffy` computes box layouts.
-   - Text layout is a placeholder that will call out to OS capabilities (via foreign function interface or traits). We avoid `parley` to save binary size and use native text rendering.
+   - Text layout uses Parley for font shaping and measurement, providing real
+     text metrics via the system font database.
    - The separation allows us to selectively re-layout dirty nodes rather than the whole tree, though initial implementation will be an eager top-down build.
 
 3. 列出假设 (Assumptions):
    - **First Render**: Building the Taffy tree from the DOM tree maps 1:1 for elements. Text nodes return leaf Taffy nodes with specific measurements.
    - **Updates**: Changing a DOM node's style dirties its Taffy node. We assume Taffy's internal cache handles incremental re-layout efficiently.
-   - **OS Text interface assumption**: OS can measure text synchronously or we pre-measure during the rendering pipeline.
+   - **Text measurement**: Parley provides synchronous text measurement via `TextLayoutContext`.
 
 4. 对blitz的审视 (Blitz Review):
-   - **Simplification**: Blitz integrates `parley` intimately with layout. By removing it, we simplify text measuring to a trait/interface (`TextMeasurer`), mocking it for now.
-   - **Improvement**: Clean split between `layout::block` (Taffy) and `layout::text` (OS integration).
+   - **Simplification**: Blitz integrates `parley` intimately with layout. We use Parley through a simple `TextLayoutContext` wrapper for text measurement.
+   - **Improvement**: Clean split between `layout::block` (Taffy) and `layout::text` (Parley).
 */
 
 pub(crate) mod block;
 pub(crate) mod text;
 
 pub use block::{compute_layout, LayoutBox};
-pub use text::{MockTextMeasurer, TextMeasurer};
+pub use text::TextLayoutContext;

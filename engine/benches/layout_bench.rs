@@ -5,7 +5,7 @@
 
 use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Criterion};
 
-use engine::layout::{compute_layout, MockTextMeasurer};
+use engine::layout::compute_layout;
 use engine::{NodeId, RuntimeState};
 
 // ---------------------------------------------------------------------------
@@ -79,14 +79,12 @@ fn setup_deep_tree(depth: usize) -> (RuntimeState, u32) {
 // ---------------------------------------------------------------------------
 fn bench_flex_layout_5(c: &mut Criterion) {
     let (mut state, root) = setup_flex_tree(5);
-    let measurer = MockTextMeasurer;
 
     c.bench_function("flex_layout_5_children", |b| {
         b.iter(|| {
             compute_layout(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(root as u64)),
-                &measurer,
             )
         })
     });
@@ -97,14 +95,12 @@ fn bench_flex_layout_5(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 fn bench_flex_layout_50(c: &mut Criterion) {
     let (mut state, root) = setup_flex_tree(50);
-    let measurer = MockTextMeasurer;
 
     c.bench_function("flex_layout_50_children", |b| {
         b.iter(|| {
             compute_layout(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(root as u64)),
-                &measurer,
             )
         })
     });
@@ -115,14 +111,12 @@ fn bench_flex_layout_50(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 fn bench_deep_block_layout(c: &mut Criterion) {
     let (mut state, root) = setup_deep_tree(50);
-    let measurer = MockTextMeasurer;
 
     c.bench_function("block_layout_depth_50", |b| {
         b.iter(|| {
             compute_layout(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(root as u64)),
-                &measurer,
             )
         })
     });
@@ -157,14 +151,12 @@ fn bench_grid_layout_3x3(c: &mut Criterion) {
     }
 
     state.doc.resolve_style(&state.style_context);
-    let measurer = MockTextMeasurer;
 
     c.bench_function("grid_layout_3x3", |b| {
         b.iter(|| {
             compute_layout(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(grid as u64)),
-                &measurer,
             )
         })
     });
@@ -213,14 +205,12 @@ fn bench_mixed_layout(c: &mut Criterion) {
     }
 
     state.doc.resolve_style(&state.style_context);
-    let measurer = MockTextMeasurer;
 
     c.bench_function("mixed_flex_block_layout", |b| {
         b.iter(|| {
             compute_layout(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(root as u64)),
-                &measurer,
             )
         })
     });
