@@ -445,15 +445,32 @@ impl Document {
                         mut_node.unset_dirty_descendants();
                     }
                 } else {
-                    // Non-element nodes: still enqueue children for traversal
+                    // Non-element nodes: enqueue children for traversal.
+                    let is_text = node.node_type == NodeType::Text;
+                    // Only clone parent styles for text nodes (avoids Arc clone
+                    // for Document/Comment/ShadowRoot nodes on every pass).
+                    let parent_cv = if is_text {
+                        node.parent
+                            .and_then(|pid| self.get_node(pid))
+                            .and_then(|p| p.computed_values.clone())
+                    } else {
+                        None
+                    };
                     let children: Vec<taffy::NodeId> =
                         self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
                     for &child_id in &children {
                         queue.push_back(child_id);
                     }
-                    // Clear dirty flag on non-element nodes too
-                    if let Some(node) = self.get_node(id) {
-                        node.unset_dirty_descendants();
+                    if let Some(mut_node) = self.get_node_mut(id) {
+                        // Text nodes need a taffy_style so layout can measure
+                        // them as leaf nodes. Other non-element nodes skip this.
+                        if is_text && mut_node.taffy_style.is_none() {
+                            mut_node.taffy_style = Some(taffy::Style::default());
+                        }
+                        if is_text {
+                            mut_node.computed_values = parent_cv;
+                        }
+                        mut_node.unset_dirty_descendants();
                     }
                 }
             }

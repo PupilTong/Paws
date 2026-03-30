@@ -231,9 +231,7 @@ impl RuntimeState {
         };
 
         // 3. Layout from the root element
-        let text_measurer = crate::layout::MockTextMeasurer;
-        crate::layout::compute_layout(&mut self.doc, root_element_id, &text_measurer)
-            .unwrap_or_default()
+        crate::layout::compute_layout(&mut self.doc, root_element_id).unwrap_or_default()
     }
 
     /// Sets a DOM attribute on an element (e.g. `id`, `class`).
@@ -2419,11 +2417,8 @@ mod tests {
         let map = state.computed_style_map(container).unwrap();
         let _ = map.get("display", &mut state.doc, &state.style_context);
 
-        let result = crate::layout::compute_layout(
-            &mut state.doc,
-            taffy::NodeId::from(container as u64),
-            &crate::layout::text::MockTextMeasurer,
-        );
+        let result =
+            crate::layout::compute_layout(&mut state.doc, taffy::NodeId::from(container as u64));
         assert!(result.is_some(), "layout should compute");
         let layout = result.unwrap();
         // Two 100px-wide children in a flex row → container should be 200px wide
@@ -2463,11 +2458,8 @@ mod tests {
         let map = state.computed_style_map(container).unwrap();
         let _ = map.get("display", &mut state.doc, &state.style_context);
 
-        let result = crate::layout::compute_layout(
-            &mut state.doc,
-            taffy::NodeId::from(container as u64),
-            &crate::layout::text::MockTextMeasurer,
-        );
+        let result =
+            crate::layout::compute_layout(&mut state.doc, taffy::NodeId::from(container as u64));
         assert!(result.is_some(), "grid layout should compute");
         let layout = result.unwrap();
         // Grid auto-places two items; verify layout computed without crash
@@ -2504,11 +2496,7 @@ mod tests {
         );
 
         // Verify layout computes
-        let result = crate::layout::compute_layout(
-            &mut state.doc,
-            taffy::NodeId::from(el as u64),
-            &crate::layout::text::MockTextMeasurer,
-        );
+        let result = crate::layout::compute_layout(&mut state.doc, taffy::NodeId::from(el as u64));
         assert!(result.is_some(), "layout should compute");
         let layout = result.unwrap();
         assert_eq!(layout.width, 100.0);
@@ -2823,5 +2811,30 @@ mod tests {
         let layout2 = state.commit();
         assert_eq!(layout2.width, 50.0);
         assert_eq!(layout2.height, 50.0);
+    }
+
+    #[test]
+    fn test_commit_with_text_node() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state
+            .set_inline_style(div, "display".to_string(), "flex".to_string())
+            .unwrap();
+
+        let text_id = state.create_text_node("Hello World".to_string());
+        state.append_element(div, text_id).unwrap();
+
+        let layout = state.commit();
+        assert_eq!(layout.children.len(), 1);
+        let text_box = &layout.children[0];
+        assert!(
+            text_box.width > 0.0,
+            "text node should have positive width from measurement"
+        );
+        assert!(
+            text_box.height > 0.0,
+            "text node should have positive height from measurement"
+        );
     }
 }

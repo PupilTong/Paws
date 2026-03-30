@@ -36,14 +36,11 @@ fn bench_computed_style(c: &mut Criterion) {
         .get_node(engine::NodeId::from(id as u64))
         .is_some());
 
-    let text_measurer = engine::layout::MockTextMeasurer;
-
     c.bench_function("layout_simple", |b| {
         b.iter(|| {
             engine::layout::compute_layout(
                 black_box(&mut state.doc),
                 black_box(engine::NodeId::from(id as u64)),
-                &text_measurer,
             );
         })
     });
@@ -849,6 +846,98 @@ fn bench_wasm_grid_layout(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// 12. Layout with text nodes — measures text measurement overhead
+// ---------------------------------------------------------------------------
+fn bench_layout_with_text(c: &mut Criterion) {
+    let mut state = RuntimeState::new("https://example.com".to_string());
+    let flex = state.create_element("div".to_string());
+    state.append_element(0, flex).unwrap();
+    state
+        .set_inline_style(flex, "display".to_string(), "flex".to_string())
+        .unwrap();
+    state
+        .set_inline_style(flex, "width".to_string(), "600px".to_string())
+        .unwrap();
+    state
+        .set_inline_style(flex, "flex-wrap".to_string(), "wrap".to_string())
+        .unwrap();
+
+    for _ in 0..5 {
+        let child = state.create_element("div".to_string());
+        state.append_element(flex, child).unwrap();
+        state
+            .set_inline_style(child, "display".to_string(), "flex".to_string())
+            .unwrap();
+        let text_id = state.create_text_node("Some example text!!".to_string());
+        state.append_element(child, text_id).unwrap();
+    }
+
+    // Resolve styles once before benchmarking layout
+    state.doc.resolve_style(&state.style_context);
+
+    c.bench_function("layout_with_text", |b| {
+        b.iter(|| {
+            engine::layout::compute_layout(
+                black_box(&mut state.doc),
+                black_box(engine::NodeId::from(flex as u64)),
+            );
+        })
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 13. Text-heavy layout — deep tree with many text nodes
+// ---------------------------------------------------------------------------
+fn bench_text_heavy_layout(c: &mut Criterion) {
+    let mut state = RuntimeState::new("https://example.com".to_string());
+    let root = state.create_element("div".to_string());
+    state.append_element(0, root).unwrap();
+    state
+        .set_inline_style(root, "display".to_string(), "flex".to_string())
+        .unwrap();
+    state
+        .set_inline_style(root, "flex-direction".to_string(), "column".to_string())
+        .unwrap();
+    state
+        .set_inline_style(root, "width".to_string(), "800px".to_string())
+        .unwrap();
+
+    // 3 levels deep, ~20 text nodes total
+    for _ in 0..4 {
+        let section = state.create_element("div".to_string());
+        state.append_element(root, section).unwrap();
+        state
+            .set_inline_style(section, "display".to_string(), "flex".to_string())
+            .unwrap();
+        state
+            .set_inline_style(section, "flex-direction".to_string(), "column".to_string())
+            .unwrap();
+
+        for _ in 0..5 {
+            let item = state.create_element("div".to_string());
+            state.append_element(section, item).unwrap();
+            state
+                .set_inline_style(item, "display".to_string(), "flex".to_string())
+                .unwrap();
+            let text_id =
+                state.create_text_node("The quick brown fox jumps over the lazy dog".to_string());
+            state.append_element(item, text_id).unwrap();
+        }
+    }
+
+    state.doc.resolve_style(&state.style_context);
+
+    c.bench_function("text_heavy_layout", |b| {
+        b.iter(|| {
+            engine::layout::compute_layout(
+                black_box(&mut state.doc),
+                black_box(engine::NodeId::from(root as u64)),
+            );
+        })
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Criterion groups & main
 // ---------------------------------------------------------------------------
 criterion_group!(
@@ -864,5 +953,7 @@ criterion_group!(
     bench_wasm_add_large_stylesheet,
     bench_wasm_complex_selectors,
     bench_wasm_grid_layout,
+    bench_layout_with_text,
+    bench_text_heavy_layout,
 );
 criterion_main!(benches);
