@@ -13,7 +13,7 @@ use style::values::specified::font::FONT_MEDIUM_PX;
 use crate::dom::document::Document;
 use crate::dom::element::PawsElement;
 use crate::dom::NodeType;
-use crate::layout::text::TextMeasurer;
+use crate::layout::text::MockTextMeasurer;
 
 use taffy::prelude::*;
 use taffy::tree::{Layout, LayoutInput, LayoutOutput};
@@ -71,15 +71,11 @@ impl Default for LayoutBox {
 ///
 /// Layout data is written directly onto DOM nodes (`PawsElement` fields:
 /// `layout_cache`, `unrounded_layout`, `final_layout`).
-pub fn compute_layout(
-    doc: &mut Document,
-    root_id: NodeId,
-    text_measurer: &dyn TextMeasurer,
-) -> Option<LayoutBox> {
+pub fn compute_layout(doc: &mut Document, root_id: NodeId) -> Option<LayoutBox> {
     // Bail early if the root node has no style.
     doc.get_node(root_id).and_then(|n| n.taffy_style.as_ref())?;
 
-    let mut tree = PawsLayoutTree { doc, text_measurer };
+    let mut tree = PawsLayoutTree { doc };
     compute_root_layout(&mut tree, root_id, Size::MAX_CONTENT);
     round_layout(&mut tree, root_id);
     extract_layout_tree(tree.doc, root_id)
@@ -93,7 +89,6 @@ pub fn compute_layout(
 /// per layout pass in [`compute_layout`].
 struct PawsLayoutTree<'a> {
     doc: &'a mut Document,
-    text_measurer: &'a dyn TextMeasurer,
 }
 
 impl PawsLayoutTree<'_> {
@@ -245,7 +240,7 @@ fn compute_text_leaf(
     let text = node.text_content.as_deref().unwrap_or("");
 
     // Pre-measure to get fixed dimensions (matching the previous eager approach).
-    let (width, height) = tree.text_measurer.measure_text(text, font_size, None);
+    let (width, height) = MockTextMeasurer.measure_text(text, font_size, None);
 
     let style = tree
         .node(node_id)
@@ -439,7 +434,6 @@ fn extract_layout_tree(doc: &Document, node_id: NodeId) -> Option<LayoutBox> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::text::MockTextMeasurer;
     use crate::runtime::RuntimeState;
     use markup5ever::QualName;
     use style::shared_lock::SharedRwLock;
@@ -449,7 +443,6 @@ mod tests {
     fn test_compute_layout_extract_tree() {
         let guard = SharedRwLock::new();
         let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
-        let measurer = MockTextMeasurer;
 
         let elem1 = doc.create_element(QualName::new(None, "".into(), "div".into()));
         doc.append_child(doc.root, elem1).unwrap();
@@ -461,7 +454,7 @@ mod tests {
         let style_ctx = crate::style::StyleContext::new(url);
         doc.resolve_style(&style_ctx);
 
-        let layout = compute_layout(&mut doc, elem1, &measurer);
+        let layout = compute_layout(&mut doc, elem1);
         assert!(layout.is_some());
         let layout = layout.unwrap();
         assert_eq!(layout.children.len(), 1);
@@ -471,11 +464,10 @@ mod tests {
     fn test_layout_no_style_returns_none() {
         let guard = SharedRwLock::new();
         let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
-        let measurer = MockTextMeasurer;
         // Don't resolve styles — taffy_style will be None.
         let el = doc.create_element(QualName::new(None, "".into(), "div".into()));
         doc.append_child(doc.root, el).unwrap();
-        assert!(compute_layout(&mut doc, el, &measurer).is_none());
+        assert!(compute_layout(&mut doc, el).is_none());
     }
 
     #[test]
@@ -503,12 +495,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(
-            &mut state.doc,
-            NodeId::from(parent as u64),
-            &MockTextMeasurer,
-        )
-        .unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(parent as u64)).unwrap();
 
         // Hidden child should have zero dimensions.
         let hidden_box = &layout.children[0];
@@ -535,8 +522,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout =
-            compute_layout(&mut state.doc, NodeId::from(grid as u64), &MockTextMeasurer).unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(grid as u64)).unwrap();
         assert_eq!(layout.children.len(), 1);
         assert!(layout.height > 0.0, "grid should have positive height");
     }
@@ -554,8 +540,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout =
-            compute_layout(&mut state.doc, NodeId::from(el as u64), &MockTextMeasurer).unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(el as u64)).unwrap();
         assert_eq!(layout.width, 100.0);
         assert_eq!(layout.height, 60.0);
         assert!(layout.children.is_empty());
@@ -580,12 +565,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(
-            &mut state.doc,
-            NodeId::from(block as u64),
-            &MockTextMeasurer,
-        )
-        .unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(block as u64)).unwrap();
         assert_eq!(layout.width, 200.0);
         assert_eq!(layout.children.len(), 1);
         assert_eq!(layout.children[0].height, 30.0);
@@ -606,8 +586,137 @@ mod tests {
         // No children, no text — pure leaf.
 
         state.doc.resolve_style(&state.style_context);
-        let layout =
-            compute_layout(&mut state.doc, NodeId::from(flex as u64), &MockTextMeasurer).unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(flex as u64)).unwrap();
         assert_eq!(layout.children.len(), 1);
+    }
+
+    #[test]
+    fn test_layout_text_node_dimensions() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let parent = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+        state
+            .set_inline_style(parent, "display".into(), "flex".into())
+            .unwrap();
+
+        let text_id = state.create_text_node("Hello".to_string());
+        state.append_element(parent, text_id).unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout = compute_layout(&mut state.doc, NodeId::from(parent as u64)).unwrap();
+
+        // "Hello" = 5 chars, default font size 16px → width = 5 * 16 * 0.6 = 48.0
+        let text_box = &layout.children[0];
+        assert_eq!(text_box.width, 48.0);
+        assert_eq!(text_box.height, 16.0);
+    }
+
+    #[test]
+    fn test_layout_text_node_in_flex_container() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let flex = state.create_element("div".to_string());
+        state.append_element(0, flex).unwrap();
+        state
+            .set_inline_style(flex, "display".into(), "flex".into())
+            .unwrap();
+
+        let text_id = state.create_text_node("Some text content".to_string());
+        state.append_element(flex, text_id).unwrap();
+
+        let sibling = state.create_element("div".to_string());
+        state.append_element(flex, sibling).unwrap();
+        state
+            .set_inline_style(sibling, "width".into(), "50px".into())
+            .unwrap();
+        state
+            .set_inline_style(sibling, "height".into(), "30px".into())
+            .unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout = compute_layout(&mut state.doc, NodeId::from(flex as u64)).unwrap();
+
+        assert_eq!(layout.children.len(), 2);
+        // Text node should have positive dimensions from measurement.
+        let text_box = &layout.children[0];
+        assert!(text_box.width > 0.0, "text node should have positive width");
+        assert!(
+            text_box.height > 0.0,
+            "text node should have positive height"
+        );
+        // Flex container width = text width + sibling width.
+        assert!(
+            layout.width > 50.0,
+            "flex should be wider than sibling alone"
+        );
+    }
+
+    #[test]
+    fn test_layout_empty_text_node() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let parent = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+        state
+            .set_inline_style(parent, "display".into(), "flex".into())
+            .unwrap();
+
+        let text_id = state.create_text_node(String::new());
+        state.append_element(parent, text_id).unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout = compute_layout(&mut state.doc, NodeId::from(parent as u64)).unwrap();
+
+        let text_box = &layout.children[0];
+        // Empty text → zero width, font-sized height.
+        assert_eq!(text_box.width, 0.0);
+        assert_eq!(text_box.height, 16.0);
+    }
+
+    #[test]
+    fn test_layout_text_node_with_custom_font_size() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+
+        // First: default font-size (16px)
+        let parent_default = state.create_element("div".to_string());
+        state.append_element(0, parent_default).unwrap();
+        state
+            .set_inline_style(parent_default, "display".into(), "flex".into())
+            .unwrap();
+        let text_default = state.create_text_node("AB".to_string());
+        state.append_element(parent_default, text_default).unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout_default =
+            compute_layout(&mut state.doc, NodeId::from(parent_default as u64)).unwrap();
+        let default_width = layout_default.children[0].width;
+        let default_height = layout_default.children[0].height;
+
+        // Second state: larger font-size (24px)
+        let mut state2 = RuntimeState::new("https://test.com".to_string());
+        let parent_large = state2.create_element("div".to_string());
+        state2.append_element(0, parent_large).unwrap();
+        state2
+            .set_inline_style(parent_large, "display".into(), "flex".into())
+            .unwrap();
+        state2
+            .set_inline_style(parent_large, "font-size".into(), "24px".into())
+            .unwrap();
+        let text_large = state2.create_text_node("AB".to_string());
+        state2.append_element(parent_large, text_large).unwrap();
+
+        state2.doc.resolve_style(&state2.style_context);
+        let layout_large =
+            compute_layout(&mut state2.doc, NodeId::from(parent_large as u64)).unwrap();
+        let large_width = layout_large.children[0].width;
+        let large_height = layout_large.children[0].height;
+
+        // Larger font-size should produce larger text dimensions.
+        assert!(
+            large_width > default_width,
+            "larger font-size should produce wider text: {large_width} vs {default_width}"
+        );
+        assert!(
+            large_height > default_height,
+            "larger font-size should produce taller text: {large_height} vs {default_height}"
+        );
     }
 }

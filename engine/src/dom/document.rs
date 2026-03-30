@@ -445,15 +445,24 @@ impl Document {
                         mut_node.unset_dirty_descendants();
                     }
                 } else {
-                    // Non-element nodes: still enqueue children for traversal
+                    // Non-element nodes (e.g. text): still enqueue children for
+                    // traversal and assign a default taffy_style so layout can
+                    // measure them as leaf nodes.
+                    let parent_cv = node
+                        .parent
+                        .and_then(|pid| self.get_node(pid))
+                        .and_then(|p| p.computed_values.clone());
                     let children: Vec<taffy::NodeId> =
                         self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
                     for &child_id in &children {
                         queue.push_back(child_id);
                     }
-                    // Clear dirty flag on non-element nodes too
-                    if let Some(node) = self.get_node(id) {
-                        node.unset_dirty_descendants();
+                    if let Some(mut_node) = self.get_node_mut(id) {
+                        if mut_node.taffy_style.is_none() {
+                            mut_node.taffy_style = Some(taffy::Style::default());
+                        }
+                        mut_node.computed_values = parent_cv;
+                        mut_node.unset_dirty_descendants();
                     }
                 }
             }
