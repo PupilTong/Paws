@@ -90,54 +90,31 @@ pub fn run_wasm(
     }
 }
 
-/// A tiny demo that wires wasm, layout, and style concepts together.
-///
-/// Returns a human-readable summary string.
-pub fn hello_engine() -> String {
-    // 1) Wasmtime: create an engine and compile a minimal module.
-    let wasm_engine = create_engine();
-    let wasm_bytes = b"(module)";
-    let _module = Module::new(&wasm_engine, wasm_bytes).expect("compile minimal wasm module");
-    let _store = Store::new(&wasm_engine, ());
-
-    // 2) DOM & Style: create element and styles
-    let mut state = RuntimeState::new("https://example.com".to_string());
-
-    // Create div
-    let id = state.create_element("div".to_string());
-    state.append_element(0, id).expect("append to doc");
-
-    // Set styles
-    let _ = state.set_inline_style(id, "display".to_string(), "block".to_string());
-    let _ = state.set_inline_style(id, "height".to_string(), "80px".to_string());
-    let _ = state.set_inline_style(id, "width".to_string(), "120px".to_string());
-
-    // Resolve styles first
-    state.doc.resolve_style(&state.style_context);
-
-    // 3) Layout
-    let layout = engine::layout::compute_layout(&mut state.doc, engine::NodeId::from(id as u64))
-        .expect("get layout");
-
-    format!(
-        "wasm module ok\nlayout={{w:{}, h:{}}}",
-        layout.width, layout.height
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{build_linker, hello_engine, run_wasm};
+    use super::{build_linker, create_engine, run_wasm};
     use engine::{HostErrorCode, RuntimeState};
     use wasmtime::{Engine as WasmEngine, Module, Store};
 
+    /// Wires wasm, layout, and style together to verify the full pipeline.
+    ///
+    /// No text nodes are involved — this exercises element layout only.
     #[test]
     fn hello_engine_works() {
-        let msg = hello_engine();
-        println!("HELLO ENGINE OUTPUT:\n{}", msg);
-        assert!(msg.contains("wasm module ok"));
-        assert!(msg.contains("layout={w:120"));
-        assert!(msg.contains("h:80}"));
+        let wasm_engine = create_engine();
+        let wasm_bytes = b"(module)";
+        let _module = Module::new(&wasm_engine, wasm_bytes).expect("compile minimal wasm module");
+
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+        state.append_element(0, id).expect("append to doc");
+        let _ = state.set_inline_style(id, "display".to_string(), "block".to_string());
+        let _ = state.set_inline_style(id, "height".to_string(), "80px".to_string());
+        let _ = state.set_inline_style(id, "width".to_string(), "120px".to_string());
+
+        let layout = state.commit();
+        assert_eq!(layout.width, 120.0);
+        assert_eq!(layout.height, 80.0);
     }
 
     #[test]

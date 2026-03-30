@@ -2,7 +2,7 @@ use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Crit
 
 use engine::RuntimeState;
 use wasmtime::{Engine as WasmEngine, Module, Store};
-use wasmtime_engine::{build_linker, hello_engine};
+use wasmtime_engine::build_linker;
 
 // ---------------------------------------------------------------------------
 // Helper: compile a WAT module & instantiate with a fresh RuntimeState + linker
@@ -47,14 +47,7 @@ fn bench_computed_style(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. hello_engine
-// ---------------------------------------------------------------------------
-fn bench_hello_engine(c: &mut Criterion) {
-    c.bench_function("hello_engine", |b| b.iter(hello_engine));
-}
-
-// ---------------------------------------------------------------------------
-// 3. WASM execution — basic create + style (original benchmark)
+// 2. WASM execution — basic create + style (original benchmark)
 // ---------------------------------------------------------------------------
 fn bench_wasm_execution(c: &mut Criterion) {
     let wat = r#"
@@ -851,7 +844,6 @@ fn bench_wasm_grid_layout(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_computed_style,
-    bench_hello_engine,
     bench_wasm_execution,
     bench_wasm_flex_layout,
     bench_wasm_deep_tree,
