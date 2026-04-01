@@ -80,10 +80,8 @@ mod tests {
     fn measure_text_with_max_width_wraps() {
         let ctx = TextLayoutContext::new();
         let long_text = "hello world this is a long string that should wrap";
-        let (_w_unconstrained, h_unconstrained) =
-            ctx.measure_text(long_text, 16.0, 400.0, None);
-        let (_w_narrow, h_narrow) =
-            ctx.measure_text(long_text, 16.0, 400.0, Some(50.0));
+        let (_w_unconstrained, h_unconstrained) = ctx.measure_text(long_text, 16.0, 400.0, None);
+        let (_w_narrow, h_narrow) = ctx.measure_text(long_text, 16.0, 400.0, Some(50.0));
         assert!(
             h_narrow >= h_unconstrained,
             "narrow constraint should produce equal or taller layout: \
