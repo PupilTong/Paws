@@ -68,21 +68,28 @@ pub fn compute_layout(
     doc.get_node(root_id).and_then(|n| n.taffy_style.as_ref())?;
 
     // SAFETY: `text_measurer` is borrowed for the duration of this function.
-    // We store the fat pointer components (data + vtable) on `doc` so the
-    // Taffy trait impls can access it without carrying a separate lifetime.
-    // The pointer is cleared before this function returns.
+    // We store it as a raw pointer on `doc` so the Taffy trait impls can
+    // access it. The `transmute` erases the trait-object lifetime to `'static`
+    // (required because `Document` has no lifetime parameter); the pointer is
+    // cleared via the RAII guard before this function returns, even on panic.
     let ptr: *const dyn TextMeasurer = text_measurer;
-    // SAFETY: Transmuting a fat pointer into its (data, vtable) components.
-    // Reconstructed in `Document::text_measurer()` via the reverse transmute.
-    let (data, vtable): (*const (), *const ()) = unsafe { std::mem::transmute(ptr) };
-    doc.text_measurer = Some((data, vtable));
+    doc.text_measurer = Some(unsafe {
+        std::mem::transmute::<*const dyn TextMeasurer, *const dyn TextMeasurer>(ptr)
+    });
 
-    compute_root_layout(doc, root_id, Size::MAX_CONTENT);
-    round_layout(doc, root_id);
+    // RAII guard ensures `text_measurer` is cleared even if layout panics.
+    struct LayoutPassGuard<'a>(&'a mut Document);
+    impl Drop for LayoutPassGuard<'_> {
+        fn drop(&mut self) {
+            self.0.text_measurer = None;
+        }
+    }
+    let guard = LayoutPassGuard(doc);
 
-    doc.text_measurer = None;
-
-    extract_layout_tree(doc, root_id)
+    compute_root_layout(guard.0, root_id, Size::MAX_CONTENT);
+    round_layout(guard.0, root_id);
+    extract_layout_tree(guard.0, root_id)
+    // guard drops here → text_measurer cleared
 }
 
 // ─── Result extraction ───────────────────────────────────────────────

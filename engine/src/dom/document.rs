@@ -61,13 +61,12 @@ pub struct Document {
     #[allow(dead_code)]
     pub(crate) url: url::Url,
 
-    /// Type-erased pointer to the text measurer, set only during a layout pass.
+    /// Raw pointer to the text measurer, set only during a layout pass.
     ///
-    /// `None` outside of `compute_layout`. Stored as `(data_ptr, vtable_ptr)`
-    /// to avoid lifetime issues with fat pointers to trait objects. The pointer
-    /// is valid for the duration of the `compute_layout` call because the
-    /// caller holds the `&dyn TextMeasurer` borrow that outlives the layout pass.
-    pub(crate) text_measurer: Option<(*const (), *const ())>,
+    /// `None` outside of `compute_layout`. The pointer is valid for the
+    /// duration of the `compute_layout` call because the caller holds the
+    /// `&dyn TextMeasurer` borrow that outlives the layout pass.
+    pub(crate) text_measurer: Option<*const dyn TextMeasurer>,
 }
 
 impl Document {
@@ -130,17 +129,13 @@ impl Document {
     /// # Panics
     /// Panics if called outside of a layout pass.
     fn text_measurer(&self) -> &dyn TextMeasurer {
-        let (data, vtable) = self
+        let ptr = self
             .text_measurer
             .expect("text_measurer accessed outside layout pass");
-        // SAFETY: The `(data, vtable)` pair was created by `compute_layout`
-        // from a valid `&dyn TextMeasurer` via `std::mem::transmute`. The
-        // original reference's lifetime spans the entire layout pass, and
-        // this field is cleared to `None` before `compute_layout` returns.
-        unsafe {
-            let fat_ptr: *const dyn TextMeasurer = std::mem::transmute((data, vtable));
-            &*fat_ptr
-        }
+        // SAFETY: The pointer is set in `compute_layout` and cleared before
+        // it returns (via an RAII guard for panic safety). The original
+        // reference's lifetime spans the entire layout pass.
+        unsafe { &*ptr }
     }
 
     pub(crate) fn create_node(&mut self, node_type: NodeType) -> taffy::NodeId {
@@ -513,10 +508,9 @@ impl Document {
 
 // ─── ChildIter ───────────────────────────────────────────────────────
 
-/// Zero-allocation iterator over a node's children.
+/// Zero-allocation iterator over a node's children for Taffy layout traversal.
 ///
 /// Wraps a slice iterator directly — no Vec allocation per traversal call.
-/// Zero-allocation iterator over a node's children for Taffy layout traversal.
 pub struct ChildIter<'a>(std::slice::Iter<'a, taffy::NodeId>);
 
 impl Iterator for ChildIter<'_> {
@@ -592,7 +586,7 @@ impl taffy::LayoutPartialTree for Document {
                 .expect("node must have taffy_style");
             let display = style.display;
             let is_text = node.node_type == NodeType::Text;
-            let has_children = doc.child_count(node_id) > 0;
+            let has_children = !node.children.is_empty();
 
             if display == Display::None {
                 return compute_hidden_layout(doc, node_id);
@@ -640,14 +634,12 @@ fn compute_text_leaf(
         })
         .unwrap_or(FONT_MEDIUM_PX);
     let text = node.text_content.as_deref().unwrap_or("");
-
-    let (width, height) = doc.text_measurer().measure_text(text, font_size, None);
-
-    let style = doc
-        .node(node_id)
+    let style = node
         .taffy_style
         .as_ref()
         .expect("text node must have taffy_style");
+
+    let (width, height) = doc.text_measurer().measure_text(text, font_size, None);
 
     compute_leaf_layout(
         inputs,
