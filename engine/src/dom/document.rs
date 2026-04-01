@@ -1,4 +1,5 @@
 use crate::dom::element::{NodeFlags, NodeType, PawsElement};
+use crate::layout::text::TextMeasurer;
 use markup5ever::QualName;
 use slab::Slab;
 use style::shared_lock::SharedRwLock;
@@ -33,6 +34,10 @@ impl std::error::Error for DomError {}
 ///
 /// Owns all DOM nodes and manages tree mutations (append, detach, remove)
 /// with cycle detection and IS_IN_DOCUMENT flag propagation.
+///
+/// Taffy's layout traits (`TraversePartialTree`, `LayoutPartialTree`, etc.)
+/// are implemented on this type in the `layout::block` module (the "fat tree"
+/// pattern inspired by Blitz).
 pub struct Document {
     /// A slab-backed tree of nodes
     pub(crate) nodes: Box<Slab<PawsElement>>,
@@ -49,6 +54,13 @@ pub struct Document {
     /// Document URL
     #[allow(dead_code)]
     pub(crate) url: url::Url,
+
+    /// Raw pointer to the text measurer, set only during a layout pass.
+    ///
+    /// `None` outside of `compute_layout`. The pointer is valid for the
+    /// duration of the `compute_layout` call because the caller holds the
+    /// `&dyn TextMeasurer` borrow that outlives the layout pass.
+    pub(crate) text_measurer: Option<*const dyn TextMeasurer>,
 }
 
 impl Document {
@@ -77,6 +89,7 @@ impl Document {
             root: root_id,
             stylesheets: Vec::new(),
             url,
+            text_measurer: None,
         }
     }
 
@@ -91,6 +104,32 @@ impl Document {
 
     pub(crate) fn get_node_mut(&mut self, id: taffy::NodeId) -> Option<&mut PawsElement> {
         self.nodes.get_mut(u64::from(id) as usize)
+    }
+
+    /// Panicking accessor for layout passes. Use `get_node` for fallible access.
+    #[inline]
+    pub(crate) fn node(&self, id: taffy::NodeId) -> &PawsElement {
+        self.get_node(id).expect("valid node id during layout")
+    }
+
+    /// Panicking mutable accessor for layout passes. Use `get_node_mut` for fallible access.
+    #[inline]
+    pub(crate) fn node_mut(&mut self, id: taffy::NodeId) -> &mut PawsElement {
+        self.get_node_mut(id).expect("valid node id during layout")
+    }
+
+    /// Returns the text measurer set for the current layout pass.
+    ///
+    /// # Panics
+    /// Panics if called outside of a layout pass.
+    pub(crate) fn text_measurer(&self) -> &dyn TextMeasurer {
+        let ptr = self
+            .text_measurer
+            .expect("text_measurer accessed outside layout pass");
+        // SAFETY: The pointer is set in `compute_layout` and cleared before
+        // it returns (via an RAII guard for panic safety). The original
+        // reference's lifetime spans the entire layout pass.
+        unsafe { &*ptr }
     }
 
     pub(crate) fn create_node(&mut self, node_type: NodeType) -> taffy::NodeId {

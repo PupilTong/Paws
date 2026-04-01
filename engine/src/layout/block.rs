@@ -1,8 +1,7 @@
 //! Layout computation via Taffy's `LayoutPartialTree` trait hierarchy.
 //!
-//! Instead of copying the DOM into an intermediate `TaffyTree`, we implement
-//! Taffy's traits directly on a thin adapter ([`PawsLayoutTree`]) that wraps
-//! `&mut Document`. Layout data (cache, unrounded/final layouts) lives on
+//! Taffy's traits are implemented directly on [`Document`] (the "fat tree"
+//! pattern). Layout data (cache, unrounded/final layouts) lives on
 //! [`PawsElement`] for persistence across passes (future CSS Containment).
 
 use style::servo_arc::Arc;
@@ -11,18 +10,16 @@ use style::values::computed::length_percentage::CalcLengthPercentage;
 use style::values::specified::font::FONT_MEDIUM_PX;
 
 use crate::dom::document::Document;
-use crate::dom::element::PawsElement;
 use crate::dom::NodeType;
 use crate::layout::text::TextMeasurer;
 
+use taffy::compute_block_layout;
 use taffy::prelude::*;
 use taffy::tree::{Layout, LayoutInput, LayoutOutput};
 use taffy::{
     compute_cached_layout, compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
     compute_leaf_layout, compute_root_layout, round_layout, CacheTree,
 };
-
-use taffy::compute_block_layout;
 
 // ─── Public output type ──────────────────────────────────────────────
 
@@ -79,45 +76,37 @@ pub fn compute_layout(
     // Bail early if the root node has no style.
     doc.get_node(root_id).and_then(|n| n.taffy_style.as_ref())?;
 
-    let mut tree = PawsLayoutTree { doc, text_measurer };
-    compute_root_layout(&mut tree, root_id, Size::MAX_CONTENT);
-    round_layout(&mut tree, root_id);
-    extract_layout_tree(tree.doc, root_id)
-}
+    // SAFETY: `text_measurer` is borrowed for the duration of this function.
+    // We store it as a raw pointer on `doc` so the Taffy trait impls can
+    // access it. The `transmute` erases the trait-object lifetime to `'static`
+    // (required because `Document` has no lifetime parameter); the pointer is
+    // cleared via the RAII guard before this function returns, even on panic.
+    let ptr: *const dyn TextMeasurer = text_measurer;
+    doc.text_measurer = Some(unsafe {
+        std::mem::transmute::<*const dyn TextMeasurer, *const dyn TextMeasurer>(ptr)
+    });
 
-// ─── Adapter ─────────────────────────────────────────────────────────
-
-/// Thin adapter implementing Taffy's layout traits over the DOM.
-///
-/// Borrows `Document` mutably for cache/layout writes. Short-lived: constructed
-/// per layout pass in [`compute_layout`].
-struct PawsLayoutTree<'a> {
-    doc: &'a mut Document,
-    text_measurer: &'a dyn TextMeasurer,
-}
-
-impl PawsLayoutTree<'_> {
-    #[inline]
-    fn node(&self, id: NodeId) -> &PawsElement {
-        self.doc.get_node(id).expect("valid node id during layout")
+    // RAII guard ensures `text_measurer` is cleared even if layout panics.
+    struct LayoutPassGuard<'a>(&'a mut Document);
+    impl Drop for LayoutPassGuard<'_> {
+        fn drop(&mut self) {
+            self.0.text_measurer = None;
+        }
     }
+    let guard = LayoutPassGuard(doc);
 
-    #[inline]
-    fn node_mut(&mut self, id: NodeId) -> &mut PawsElement {
-        self.doc
-            .get_node_mut(id)
-            .expect("valid node id during layout")
-    }
+    compute_root_layout(guard.0, root_id, Size::MAX_CONTENT);
+    round_layout(guard.0, root_id);
+    extract_layout_tree(guard.0, root_id)
+    // guard drops here → text_measurer cleared
 }
 
 // ─── ChildIter ───────────────────────────────────────────────────────
 
-/// Zero-allocation iterator over a node's children.
+/// Zero-allocation iterator over a node's children for Taffy layout traversal.
 ///
 /// Wraps a slice iterator directly — no Vec allocation per traversal call.
-/// All children of styled elements are expected to have `taffy_style` set
-/// by `resolve_style`, so no filtering is needed.
-struct ChildIter<'a>(std::slice::Iter<'a, NodeId>);
+pub struct ChildIter<'a>(std::slice::Iter<'a, NodeId>);
 
 impl Iterator for ChildIter<'_> {
     type Item = NodeId;
@@ -128,11 +117,8 @@ impl Iterator for ChildIter<'_> {
 
 // ─── TraversePartialTree ─────────────────────────────────────────────
 
-impl taffy::TraversePartialTree for PawsLayoutTree<'_> {
-    type ChildIter<'a>
-        = ChildIter<'a>
-    where
-        Self: 'a;
+impl taffy::TraversePartialTree for Document {
+    type ChildIter<'a> = ChildIter<'a>;
 
     #[inline]
     fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
@@ -152,15 +138,12 @@ impl taffy::TraversePartialTree for PawsLayoutTree<'_> {
 
 // ─── TraverseTree (marker) ───────────────────────────────────────────
 
-impl taffy::TraverseTree for PawsLayoutTree<'_> {}
+impl taffy::TraverseTree for Document {}
 
 // ─── LayoutPartialTree ───────────────────────────────────────────────
 
-impl taffy::LayoutPartialTree for PawsLayoutTree<'_> {
-    type CoreContainerStyle<'a>
-        = &'a taffy::Style
-    where
-        Self: 'a;
+impl taffy::LayoutPartialTree for Document {
+    type CoreContainerStyle<'a> = &'a taffy::Style;
 
     type CustomIdent = String;
 
@@ -176,7 +159,7 @@ impl taffy::LayoutPartialTree for PawsLayoutTree<'_> {
         // `style::convert::length::length_percentage()`, where `ptr` is a
         // `*const CalcLengthPercentage`. The pointee remains live because the
         // `ComputedValues` (which owns it via `Arc`) are borrowed through the
-        // `Document` reference held by this adapter.
+        // `Document` reference held during the layout pass.
         let calc = unsafe { &*(val as *const CalcLengthPercentage) };
         calc.resolve(CSSPixelLength::new(basis)).px()
     }
@@ -186,50 +169,45 @@ impl taffy::LayoutPartialTree for PawsLayoutTree<'_> {
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
-        compute_cached_layout(self, node_id, inputs, |tree, node_id, inputs| {
-            let node = tree.node(node_id);
+        compute_cached_layout(self, node_id, inputs, |doc, node_id, inputs| {
+            let node = doc.node(node_id);
             let style = node
                 .taffy_style
                 .as_ref()
                 .expect("node must have taffy_style");
             let display = style.display;
             let is_text = node.node_type == NodeType::Text;
-            let has_children = tree.child_count(node_id) > 0;
+            let has_children = !node.children.is_empty();
 
             if display == Display::None {
-                return compute_hidden_layout(tree, node_id);
+                return compute_hidden_layout(doc, node_id);
             }
 
             if is_text {
-                return compute_text_leaf(tree, node_id, inputs);
+                return compute_text_leaf(doc, node_id, inputs);
             }
 
             if !has_children {
-                // Non-text leaf with no children — reuse `style` from above.
                 return compute_leaf_layout(
                     inputs,
                     style,
-                    |val, basis| tree.resolve_calc_value(val, basis),
+                    |val, basis| doc.resolve_calc_value(val, basis),
                     |_known_dimensions, _available_space| Size::ZERO,
                 );
             }
 
             match display {
-                Display::Flex => compute_flexbox_layout(tree, node_id, inputs),
-                Display::Grid => compute_grid_layout(tree, node_id, inputs),
-                _ => compute_block_layout(tree, node_id, inputs),
+                Display::Flex => compute_flexbox_layout(doc, node_id, inputs),
+                Display::Grid => compute_grid_layout(doc, node_id, inputs),
+                _ => compute_block_layout(doc, node_id, inputs),
             }
         })
     }
 }
 
 /// Computes layout for a text leaf node using the text measurer.
-fn compute_text_leaf(
-    tree: &mut PawsLayoutTree<'_>,
-    node_id: NodeId,
-    inputs: LayoutInput,
-) -> LayoutOutput {
-    let node = tree.node(node_id);
+fn compute_text_leaf(doc: &mut Document, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
+    let node = doc.node(node_id);
     let font_size = node
         .computed_values
         .as_ref()
@@ -243,27 +221,24 @@ fn compute_text_leaf(
         })
         .unwrap_or(FONT_MEDIUM_PX);
     let text = node.text_content.as_deref().unwrap_or("");
-
-    // Pre-measure to get fixed dimensions (matching the previous eager approach).
-    let (width, height) = tree.text_measurer.measure_text(text, font_size, None);
-
-    let style = tree
-        .node(node_id)
+    let style = node
         .taffy_style
         .as_ref()
         .expect("text node must have taffy_style");
 
+    let (width, height) = doc.text_measurer().measure_text(text, font_size, None);
+
     compute_leaf_layout(
         inputs,
         style,
-        |val, basis| tree.resolve_calc_value(val, basis),
+        |val, basis| doc.resolve_calc_value(val, basis),
         |_known_dimensions, _available_space| Size { width, height },
     )
 }
 
 // ─── CacheTree ───────────────────────────────────────────────────────
 
-impl CacheTree for PawsLayoutTree<'_> {
+impl CacheTree for Document {
     fn cache_get(
         &self,
         node_id: NodeId,
@@ -299,16 +274,10 @@ impl CacheTree for PawsLayoutTree<'_> {
 
 // ─── LayoutFlexboxContainer ──────────────────────────────────────────
 
-impl taffy::LayoutFlexboxContainer for PawsLayoutTree<'_> {
-    type FlexboxContainerStyle<'a>
-        = &'a taffy::Style
-    where
-        Self: 'a;
+impl taffy::LayoutFlexboxContainer for Document {
+    type FlexboxContainerStyle<'a> = &'a taffy::Style;
 
-    type FlexboxItemStyle<'a>
-        = &'a taffy::Style
-    where
-        Self: 'a;
+    type FlexboxItemStyle<'a> = &'a taffy::Style;
 
     fn get_flexbox_container_style(&self, node_id: NodeId) -> Self::FlexboxContainerStyle<'_> {
         self.node(node_id)
@@ -327,16 +296,10 @@ impl taffy::LayoutFlexboxContainer for PawsLayoutTree<'_> {
 
 // ─── LayoutGridContainer ─────────────────────────────────────────────
 
-impl taffy::LayoutGridContainer for PawsLayoutTree<'_> {
-    type GridContainerStyle<'a>
-        = &'a taffy::Style
-    where
-        Self: 'a;
+impl taffy::LayoutGridContainer for Document {
+    type GridContainerStyle<'a> = &'a taffy::Style;
 
-    type GridItemStyle<'a>
-        = &'a taffy::Style
-    where
-        Self: 'a;
+    type GridItemStyle<'a> = &'a taffy::Style;
 
     fn get_grid_container_style(&self, node_id: NodeId) -> Self::GridContainerStyle<'_> {
         self.node(node_id)
@@ -355,16 +318,10 @@ impl taffy::LayoutGridContainer for PawsLayoutTree<'_> {
 
 // ─── LayoutBlockContainer ────────────────────────────────────────────
 
-impl taffy::LayoutBlockContainer for PawsLayoutTree<'_> {
-    type BlockContainerStyle<'a>
-        = &'a taffy::Style
-    where
-        Self: 'a;
+impl taffy::LayoutBlockContainer for Document {
+    type BlockContainerStyle<'a> = &'a taffy::Style;
 
-    type BlockItemStyle<'a>
-        = &'a taffy::Style
-    where
-        Self: 'a;
+    type BlockItemStyle<'a> = &'a taffy::Style;
 
     fn get_block_container_style(&self, node_id: NodeId) -> Self::BlockContainerStyle<'_> {
         self.node(node_id)
@@ -383,7 +340,7 @@ impl taffy::LayoutBlockContainer for PawsLayoutTree<'_> {
 
 // ─── RoundTree ───────────────────────────────────────────────────────
 
-impl taffy::RoundTree for PawsLayoutTree<'_> {
+impl taffy::RoundTree for Document {
     fn get_unrounded_layout(&self, node_id: NodeId) -> Layout {
         self.node(node_id).unrounded_layout
     }
@@ -439,6 +396,7 @@ fn extract_layout_tree(doc: &Document, node_id: NodeId) -> Option<LayoutBox> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dom::document::Document;
     use crate::layout::text::MockTextMeasurer;
     use crate::runtime::RuntimeState;
     use markup5ever::QualName;

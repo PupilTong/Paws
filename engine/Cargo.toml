@@ -32,3 +32,8 @@ paws-style-ir = { path = "../paws-style-ir" }
 [dev-dependencies]
 thin-vec = "0.2"
 view-macros = { path = "../view-macros" }
+codspeed-criterion-compat = "4.4.1"
+
+[[bench]]
+name = "layout_bench"
+harness = false
