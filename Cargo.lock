@@ -698,6 +698,7 @@ dependencies = [
  "app_units",
  "atomic_refcell",
  "bitflags",
+ "codspeed-criterion-compat",
  "euclid",
  "fnv",
  "markup5ever",
