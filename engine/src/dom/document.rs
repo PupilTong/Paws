@@ -57,9 +57,8 @@ pub struct Document {
 
     /// Parley-backed text layout context for measuring text leaf nodes.
     ///
-    /// Set once during engine initialization and reused across layout passes.
-    /// Must be `Some` before calling `compute_layout`.
-    pub(crate) text_cx: Option<TextLayoutContext>,
+    /// Created eagerly in [`Document::new`] and reused across layout passes.
+    pub(crate) text_cx: TextLayoutContext,
 }
 
 impl Document {
@@ -88,7 +87,7 @@ impl Document {
             root: root_id,
             stylesheets: Vec::new(),
             url,
-            text_cx: None,
+            text_cx: TextLayoutContext::new(),
         }
     }
 

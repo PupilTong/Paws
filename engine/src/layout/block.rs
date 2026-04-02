@@ -66,10 +66,8 @@ impl Default for LayoutBox {
 /// Computes layout for a subtree rooted at `root_id`.
 ///
 /// Layout data is written directly onto DOM nodes (`PawsElement` fields:
-/// `layout_cache`, `unrounded_layout`, `final_layout`).
-///
-/// The `Document` must have a `TextLayoutContext` set (via `text_cx` field)
-/// before calling this function, or text leaf measurement will panic.
+/// `layout_cache`, `unrounded_layout`, `final_layout`). Text leaf nodes are
+/// measured via the `Document`'s embedded [`TextLayoutContext`].
 pub fn compute_layout(doc: &mut Document, root_id: NodeId) -> Option<LayoutBox> {
     // Bail early if the root node has no style.
     doc.get_node(root_id).and_then(|n| n.taffy_style.as_ref())?;
@@ -207,11 +205,9 @@ fn compute_text_leaf(doc: &mut Document, node_id: NodeId, inputs: LayoutInput) -
             AvailableSpace::MinContent => Some(0.0),
         });
 
-    let text_cx = doc
+    let (width, height) = doc
         .text_cx
-        .as_ref()
-        .expect("TextLayoutContext must be set before layout");
-    let (width, height) = text_cx.measure_text(text, font_size, font_weight, max_width);
+        .measure_text(text, font_size, font_weight, max_width);
 
     let style = doc
         .node(node_id)
@@ -387,7 +383,6 @@ fn extract_layout_tree(doc: &Document, node_id: NodeId) -> Option<LayoutBox> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::text::TextLayoutContext;
     use crate::runtime::RuntimeState;
     use markup5ever::QualName;
     use style::shared_lock::SharedRwLock;
@@ -397,7 +392,6 @@ mod tests {
     fn test_compute_layout_extract_tree() {
         let guard = SharedRwLock::new();
         let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
-        doc.text_cx = Some(TextLayoutContext::new());
 
         let elem1 = doc.create_element(QualName::new(None, "".into(), "div".into()));
         doc.append_child(doc.root, elem1).unwrap();
@@ -419,7 +413,7 @@ mod tests {
     fn test_layout_no_style_returns_none() {
         let guard = SharedRwLock::new();
         let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
-        doc.text_cx = Some(TextLayoutContext::new());
+
         // Don't resolve styles — taffy_style will be None.
         let el = doc.create_element(QualName::new(None, "".into(), "div".into()));
         doc.append_child(doc.root, el).unwrap();

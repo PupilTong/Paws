@@ -45,8 +45,9 @@ pub struct HostError {
 
 /// Top-level state container for the WASM host runtime.
 ///
-/// Owns the [`Document`], [`StyleContext`], [`TextLayoutContext`], and
-/// stylesheet cache. All WASM-facing host functions operate through this struct.
+/// Owns the [`Document`] (which includes the text layout context),
+/// [`StyleContext`], and stylesheet cache. All WASM-facing host functions
+/// operate through this struct.
 pub struct RuntimeState {
     pub doc: Document,
     pub last_error: Option<HostError>,
@@ -60,10 +61,9 @@ impl RuntimeState {
         let url = url::Url::parse(&url_str).expect("Valid Document URL");
         let context = StyleContext::new(url.clone());
         let lock = context.lock.clone();
-        let mut doc = Document::new(lock.clone(), url);
+        let doc = Document::new(lock.clone(), url);
         // Document and StyleContext share the same SharedRwLock (cloned from StyleContext)
         // to ensure consistent locking across style and DOM operations.
-        doc.text_cx = Some(crate::layout::TextLayoutContext::new());
 
         let stylesheet_cache = crate::style::StylesheetCache::new(lock.clone());
 
