@@ -43,6 +43,10 @@ pub struct LayoutBox {
     pub z_index: Option<i32>,
     /// The full computed style for this node (overflow, colors, etc.).
     pub computed_values: Option<Arc<style::properties::ComputedValues>>,
+    /// Whether this node is a text leaf node.
+    pub is_text: bool,
+    /// Text content for text nodes (`None` for element nodes).
+    pub text_content: Option<String>,
     pub children: Vec<LayoutBox>,
 }
 
@@ -56,6 +60,8 @@ impl Default for LayoutBox {
             height: 0.0,
             z_index: None,
             computed_values: None,
+            is_text: false,
+            text_content: None,
             children: Vec::new(),
         }
     }
@@ -366,6 +372,13 @@ fn extract_layout_tree(doc: &Document, node_id: NodeId) -> Option<LayoutBox> {
         })
         .unwrap_or((None, None));
 
+    let is_text = node.node_type == NodeType::Text;
+    let text_content = if is_text {
+        node.text_content.clone()
+    } else {
+        None
+    };
+
     Some(LayoutBox {
         node_id,
         x: layout.location.x,
@@ -374,6 +387,8 @@ fn extract_layout_tree(doc: &Document, node_id: NodeId) -> Option<LayoutBox> {
         height: layout.size.height,
         z_index,
         computed_values,
+        is_text,
+        text_content,
         children,
     })
 }

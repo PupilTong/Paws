@@ -4,6 +4,9 @@ use crate::dom::{Document, DomError};
 use crate::layout::LayoutBox;
 use crate::style::StyleContext;
 
+/// Closure called after each `commit()` with the computed layout tree.
+pub type CommitHook = Box<dyn FnMut(&LayoutBox) + Send>;
+
 /// Error codes returned from host functions to WASM guests.
 ///
 /// Uses `repr(i32)` for direct FFI compatibility with WASM's i32 return type.
@@ -53,6 +56,11 @@ pub struct RuntimeState {
     pub last_error: Option<HostError>,
     pub style_context: StyleContext,
     pub(crate) stylesheet_cache: crate::style::StylesheetCache,
+    /// Optional hook called after each `commit()` with the computed layout tree.
+    ///
+    /// Set by the host (e.g. ios-renderer-backend) to process `LayoutBox` into
+    /// rendering ops and deliver them to the UI thread via a completion callback.
+    pub commit_hook: Option<CommitHook>,
 }
 
 impl RuntimeState {
@@ -72,6 +80,7 @@ impl RuntimeState {
             last_error: None,
             style_context: context,
             stylesheet_cache,
+            commit_hook: None,
         }
     }
     /// Creates a new HTML element with the given tag name. Returns the node ID.
@@ -232,7 +241,15 @@ impl RuntimeState {
         };
 
         // 3. Layout from the root element
-        crate::layout::compute_layout(&mut self.doc, root_element_id).unwrap_or_default()
+        let layout =
+            crate::layout::compute_layout(&mut self.doc, root_element_id).unwrap_or_default();
+
+        // 4. Deliver layout to the commit hook (renderer op delivery)
+        if let Some(ref mut hook) = self.commit_hook {
+            hook(&layout);
+        }
+
+        layout
     }
 
     /// Sets a DOM attribute on an element (e.g. `id`, `class`).

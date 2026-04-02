@@ -1211,6 +1211,7 @@ dependencies = [
  "fnv",
  "stylo",
  "wasmtime-engine",
+ "wat",
 ]
 
 [[package]]

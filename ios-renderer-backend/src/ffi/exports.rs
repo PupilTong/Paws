@@ -136,6 +136,38 @@ pub extern "C" fn paws_renderer_post_run_wasm(
     }
 }
 
+/// Starts the rendering pipeline using WAT (WebAssembly Text) source.
+///
+/// Compiles the WAT text to WASM bytes and runs the module. This is a
+/// convenience function for testing — production code should use
+/// [`paws_renderer_post_run_wasm`] with pre-compiled WASM bytes.
+///
+/// Returns `0` on success, or a negative error code.
+#[no_mangle]
+pub extern "C" fn paws_renderer_post_run_wat(
+    renderer: *mut PawsRenderer,
+    wat_text: *const c_char,
+    func_name: *const c_char,
+) -> i32 {
+    let renderer = get_renderer!(renderer);
+    let wat_str = get_cstr!(wat_text);
+    let func_str = get_cstr!(func_name);
+
+    let wasm_bytes = match wat::parse_str(wat_str) {
+        Ok(bytes) => bytes,
+        Err(_) => return RendererError::EngineFailed.as_i32(),
+    };
+
+    if renderer
+        .engine
+        .post_run_wasm(wasm_bytes.to_vec(), func_str.to_string())
+    {
+        0
+    } else {
+        RendererError::EngineFailed.as_i32()
+    }
+}
+
 /// Converts a raw renderer pointer to a mutable reference.
 ///
 /// Returns `None` if the pointer is null.

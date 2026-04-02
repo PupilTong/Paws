@@ -2,13 +2,15 @@
 /// background thread.
 ///
 /// `OpExecutor` owns the mapping from engine node IDs to UIKit objects
-/// (UIView, UIScrollView, CALayer). It is the sole mutator of the UIKit
-/// view hierarchy during rendering — all mutations flow through the op buffer.
+/// (UIView, UIScrollView, CALayer, CATextLayer). It is the sole mutator
+/// of the UIKit view hierarchy during rendering — all mutations flow
+/// through the op buffer.
 ///
 /// **Thread safety:** All methods must be called on the main thread.
 
 #if canImport(UIKit)
 import UIKit
+import QuartzCore
 
 // MARK: - Op-code tags (must match Rust OpTag in ops.rs)
 
@@ -27,10 +29,19 @@ private let OP_RELEASE_SCROLLVIEW: UInt8 = 0x0C
 private let OP_RELEASE_LAYER:      UInt8 = 0x0D
 private let OP_ATTACH:             UInt8 = 0x0E
 
+// Text ops
+private let OP_DECLARE_TEXT:       UInt8 = 0x10
+private let OP_SET_TEXT_CONTENT:   UInt8 = 0x11
+private let OP_SET_TEXT_FONT:      UInt8 = 0x12
+private let OP_SET_TEXT_COLOR:     UInt8 = 0x13
+private let OP_DETACH_TEXT:        UInt8 = 0x14
+private let OP_RELEASE_TEXT:       UInt8 = 0x15
+
 // ViewKind values (must match Rust ViewKind repr(u8))
 private let KIND_VIEW:       UInt8 = 0
 private let KIND_SCROLLVIEW: UInt8 = 1
 private let KIND_LAYER:      UInt8 = 2
+private let KIND_TEXT:        UInt8 = 3
 
 /// Slot size in bytes — must match Rust SLOT_SIZE.
 private let SLOT_SIZE = 32
@@ -49,18 +60,21 @@ public final class OpExecutor {
     public var onExecute: (() -> Void)?
 
     private struct Entry {
-        let obj: AnyObject    // UIView, UIScrollView, or CALayer
-        let kind: UInt8       // OP_DECLARE_VIEW / SCROLLVIEW / LAYER tag
+        let obj: AnyObject    // UIView, UIScrollView, CALayer, or CATextLayer
+        let kind: UInt8       // OP_DECLARE_* tag
     }
 
     public init(rootView: UIView) {
         self.rootView = rootView
     }
 
-    /// Executes a buffer of 32-byte op-code slots.
+    /// Executes a buffer of 32-byte op-code slots with an optional string table.
     ///
     /// Called on the main thread after the background thread produces ops.
-    public func execute(ptr: UnsafePointer<UInt8>, byteCount: Int) {
+    public func execute(
+        ptr: UnsafePointer<UInt8>, byteCount: Int,
+        stringsPtr: UnsafePointer<UInt8>?, stringsLen: Int
+    ) {
         let opCount = byteCount / SLOT_SIZE
 
         for i in 0..<opCount {
@@ -72,6 +86,11 @@ public final class OpExecutor {
                 let nodeId = readU64(base + 1)
                 let parentId = readU64(base + 9)
                 handleDeclare(nodeId: nodeId, parentId: parentId, tag: tag)
+
+            case OP_DECLARE_TEXT:
+                let nodeId = readU64(base + 1)
+                let parentId = readU64(base + 9)
+                handleDeclareText(nodeId: nodeId, parentId: parentId)
 
             case OP_SET_VIEW_FRAME, OP_SET_LAYER_FRAME:
                 let nodeId = readU64(base + 1)
@@ -120,23 +139,48 @@ public final class OpExecutor {
                     width: CGFloat(w), height: CGFloat(h)
                 )
 
+            case OP_SET_TEXT_CONTENT:
+                let nodeId = readU64(base + 1)
+                let offset = readU32(base + 9)
+                let len = readU32(base + 13)
+                if let sPtr = stringsPtr, Int(offset) + Int(len) <= stringsLen {
+                    let textData = Data(bytes: sPtr + Int(offset), count: Int(len))
+                    if let text = String(data: textData, encoding: .utf8) {
+                        (viewMap[nodeId]?.obj as? CATextLayer)?.string = text
+                    }
+                }
+
+            case OP_SET_TEXT_FONT:
+                let nodeId = readU64(base + 1)
+                let fontSize = readF32(base + 9)
+                let fontWeight = readF32(base + 13)
+                if let textLayer = viewMap[nodeId]?.obj as? CATextLayer {
+                    textLayer.fontSize = CGFloat(fontSize)
+                    let uiWeight = cssWeightToUIFontWeight(fontWeight)
+                    textLayer.font = UIFont.systemFont(ofSize: CGFloat(fontSize), weight: uiWeight)
+                }
+
+            case OP_SET_TEXT_COLOR:
+                let nodeId = readU64(base + 1)
+                let r = readF32(base + 9)
+                let g = readF32(base + 13)
+                let b = readF32(base + 17)
+                let a = readF32(base + 21)
+                let color = UIColor(
+                    red: CGFloat(r), green: CGFloat(g),
+                    blue: CGFloat(b), alpha: CGFloat(a)
+                )
+                (viewMap[nodeId]?.obj as? CATextLayer)?.foregroundColor = color.cgColor
+
             case OP_DETACH_VIEW:
                 let nodeId = readU64(base + 1)
                 (viewMap[nodeId]?.obj as? UIView)?.removeFromSuperview()
 
-            case OP_DETACH_LAYER:
+            case OP_DETACH_LAYER, OP_DETACH_TEXT:
                 let nodeId = readU64(base + 1)
                 (viewMap[nodeId]?.obj as? CALayer)?.removeFromSuperlayer()
 
-            case OP_RELEASE_VIEW:
-                let nodeId = readU64(base + 1)
-                viewMap.removeValue(forKey: nodeId)
-
-            case OP_RELEASE_SCROLLVIEW:
-                let nodeId = readU64(base + 1)
-                viewMap.removeValue(forKey: nodeId)
-
-            case OP_RELEASE_LAYER:
+            case OP_RELEASE_VIEW, OP_RELEASE_SCROLLVIEW, OP_RELEASE_LAYER, OP_RELEASE_TEXT:
                 let nodeId = readU64(base + 1)
                 viewMap.removeValue(forKey: nodeId)
 
@@ -168,8 +212,6 @@ public final class OpExecutor {
 
         // Different kind or new node — create fresh.
         if viewMap[nodeId] != nil {
-            // Kind changed — old object was already detached+released by
-            // preceding Detach+Release ops, but remove from map just in case.
             viewMap.removeValue(forKey: nodeId)
         }
 
@@ -186,6 +228,25 @@ public final class OpExecutor {
         }
 
         viewMap[nodeId] = Entry(obj: obj, kind: tag)
+    }
+
+    private func handleDeclareText(nodeId: UInt64, parentId: UInt64) {
+        if let existing = viewMap[nodeId], existing.kind == OP_DECLARE_TEXT {
+            return
+        }
+
+        if viewMap[nodeId] != nil {
+            viewMap.removeValue(forKey: nodeId)
+        }
+
+        let textLayer = CATextLayer()
+        textLayer.isWrapped = true
+        textLayer.truncationMode = .end
+        textLayer.contentsScale = UIScreen.main.scale
+        // Default to black text
+        textLayer.foregroundColor = UIColor.black.cgColor
+
+        viewMap[nodeId] = Entry(obj: textLayer, kind: OP_DECLARE_TEXT)
     }
 
     private func attachToParent(
@@ -209,25 +270,23 @@ public final class OpExecutor {
         switch (effectiveParentKind, childKind) {
         case (KIND_VIEW, KIND_VIEW), (KIND_VIEW, KIND_SCROLLVIEW),
              (KIND_SCROLLVIEW, KIND_VIEW), (KIND_SCROLLVIEW, KIND_SCROLLVIEW):
-            // View/ScrollView parent + View/ScrollView child → addSubview
             if let parent = parentObj as? UIView, let child = childEntry.obj as? UIView {
                 parent.addSubview(child)
             }
 
-        case (KIND_VIEW, KIND_LAYER), (KIND_SCROLLVIEW, KIND_LAYER):
-            // View/ScrollView parent + Layer child → view.layer.addSublayer
+        case (KIND_VIEW, KIND_LAYER), (KIND_SCROLLVIEW, KIND_LAYER),
+             (KIND_VIEW, KIND_TEXT), (KIND_SCROLLVIEW, KIND_TEXT):
+            // Layer/TextLayer child → view.layer.addSublayer
             if let parent = parentObj as? UIView, let child = childEntry.obj as? CALayer {
                 parent.layer.addSublayer(child)
             }
 
-        case (KIND_LAYER, KIND_LAYER):
-            // Layer parent + Layer child → addSublayer
+        case (KIND_LAYER, KIND_LAYER), (KIND_LAYER, KIND_TEXT):
             if let parent = parentObj as? CALayer, let child = childEntry.obj as? CALayer {
                 parent.addSublayer(child)
             }
 
         case (KIND_LAYER, KIND_VIEW), (KIND_LAYER, KIND_SCROLLVIEW):
-            // Layer parent + View child — edge case, treat as layer-to-layer fallback
             if let parent = parentObj as? CALayer, let child = childEntry.obj as? UIView {
                 parent.addSublayer(child.layer)
             }
@@ -248,12 +307,35 @@ private func readU64(_ ptr: UnsafePointer<UInt8>) -> UInt64 {
     return UInt64(littleEndian: value)
 }
 
+private func readU32(_ ptr: UnsafePointer<UInt8>) -> UInt32 {
+    var value: UInt32 = 0
+    withUnsafeMutableBytes(of: &value) { buf in
+        buf.copyBytes(from: UnsafeBufferPointer(start: ptr, count: 4))
+    }
+    return UInt32(littleEndian: value)
+}
+
 private func readF32(_ ptr: UnsafePointer<UInt8>) -> Float {
     var bits: UInt32 = 0
     withUnsafeMutableBytes(of: &bits) { buf in
         buf.copyBytes(from: UnsafeBufferPointer(start: ptr, count: 4))
     }
     return Float(bitPattern: UInt32(littleEndian: bits))
+}
+
+/// Maps CSS font-weight (100–900) to UIFont.Weight.
+private func cssWeightToUIFontWeight(_ cssWeight: Float) -> UIFont.Weight {
+    switch cssWeight {
+    case ..<150:  return .ultraLight
+    case ..<250:  return .thin
+    case ..<350:  return .light
+    case ..<450:  return .regular
+    case ..<550:  return .medium
+    case ..<650:  return .semibold
+    case ..<750:  return .bold
+    case ..<850:  return .heavy
+    default:      return .black
+    }
 }
 
 #endif
