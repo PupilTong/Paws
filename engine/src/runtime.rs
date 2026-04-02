@@ -45,8 +45,9 @@ pub struct HostError {
 
 /// Top-level state container for the WASM host runtime.
 ///
-/// Owns the [`Document`], [`StyleContext`], and stylesheet cache.
-/// All WASM-facing host functions operate through this struct.
+/// Owns the [`Document`] (which includes the text layout context),
+/// [`StyleContext`], and stylesheet cache. All WASM-facing host functions
+/// operate through this struct.
 pub struct RuntimeState {
     pub doc: Document,
     pub last_error: Option<HostError>,
@@ -231,9 +232,7 @@ impl RuntimeState {
         };
 
         // 3. Layout from the root element
-        let text_measurer = crate::layout::MockTextMeasurer;
-        crate::layout::compute_layout(&mut self.doc, root_element_id, &text_measurer)
-            .unwrap_or_default()
+        crate::layout::compute_layout(&mut self.doc, root_element_id).unwrap_or_default()
     }
 
     /// Sets a DOM attribute on an element (e.g. `id`, `class`).
@@ -2419,11 +2418,8 @@ mod tests {
         let map = state.computed_style_map(container).unwrap();
         let _ = map.get("display", &mut state.doc, &state.style_context);
 
-        let result = crate::layout::compute_layout(
-            &mut state.doc,
-            taffy::NodeId::from(container as u64),
-            &crate::layout::text::MockTextMeasurer,
-        );
+        let result =
+            crate::layout::compute_layout(&mut state.doc, taffy::NodeId::from(container as u64));
         assert!(result.is_some(), "layout should compute");
         let layout = result.unwrap();
         // Two 100px-wide children in a flex row → container should be 200px wide
@@ -2463,11 +2459,8 @@ mod tests {
         let map = state.computed_style_map(container).unwrap();
         let _ = map.get("display", &mut state.doc, &state.style_context);
 
-        let result = crate::layout::compute_layout(
-            &mut state.doc,
-            taffy::NodeId::from(container as u64),
-            &crate::layout::text::MockTextMeasurer,
-        );
+        let result =
+            crate::layout::compute_layout(&mut state.doc, taffy::NodeId::from(container as u64));
         assert!(result.is_some(), "grid layout should compute");
         let layout = result.unwrap();
         // Grid auto-places two items; verify layout computed without crash
@@ -2504,11 +2497,7 @@ mod tests {
         );
 
         // Verify layout computes
-        let result = crate::layout::compute_layout(
-            &mut state.doc,
-            taffy::NodeId::from(el as u64),
-            &crate::layout::text::MockTextMeasurer,
-        );
+        let result = crate::layout::compute_layout(&mut state.doc, taffy::NodeId::from(el as u64));
         assert!(result.is_some(), "layout should compute");
         let layout = result.unwrap();
         assert_eq!(layout.width, 100.0);

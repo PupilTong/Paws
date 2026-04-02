@@ -1,5 +1,5 @@
 use crate::dom::element::{NodeFlags, NodeType, PawsElement};
-use crate::layout::text::TextMeasurer;
+use crate::layout::text::TextLayoutContext;
 use markup5ever::QualName;
 use slab::Slab;
 use style::shared_lock::SharedRwLock;
@@ -55,12 +55,10 @@ pub struct Document {
     #[allow(dead_code)]
     pub(crate) url: url::Url,
 
-    /// Raw pointer to the text measurer, set only during a layout pass.
+    /// Parley-backed text layout context for measuring text leaf nodes.
     ///
-    /// `None` outside of `compute_layout`. The pointer is valid for the
-    /// duration of the `compute_layout` call because the caller holds the
-    /// `&dyn TextMeasurer` borrow that outlives the layout pass.
-    pub(crate) text_measurer: Option<*const dyn TextMeasurer>,
+    /// Created eagerly in [`Document::new`] and reused across layout passes.
+    pub(crate) text_cx: TextLayoutContext,
 }
 
 impl Document {
@@ -89,7 +87,7 @@ impl Document {
             root: root_id,
             stylesheets: Vec::new(),
             url,
-            text_measurer: None,
+            text_cx: TextLayoutContext::new(),
         }
     }
 
@@ -116,20 +114,6 @@ impl Document {
     #[inline]
     pub(crate) fn node_mut(&mut self, id: taffy::NodeId) -> &mut PawsElement {
         self.get_node_mut(id).expect("valid node id during layout")
-    }
-
-    /// Returns the text measurer set for the current layout pass.
-    ///
-    /// # Panics
-    /// Panics if called outside of a layout pass.
-    pub(crate) fn text_measurer(&self) -> &dyn TextMeasurer {
-        let ptr = self
-            .text_measurer
-            .expect("text_measurer accessed outside layout pass");
-        // SAFETY: The pointer is set in `compute_layout` and cleared before
-        // it returns (via an RAII guard for panic safety). The original
-        // reference's lifetime spans the entire layout pass.
-        unsafe { &*ptr }
     }
 
     pub(crate) fn create_node(&mut self, node_type: NodeType) -> taffy::NodeId {

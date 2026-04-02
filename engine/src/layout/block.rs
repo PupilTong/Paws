@@ -11,7 +11,6 @@ use style::values::specified::font::FONT_MEDIUM_PX;
 
 use crate::dom::document::Document;
 use crate::dom::NodeType;
-use crate::layout::text::TextMeasurer;
 
 use taffy::compute_block_layout;
 use taffy::prelude::*;
@@ -67,38 +66,15 @@ impl Default for LayoutBox {
 /// Computes layout for a subtree rooted at `root_id`.
 ///
 /// Layout data is written directly onto DOM nodes (`PawsElement` fields:
-/// `layout_cache`, `unrounded_layout`, `final_layout`).
-pub fn compute_layout(
-    doc: &mut Document,
-    root_id: NodeId,
-    text_measurer: &dyn TextMeasurer,
-) -> Option<LayoutBox> {
+/// `layout_cache`, `unrounded_layout`, `final_layout`). Text leaf nodes are
+/// measured via the `Document`'s embedded [`TextLayoutContext`].
+pub fn compute_layout(doc: &mut Document, root_id: NodeId) -> Option<LayoutBox> {
     // Bail early if the root node has no style.
     doc.get_node(root_id).and_then(|n| n.taffy_style.as_ref())?;
 
-    // SAFETY: `text_measurer` is borrowed for the duration of this function.
-    // We store it as a raw pointer on `doc` so the Taffy trait impls can
-    // access it. The `transmute` erases the trait-object lifetime to `'static`
-    // (required because `Document` has no lifetime parameter); the pointer is
-    // cleared via the RAII guard before this function returns, even on panic.
-    let ptr: *const dyn TextMeasurer = text_measurer;
-    doc.text_measurer = Some(unsafe {
-        std::mem::transmute::<*const dyn TextMeasurer, *const dyn TextMeasurer>(ptr)
-    });
-
-    // RAII guard ensures `text_measurer` is cleared even if layout panics.
-    struct LayoutPassGuard<'a>(&'a mut Document);
-    impl Drop for LayoutPassGuard<'_> {
-        fn drop(&mut self) {
-            self.0.text_measurer = None;
-        }
-    }
-    let guard = LayoutPassGuard(doc);
-
-    compute_root_layout(guard.0, root_id, Size::MAX_CONTENT);
-    round_layout(guard.0, root_id);
-    extract_layout_tree(guard.0, root_id)
-    // guard drops here → text_measurer cleared
+    compute_root_layout(doc, root_id, Size::MAX_CONTENT);
+    round_layout(doc, root_id);
+    extract_layout_tree(doc, root_id)
 }
 
 // ─── ChildIter ───────────────────────────────────────────────────────
@@ -205,28 +181,39 @@ impl taffy::LayoutPartialTree for Document {
     }
 }
 
-/// Computes layout for a text leaf node using the text measurer.
+/// Computes layout for a text leaf node using the Parley text layout context.
 fn compute_text_leaf(doc: &mut Document, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
     let node = doc.node(node_id);
-    let font_size = node
+    let (font_size, font_weight) = node
         .computed_values
         .as_ref()
         .map(|cv| {
             let fs = cv.clone_font_size().computed_size().px();
-            if fs > 0.0 {
-                fs
-            } else {
-                FONT_MEDIUM_PX
-            }
+            let fs = if fs > 0.0 { fs } else { FONT_MEDIUM_PX };
+            let fw = cv.clone_font_weight().value();
+            (fs, fw)
         })
-        .unwrap_or(FONT_MEDIUM_PX);
+        .unwrap_or((FONT_MEDIUM_PX, 400.0));
     let text = node.text_content.as_deref().unwrap_or("");
-    let style = node
+
+    let max_width = inputs
+        .known_dimensions
+        .width
+        .or(match inputs.available_space.width {
+            AvailableSpace::Definite(w) => Some(w),
+            AvailableSpace::MaxContent => None,
+            AvailableSpace::MinContent => Some(0.0),
+        });
+
+    let (width, height) = doc
+        .text_cx
+        .measure_text(text, font_size, font_weight, max_width);
+
+    let style = doc
+        .node(node_id)
         .taffy_style
         .as_ref()
         .expect("text node must have taffy_style");
-
-    let (width, height) = doc.text_measurer().measure_text(text, font_size, None);
 
     compute_leaf_layout(
         inputs,
@@ -396,8 +383,6 @@ fn extract_layout_tree(doc: &Document, node_id: NodeId) -> Option<LayoutBox> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dom::document::Document;
-    use crate::layout::text::MockTextMeasurer;
     use crate::runtime::RuntimeState;
     use markup5ever::QualName;
     use style::shared_lock::SharedRwLock;
@@ -407,7 +392,6 @@ mod tests {
     fn test_compute_layout_extract_tree() {
         let guard = SharedRwLock::new();
         let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
-        let measurer = MockTextMeasurer;
 
         let elem1 = doc.create_element(QualName::new(None, "".into(), "div".into()));
         doc.append_child(doc.root, elem1).unwrap();
@@ -419,7 +403,7 @@ mod tests {
         let style_ctx = crate::style::StyleContext::new(url);
         doc.resolve_style(&style_ctx);
 
-        let layout = compute_layout(&mut doc, elem1, &measurer);
+        let layout = compute_layout(&mut doc, elem1);
         assert!(layout.is_some());
         let layout = layout.unwrap();
         assert_eq!(layout.children.len(), 1);
@@ -429,11 +413,11 @@ mod tests {
     fn test_layout_no_style_returns_none() {
         let guard = SharedRwLock::new();
         let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
-        let measurer = MockTextMeasurer;
+
         // Don't resolve styles — taffy_style will be None.
         let el = doc.create_element(QualName::new(None, "".into(), "div".into()));
         doc.append_child(doc.root, el).unwrap();
-        assert!(compute_layout(&mut doc, el, &measurer).is_none());
+        assert!(compute_layout(&mut doc, el).is_none());
     }
 
     #[test]
@@ -461,12 +445,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(
-            &mut state.doc,
-            NodeId::from(parent as u64),
-            &MockTextMeasurer,
-        )
-        .unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(parent as u64)).unwrap();
 
         // Hidden child should have zero dimensions.
         let hidden_box = &layout.children[0];
@@ -493,8 +472,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout =
-            compute_layout(&mut state.doc, NodeId::from(grid as u64), &MockTextMeasurer).unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(grid as u64)).unwrap();
         assert_eq!(layout.children.len(), 1);
         assert!(layout.height > 0.0, "grid should have positive height");
     }
@@ -512,8 +490,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout =
-            compute_layout(&mut state.doc, NodeId::from(el as u64), &MockTextMeasurer).unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(el as u64)).unwrap();
         assert_eq!(layout.width, 100.0);
         assert_eq!(layout.height, 60.0);
         assert!(layout.children.is_empty());
@@ -538,12 +515,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(
-            &mut state.doc,
-            NodeId::from(block as u64),
-            &MockTextMeasurer,
-        )
-        .unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(block as u64)).unwrap();
         assert_eq!(layout.width, 200.0);
         assert_eq!(layout.children.len(), 1);
         assert_eq!(layout.children[0].height, 30.0);
@@ -564,8 +536,7 @@ mod tests {
         // No children, no text — pure leaf.
 
         state.doc.resolve_style(&state.style_context);
-        let layout =
-            compute_layout(&mut state.doc, NodeId::from(flex as u64), &MockTextMeasurer).unwrap();
+        let layout = compute_layout(&mut state.doc, NodeId::from(flex as u64)).unwrap();
         assert_eq!(layout.children.len(), 1);
     }
 }
