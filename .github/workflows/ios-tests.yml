@@ -12,9 +12,6 @@ permissions:
 jobs:
   ios:
     runs-on: macos-15
-    defaults:
-      run:
-        working-directory: Paws
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,8 +23,6 @@ jobs:
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: Paws
 
       - name: Build Rust static library for iOS Simulator
         run: cargo build -p ios-renderer-backend --target aarch64-apple-ios-sim --release
@@ -64,4 +59,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-test-results
-          path: Paws/TestResults
+          path: TestResults
