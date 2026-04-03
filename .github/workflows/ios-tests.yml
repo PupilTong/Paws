@@ -19,7 +19,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios-sim
+          targets: aarch64-apple-ios-sim,wasm32-wasip1-threads
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
