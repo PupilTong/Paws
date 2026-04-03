@@ -554,4 +554,51 @@ mod tests {
         let layout = compute_layout(&mut state.doc, NodeId::from(flex as u64)).unwrap();
         assert_eq!(layout.children.len(), 1);
     }
+
+    #[test]
+    fn test_layout_text_node_measured() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state
+            .set_inline_style(div, "width".into(), "200px".into())
+            .unwrap();
+
+        let text = state.create_text_node("Hello Paws".to_string());
+        state.append_element(div, text).unwrap();
+
+        state.doc.resolve_style(&state.style_context);
+        let layout = compute_layout(&mut state.doc, NodeId::from(div as u64)).unwrap();
+
+        // Text child should be present with measured dimensions.
+        assert_eq!(layout.children.len(), 1);
+        let text_box = &layout.children[0];
+        assert!(text_box.is_text, "child should be a text node");
+        assert_eq!(text_box.text_content.as_deref(), Some("Hello Paws"));
+        assert!(text_box.width > 0.0, "text should have positive width");
+        assert!(text_box.height > 0.0, "text should have positive height");
+    }
+
+    #[test]
+    fn test_commit_with_text_node() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state
+            .set_inline_style(div, "display".into(), "block".into())
+            .unwrap();
+        state
+            .set_inline_style(div, "width".into(), "300px".into())
+            .unwrap();
+
+        let text = state.create_text_node("Layout test".to_string());
+        state.append_element(div, text).unwrap();
+
+        let layout = state.commit();
+        assert!(layout.width > 0.0);
+        assert!(!layout.children.is_empty(), "div should have text child");
+        let text_child = &layout.children[0];
+        assert!(text_child.is_text);
+        assert_eq!(text_child.text_content.as_deref(), Some("Layout test"));
+    }
 }

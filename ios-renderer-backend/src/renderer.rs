@@ -618,4 +618,115 @@ mod tests {
             "removed text should be released"
         );
     }
+
+    #[test]
+    fn test_text_unchanged_emits_nothing() {
+        let mut tree = ViewTree::new();
+        let mut ops = OpBuffer::new();
+
+        let mut root = layout(1);
+        root.children = vec![text_layout(2, "Hello", 40.0, 16.0)];
+        tree.process(&root, &mut ops);
+        assert!(ops.op_count() > 0);
+
+        // Same text, same frame — no ops.
+        tree.process(&root, &mut ops);
+        assert_eq!(ops.op_count(), 0, "unchanged text should emit zero ops");
+    }
+
+    #[test]
+    fn test_text_frame_change_emits_set_frame() {
+        let mut tree = ViewTree::new();
+        let mut ops = OpBuffer::new();
+
+        let mut root = layout(1);
+        root.children = vec![text_layout(2, "Hello", 40.0, 16.0)];
+        tree.process(&root, &mut ops);
+
+        // Change text frame dimensions.
+        let mut root2 = layout(1);
+        root2.children = vec![text_layout(2, "Hello", 80.0, 20.0)];
+        tree.process(&root2, &mut ops);
+
+        let tags = collect_tags(&ops);
+        assert!(
+            tags.contains(&(OpTag::SetLayerFrame as u8)),
+            "changed text frame should emit SetLayerFrame"
+        );
+        assert!(
+            !tags.contains(&(OpTag::DeclareText as u8)),
+            "unchanged kind should not re-declare"
+        );
+    }
+
+    #[test]
+    fn test_kind_change_layer_to_text() {
+        let mut tree = ViewTree::new();
+        let mut ops = OpBuffer::new();
+
+        // Start as a plain layer child.
+        let mut root = layout(1);
+        root.children = vec![layout_with_frame(2, 0.0, 0.0, 40.0, 16.0)];
+        tree.process(&root, &mut ops);
+
+        // Now the same node becomes a text node.
+        let mut root2 = layout(1);
+        root2.children = vec![text_layout(2, "Hello", 40.0, 16.0)];
+        tree.process(&root2, &mut ops);
+
+        let tags = collect_tags(&ops);
+        assert!(
+            tags.contains(&(OpTag::DetachLayer as u8)),
+            "old layer should be detached"
+        );
+        assert!(
+            tags.contains(&(OpTag::ReleaseLayer as u8)),
+            "old layer should be released"
+        );
+        assert!(
+            tags.contains(&(OpTag::DeclareText as u8)),
+            "new text node should be declared"
+        );
+    }
+
+    #[test]
+    fn test_text_with_computed_styles() {
+        // E2E: use RuntimeState to create a div with text and real computed styles.
+        let mut tree = ViewTree::new();
+        let mut ops = OpBuffer::new();
+
+        let mut state = engine::RuntimeState::new("https://example.com".to_string());
+        let div_id = state.create_element("div".to_string());
+        state.append_element(0, div_id).unwrap();
+        state
+            .set_inline_style(div_id, "width".into(), "200px".into())
+            .unwrap();
+
+        let txt_id = state.create_text_node("Paws text".to_string());
+        state.append_element(div_id, txt_id).unwrap();
+
+        let layout_box = state.commit();
+        tree.process(&layout_box, &mut ops);
+
+        let tags = collect_tags(&ops);
+        // Root element should get DeclareView
+        assert!(tags.contains(&(OpTag::DeclareView as u8)));
+        // Text child should get DeclareText + SetTextContent + SetTextFont
+        assert!(
+            tags.contains(&(OpTag::DeclareText as u8)),
+            "text child should generate DeclareText"
+        );
+        assert!(
+            tags.contains(&(OpTag::SetTextContent as u8)),
+            "text child should generate SetTextContent"
+        );
+        assert!(
+            tags.contains(&(OpTag::SetTextFont as u8)),
+            "text child should generate SetTextFont"
+        );
+        // Verify string table has text
+        assert!(ops.strings_len() > 0, "string table should contain text");
+        let text = std::str::from_utf8(ops.strings_data()).unwrap();
+        assert!(text.contains("Paws text"));
+    }
 }

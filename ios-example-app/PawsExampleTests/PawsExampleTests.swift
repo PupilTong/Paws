@@ -317,4 +317,120 @@ final class PawsExampleTests: XCTestCase {
         view.renderer.postRunWat(textWat, functionName: "run")
         wait(for: [expectation], timeout: 5.0)
     }
+
+    // MARK: - Screenshot / pixel comparison tests
+
+    func testScreenshotColoredDivs() {
+        let view = PawsRendererView(
+            baseURL: "about:blank",
+            frame: CGRect(x: 0, y: 0, width: 200, height: 50)
+        )
+        let expectation = expectation(description: "screenshot")
+        view.renderer.executor.onExecute = {
+            // Capture the view hierarchy as a bitmap.
+            let renderer = UIGraphicsImageRenderer(size: view.bounds.size)
+            let image = renderer.image { ctx in
+                view.layer.render(in: ctx.cgContext)
+            }
+            guard let cgImage = image.cgImage,
+                  let dataProvider = cgImage.dataProvider,
+                  let pixelData = dataProvider.data else {
+                XCTFail("Failed to capture screenshot")
+                expectation.fulfill()
+                return
+            }
+
+            let data = pixelData as Data
+            let bytesPerPixel = cgImage.bitsPerPixel / 8
+            let bytesPerRow = cgImage.bytesPerRow
+
+            /// Reads the RGBA pixel at (x, y) from the bitmap.
+            func pixel(x: Int, y: Int) -> (r: UInt8, g: UInt8, b: UInt8, a: UInt8) {
+                let offset = y * bytesPerRow + x * bytesPerPixel
+                return (data[offset], data[offset+1], data[offset+2], data[offset+3])
+            }
+
+            // The demoWat creates 4 children of 50x50 in a flex row.
+            // Child 0 (red) occupies x=0..50, child 1 (green) x=50..100, etc.
+            let tolerance: UInt8 = 5
+
+            // Sample red child at (25, 25)
+            let red = pixel(x: 25, y: 25)
+            XCTAssertGreaterThan(red.r, 200, "Red child should have high red")
+            XCTAssertLessThan(red.g, tolerance, "Red child should have low green")
+            XCTAssertLessThan(red.b, tolerance, "Red child should have low blue")
+
+            // Sample green child at (75, 25) — CSS green is #008000
+            let green = pixel(x: 75, y: 25)
+            XCTAssertLessThan(green.r, tolerance, "Green child should have low red")
+            XCTAssertGreaterThan(green.g, 100, "Green child should have positive green")
+            XCTAssertLessThan(green.b, tolerance, "Green child should have low blue")
+
+            // Sample blue child at (125, 25)
+            let blue = pixel(x: 125, y: 25)
+            XCTAssertLessThan(blue.r, tolerance, "Blue child should have low red")
+            XCTAssertLessThan(blue.g, tolerance, "Blue child should have low green")
+            XCTAssertGreaterThan(blue.b, 200, "Blue child should have high blue")
+
+            // Sample orange child at (175, 25) — CSS orange is #FFA500
+            let orange = pixel(x: 175, y: 25)
+            XCTAssertGreaterThan(orange.r, 200, "Orange child should have high red")
+            XCTAssertGreaterThan(orange.g, 140, "Orange child should have medium green")
+            XCTAssertLessThan(orange.b, tolerance, "Orange child should have low blue")
+
+            expectation.fulfill()
+        }
+
+        view.renderer.postRunWat(demoWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
+    }
+
+    func testScreenshotTextNodeHasContent() {
+        let view = PawsRendererView(
+            baseURL: "about:blank",
+            frame: CGRect(x: 0, y: 0, width: 200, height: 50)
+        )
+        let expectation = expectation(description: "text screenshot")
+        view.renderer.executor.onExecute = {
+            // Capture the rendered view to verify text produces non-transparent pixels.
+            let renderer = UIGraphicsImageRenderer(size: view.bounds.size)
+            let image = renderer.image { ctx in
+                view.layer.render(in: ctx.cgContext)
+            }
+            guard let cgImage = image.cgImage,
+                  let dataProvider = cgImage.dataProvider,
+                  let pixelData = dataProvider.data else {
+                XCTFail("Failed to capture screenshot")
+                expectation.fulfill()
+                return
+            }
+
+            let data = pixelData as Data
+            let bytesPerPixel = cgImage.bitsPerPixel / 8
+            let bytesPerRow = cgImage.bytesPerRow
+            let width = cgImage.width
+            let height = cgImage.height
+
+            // Count non-transparent pixels — text should produce some ink.
+            var nonTransparent = 0
+            for y in 0..<height {
+                for x in 0..<width {
+                    let offset = y * bytesPerRow + x * bytesPerPixel
+                    let alpha = data[offset + 3]
+                    if alpha > 0 {
+                        nonTransparent += 1
+                    }
+                }
+            }
+
+            XCTAssertGreaterThan(
+                nonTransparent, 0,
+                "Text rendering should produce non-transparent pixels"
+            )
+            expectation.fulfill()
+        }
+
+        view.renderer.postRunWat(textWat, functionName: "run")
+        wait(for: [expectation], timeout: 5.0)
+    }
 }
