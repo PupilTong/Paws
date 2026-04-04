@@ -22,17 +22,17 @@ use crate::dom::PawsElement;
 
 use super::ChildrenIterator;
 
-impl<'a> TElement for &'a PawsElement {
-    type ConcreteNode = &'a PawsElement;
-    type TraversalChildrenIterator = ChildrenIterator<'a>;
+impl<'a, S: Default + Send + 'static> TElement for &'a PawsElement<S> {
+    type ConcreteNode = &'a PawsElement<S>;
+    type TraversalChildrenIterator = ChildrenIterator<'a, S>;
 
     fn as_node(&self) -> Self::ConcreteNode {
         self
     }
 
-    fn traversal_children(&self) -> LayoutIterator<ChildrenIterator<'a>> {
+    fn traversal_children(&self) -> LayoutIterator<ChildrenIterator<'a, S>> {
         LayoutIterator(ChildrenIterator {
-            node: self,
+            node: *self,
             index: 0,
         })
     }
@@ -59,15 +59,15 @@ impl<'a> TElement for &'a PawsElement {
     }
 
     fn has_dirty_descendants(&self) -> bool {
-        PawsElement::has_dirty_descendants(self)
+        PawsElement::<S>::has_dirty_descendants(self)
     }
 
     unsafe fn set_dirty_descendants(&self) {
-        PawsElement::set_dirty_descendants(self);
+        PawsElement::<S>::set_dirty_descendants(self);
     }
 
     unsafe fn unset_dirty_descendants(&self) {
-        PawsElement::unset_dirty_descendants(self);
+        PawsElement::<S>::unset_dirty_descendants(self);
     }
 
     fn store_children_to_process(&self, _c: isize) {}
@@ -253,7 +253,7 @@ mod tests {
     fn test_element_get_computed_values() {
         // Create an element through document
         let guard = style::shared_lock::SharedRwLock::new();
-        let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
+        let mut doc: Document = Document::new(guard, Url::parse("http://test.com").unwrap());
 
         let id = doc.create_element(QualName::new(None, "".into(), "p".into()));
         let elem = doc.get_node(id).unwrap();

@@ -1,11 +1,7 @@
 use markup5ever::{LocalName, QualName};
 
 use crate::dom::{Document, DomError};
-use crate::layout::LayoutBox;
 use crate::style::StyleContext;
-
-/// Closure called after each `commit()` with the computed layout tree.
-pub type CommitHook = Box<dyn FnMut(&LayoutBox) + Send>;
 
 /// Error codes returned from host functions to WASM guests.
 ///
@@ -46,26 +42,65 @@ pub struct HostError {
     pub(crate) message: String,
 }
 
+/// Trait for backends that process committed document state.
+///
+/// Each platform defines its own per-node render state via [`NodeState`](Self::NodeState).
+/// The engine calls [`on_commit`](Self::on_commit) after style resolution and layout
+/// are complete, giving the renderer mutable access to the Document so it can
+/// read layout data and update per-node render state for dirty checking.
+pub trait EngineRenderer: Send + 'static {
+    /// Per-node render cache stored directly on each [`PawsElement`](crate::dom::element::PawsElement).
+    ///
+    /// iOS stores `IosNodeState` (ViewKind + prev-frame snapshot),
+    /// Android can define its own. Tests use `()` (zero-cost).
+    type NodeState: Default + Send + 'static;
+
+    /// Called after style resolution and layout are complete.
+    ///
+    /// `root_element` is the first element child of the document root,
+    /// or `None` if the document has no element children.
+    fn on_commit(
+        &mut self,
+        doc: &mut Document<Self::NodeState>,
+        root_element: Option<taffy::NodeId>,
+    );
+}
+
+/// No-op renderer for tests and headless usage. Zero-cost `NodeState = ()`.
+impl EngineRenderer for () {
+    type NodeState = ();
+    fn on_commit(&mut self, _doc: &mut Document<()>, _root: Option<taffy::NodeId>) {}
+}
+
 /// Top-level state container for the WASM host runtime.
 ///
 /// Owns the [`Document`] (which includes the text layout context),
-/// [`StyleContext`], and stylesheet cache. All WASM-facing host functions
-/// operate through this struct.
-pub struct RuntimeState {
-    pub doc: Document,
+/// [`StyleContext`], stylesheet cache, and an [`EngineRenderer`] backend.
+/// All WASM-facing host functions operate through this struct.
+///
+/// The type parameter `R` is the renderer backend. Use `()` for tests
+/// and headless usage (zero-cost no-op renderer).
+pub struct RuntimeState<R: EngineRenderer = ()> {
+    pub doc: Document<R::NodeState>,
     pub last_error: Option<HostError>,
     pub style_context: StyleContext,
     pub(crate) stylesheet_cache: crate::style::StylesheetCache,
-    /// Optional hook called after each `commit()` with the computed layout tree.
-    ///
-    /// Set by the host (e.g. ios-renderer-backend) to process `LayoutBox` into
-    /// rendering ops and deliver them to the UI thread via a completion callback.
-    pub commit_hook: Option<CommitHook>,
+    pub renderer: R,
 }
 
-impl RuntimeState {
-    /// Creates a new runtime state with the given document URL.
+impl RuntimeState<()> {
+    /// Creates a new runtime state with the no-op `()` renderer.
+    ///
+    /// Use this for tests and headless usage where no rendering backend
+    /// is needed.
     pub fn new(url_str: String) -> Self {
+        Self::with_renderer(url_str, ())
+    }
+}
+
+impl<R: EngineRenderer> RuntimeState<R> {
+    /// Creates a new runtime state with a custom renderer backend.
+    pub fn with_renderer(url_str: String, renderer: R) -> Self {
         let url = url::Url::parse(&url_str).expect("Valid Document URL");
         let context = StyleContext::new(url.clone());
         let lock = context.lock.clone();
@@ -80,7 +115,7 @@ impl RuntimeState {
             last_error: None,
             style_context: context,
             stylesheet_cache,
-            commit_hook: None,
+            renderer,
         }
     }
     /// Creates a new HTML element with the given tag name. Returns the node ID.
@@ -215,41 +250,33 @@ impl RuntimeState {
         self.style_context.add_stylesheet(added_sheet);
     }
 
-    /// Runs the full rendering pipeline: style resolution followed by layout.
+    /// Runs the full rendering pipeline: style resolution, layout, and renderer notification.
     ///
     /// This is the explicit commit model — unlike browsers where many APIs
     /// trigger implicit reflow, only `commit()` triggers the pipeline.
     /// In the future, animations will also trigger repaint, but generally
     /// the pipeline should be driven explicitly by the user program.
     ///
-    /// Computes layout starting from the first element child of the document
-    /// root, since the document node itself is not a styled element.
-    pub fn commit(&mut self) -> LayoutBox {
+    /// After layout is computed, the [`EngineRenderer::on_commit`] callback
+    /// is invoked so the renderer can generate platform-specific output.
+    /// Removed node render states are cleared after the renderer processes them.
+    pub fn commit(&mut self) {
         // 1. Style resolution (skipped if nothing is dirty)
         self.doc.ensure_styles_resolved(&self.style_context);
 
         // 2. Find the root element (first element child of the document node)
-        let root_element = self.doc.get_node(self.doc.root).and_then(|root| {
-            root.children
-                .iter()
-                .copied()
-                .find(|&id| self.doc.get_node(id).is_some_and(|n| n.is_element()))
-        });
-
-        let Some(root_element_id) = root_element else {
-            return LayoutBox::default();
-        };
+        let root_element = self.doc.root_element_id();
 
         // 3. Layout from the root element
-        let layout =
-            crate::layout::compute_layout(&mut self.doc, root_element_id).unwrap_or_default();
-
-        // 4. Deliver layout to the commit hook (renderer op delivery)
-        if let Some(ref mut hook) = self.commit_hook {
-            hook(&layout);
+        if let Some(root_id) = root_element {
+            crate::layout::compute_layout_in_place(&mut self.doc, root_id);
         }
 
-        layout
+        // 4. Notify the renderer (split borrow: &mut renderer + &mut doc are disjoint fields)
+        self.renderer.on_commit(&mut self.doc, root_element);
+
+        // 5. Clear removed render states after the renderer has processed them
+        self.doc.removed_render_states.clear();
     }
 
     /// Sets a DOM attribute on an element (e.g. `id`, `class`).
@@ -2803,9 +2830,10 @@ mod tests {
             .set_inline_style(div, "height".to_string(), "100px".to_string())
             .unwrap();
 
-        let layout = state.commit();
-        assert_eq!(layout.width, 200.0);
-        assert_eq!(layout.height, 100.0);
+        state.commit();
+        let node = state.doc.get_node(taffy::NodeId::from(div as u64)).unwrap();
+        assert_eq!(node.layout().size.width, 200.0);
+        assert_eq!(node.layout().size.height, 100.0);
     }
 
     #[test]
@@ -2821,13 +2849,15 @@ mod tests {
             .unwrap();
 
         // First commit resolves styles
-        let layout1 = state.commit();
-        assert_eq!(layout1.width, 50.0);
-        assert_eq!(layout1.height, 50.0);
+        state.commit();
+        let node = state.doc.get_node(taffy::NodeId::from(div as u64)).unwrap();
+        assert_eq!(node.layout().size.width, 50.0);
+        assert_eq!(node.layout().size.height, 50.0);
 
         // Second commit without changes — should still produce correct layout
-        let layout2 = state.commit();
-        assert_eq!(layout2.width, 50.0);
-        assert_eq!(layout2.height, 50.0);
+        state.commit();
+        let node = state.doc.get_node(taffy::NodeId::from(div as u64)).unwrap();
+        assert_eq!(node.layout().size.width, 50.0);
+        assert_eq!(node.layout().size.height, 50.0);
     }
 }

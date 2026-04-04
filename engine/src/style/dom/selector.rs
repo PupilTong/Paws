@@ -11,11 +11,11 @@ use selectors::matching::ElementSelectorFlags;
 
 use crate::dom::{NodeType, PawsElement};
 
-impl selectors::Element for &PawsElement {
+impl<S: Default + Send + 'static> selectors::Element for &PawsElement<S> {
     type Impl = SelectorImpl;
 
     fn opaque(&self) -> selectors::OpaqueElement {
-        let ptr: *const PawsElement = *self;
+        let ptr: *const PawsElement<S> = *self;
         // SAFETY: OpaqueElement is a newtype around usize used by the selectors crate as
         // an opaque identity token. We transmute a valid pointer-as-usize. The value is
         // only used for identity comparison within selector matching, never dereferenced.
@@ -203,7 +203,7 @@ impl selectors::Element for &PawsElement {
     }
 }
 
-impl AttributeProvider for &PawsElement {
+impl<S: Default + Send + 'static> AttributeProvider for &PawsElement<S> {
     fn get_attr(&self, name: &LocalName, _namespace: &Namespace) -> Option<String> {
         let key = Atom::from(name.0.as_ref());
         self.attrs.get(&key).cloned()

@@ -11,13 +11,13 @@ mod selector;
 use crate::dom::PawsElement;
 
 /// Iterator over the children of a `PawsElement`, yielding `&PawsElement` references.
-pub struct ChildrenIterator<'a> {
-    node: &'a PawsElement,
+pub struct ChildrenIterator<'a, S: Default + Send + 'static = ()> {
+    node: &'a PawsElement<S>,
     index: usize,
 }
 
-impl<'a> Iterator for ChildrenIterator<'a> {
-    type Item = &'a PawsElement;
+impl<'a, S: Default + Send + 'static> Iterator for ChildrenIterator<'a, S> {
+    type Item = &'a PawsElement<S>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.node.children.len() {
             let child_id = self.node.children[self.index];

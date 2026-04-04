@@ -5,8 +5,8 @@ use style::shared_lock::SharedRwLock;
 
 use crate::dom::PawsElement;
 
-impl<'a> TDocument for &'a PawsElement {
-    type ConcreteNode = &'a PawsElement;
+impl<'a, S: Default + Send + 'static> TDocument for &'a PawsElement<S> {
+    type ConcreteNode = &'a PawsElement<S>;
 
     fn as_node(&self) -> Self::ConcreteNode {
         self
@@ -29,8 +29,8 @@ impl<'a> TDocument for &'a PawsElement {
     }
 }
 
-impl<'a> TShadowRoot for &'a PawsElement {
-    type ConcreteNode = &'a PawsElement;
+impl<'a, S: Default + Send + 'static> TShadowRoot for &'a PawsElement<S> {
+    type ConcreteNode = &'a PawsElement<S>;
 
     fn as_node(&self) -> Self::ConcreteNode {
         self

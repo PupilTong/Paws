@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use wasmtime::{Caller, Engine as WasmEngine, Linker};
 
-use engine::{HostErrorCode, RuntimeState};
+use engine::{EngineRenderer, HostErrorCode, RuntimeState};
 
 /// Resolves the WASM memory export **once** and passes the full linear-memory
 /// `&[u8]` into `f`.
@@ -10,8 +10,8 @@ use engine::{HostErrorCode, RuntimeState};
 /// exports (modules compiled with `wasm32-wasip1-threads`). The export lookup
 /// (`get_export("memory")`) and memory-type dispatch happen exactly once per
 /// call, regardless of how much data the callback reads.
-fn with_memory_data<T>(
-    caller: &mut Caller<'_, RuntimeState>,
+fn with_memory_data<R: EngineRenderer, T>(
+    caller: &mut Caller<'_, RuntimeState<R>>,
     f: impl FnOnce(&[u8]) -> Result<T>,
 ) -> Result<T> {
     let export = caller
@@ -42,7 +42,10 @@ fn with_memory_data<T>(
 /// The memory export is resolved once. The full `&[u8]` slice is scanned
 /// in-place for the null terminator — no intermediate `Vec` allocations and
 /// no chunked reads.
-pub fn read_cstr(caller: &mut Caller<'_, RuntimeState>, ptr: i32) -> Result<String> {
+pub fn read_cstr<R: EngineRenderer>(
+    caller: &mut Caller<'_, RuntimeState<R>>,
+    ptr: i32,
+) -> Result<String> {
     let start = ptr as usize;
 
     with_memory_data(caller, |data| {
@@ -63,7 +66,11 @@ pub fn read_cstr(caller: &mut Caller<'_, RuntimeState>, ptr: i32) -> Result<Stri
 ///
 /// The memory export is resolved once; elements are read directly from the
 /// backing `&[u8]` slice without an intermediate copy.
-fn read_i32_slice(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> Result<Vec<u32>> {
+fn read_i32_slice<R: EngineRenderer>(
+    caller: &mut Caller<'_, RuntimeState<R>>,
+    ptr: i32,
+    len: i32,
+) -> Result<Vec<u32>> {
     if ptr < 0 || len < 0 {
         return Err(anyhow!("pointer or length out of bounds"));
     }
@@ -98,7 +105,11 @@ fn read_i32_slice(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> 
 ///
 /// Returns `Ok(())` if the write fits within the memory, or `Err` on
 /// out-of-bounds access.
-fn write_to_memory(caller: &mut Caller<'_, RuntimeState>, ptr: i32, data: &[u8]) -> Result<()> {
+fn write_to_memory<R: EngineRenderer>(
+    caller: &mut Caller<'_, RuntimeState<R>>,
+    ptr: i32,
+    data: &[u8],
+) -> Result<()> {
     let start = ptr as usize;
     let end = start
         .checked_add(data.len())
@@ -138,7 +149,11 @@ fn write_to_memory(caller: &mut Caller<'_, RuntimeState>, ptr: i32, data: &[u8])
 ///
 /// Unlike `read_cstr`, this function *does* allocate a `Vec<u8>` because the
 /// caller needs owned bytes. However, the memory export is resolved only once.
-fn read_byte_vec(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> Result<Vec<u8>> {
+fn read_byte_vec<R: EngineRenderer>(
+    caller: &mut Caller<'_, RuntimeState<R>>,
+    ptr: i32,
+    len: i32,
+) -> Result<Vec<u8>> {
     if ptr < 0 || len < 0 {
         return Err(anyhow!("pointer or length out of bounds"));
     }
@@ -156,13 +171,13 @@ fn read_byte_vec(caller: &mut Caller<'_, RuntimeState>, ptr: i32, len: i32) -> R
     })
 }
 
-pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
-    let mut linker = Linker::new(engine);
+pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeState<R>> {
+    let mut linker: Linker<RuntimeState<R>> = Linker::new(engine);
     linker
         .func_wrap(
             "env",
             "__create_element",
-            |mut caller: Caller<'_, RuntimeState>, name_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, name_ptr: i32| -> Result<i32> {
                 let name = match read_cstr(&mut caller, name_ptr) {
                     Ok(value) => value,
                     Err(err) => {
@@ -183,7 +198,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__create_text_node",
-            |mut caller: Caller<'_, RuntimeState>, text_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, text_ptr: i32| -> Result<i32> {
                 let text = match read_cstr(&mut caller, text_ptr) {
                     Ok(value) => value,
                     Err(err) => {
@@ -204,7 +219,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__set_inline_style",
-            |mut caller: Caller<'_, RuntimeState>,
+            |mut caller: Caller<'_, RuntimeState<R>>,
              id: i32,
              name_ptr: i32,
              value_ptr: i32|
@@ -252,7 +267,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__destroy_element",
-            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -277,7 +292,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__append_element",
-            |mut caller: Caller<'_, RuntimeState>, parent: i32, child: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, parent: i32, child: i32| -> Result<i32> {
                 if parent < 0 || child < 0 {
                     let code = caller
                         .data_mut()
@@ -305,7 +320,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__append_elements",
-            |mut caller: Caller<'_, RuntimeState>,
+            |mut caller: Caller<'_, RuntimeState<R>>,
              parent: i32,
              ptr: i32,
              len: i32|
@@ -346,7 +361,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__add_stylesheet",
-            |mut caller: Caller<'_, RuntimeState>, css_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, css_ptr: i32| -> Result<i32> {
                 let css = match read_cstr(&mut caller, css_ptr) {
                     Ok(value) => value,
                     Err(err) => {
@@ -367,7 +382,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__set_attribute",
-            |mut caller: Caller<'_, RuntimeState>,
+            |mut caller: Caller<'_, RuntimeState<R>>,
              id: i32,
              name_ptr: i32,
              value_ptr: i32|
@@ -415,7 +430,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__commit",
-            |mut caller: Caller<'_, RuntimeState>| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
                 caller.data_mut().commit();
                 caller.data_mut().clear_error();
                 Ok(0)
@@ -431,7 +446,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__get_first_child",
-            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -460,7 +475,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__get_last_child",
-            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -489,7 +504,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__get_next_sibling",
-            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -518,7 +533,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__get_previous_sibling",
-            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -547,7 +562,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__get_parent_element",
-            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -576,7 +591,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__get_parent_node",
-            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -605,7 +620,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__is_connected",
-            |mut caller: Caller<'_, RuntimeState>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -630,7 +645,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__has_attribute",
-            |mut caller: Caller<'_, RuntimeState>, id: i32, name_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32, name_ptr: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -664,7 +679,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__get_attribute",
-            |mut caller: Caller<'_, RuntimeState>,
+            |mut caller: Caller<'_, RuntimeState<R>>,
              id: i32,
              name_ptr: i32,
              buf_ptr: i32,
@@ -717,7 +732,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__remove_attribute",
-            |mut caller: Caller<'_, RuntimeState>, id: i32, name_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32, name_ptr: i32| -> Result<i32> {
                 if id < 0 {
                     let code = caller
                         .data_mut()
@@ -751,7 +766,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__remove_child",
-            |mut caller: Caller<'_, RuntimeState>, parent: i32, child: i32| -> Result<i32> {
+            |mut caller: Caller<'_, RuntimeState<R>>, parent: i32, child: i32| -> Result<i32> {
                 if parent < 0 || child < 0 {
                     let code = caller
                         .data_mut()
@@ -776,7 +791,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "env",
             "__replace_child",
-            |mut caller: Caller<'_, RuntimeState>,
+            |mut caller: Caller<'_, RuntimeState<R>>,
              parent: i32,
              new_child: i32,
              old_child: i32|
@@ -809,7 +824,7 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
         .func_wrap(
             "paws",
             "paws_add_parsed_stylesheet",
-            |mut caller: Caller<'_, RuntimeState>, ptr: i32, len: i32| -> Result<()> {
+            |mut caller: Caller<'_, RuntimeState<R>>, ptr: i32, len: i32| -> Result<()> {
                 let bytes = match read_byte_vec(&mut caller, ptr, len) {
                     Ok(bytes) => bytes,
                     Err(err) => {

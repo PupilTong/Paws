@@ -102,7 +102,11 @@ impl StylePropertyMapReadOnly {
     /// then vendor-prefixed (e.g. `-webkit-*`).
     ///
     /// Triggers style resolution if the tree is dirty.
-    pub fn to_vec(&self, doc: &mut Document, ctx: &StyleContext) -> Vec<(String, CSSStyleValue)> {
+    pub fn to_vec<S: Default + Send + 'static>(
+        &self,
+        doc: &mut Document<S>,
+        ctx: &StyleContext,
+    ) -> Vec<(String, CSSStyleValue)> {
         doc.ensure_styles_resolved(ctx);
         let cv = match doc
             .get_node(self.element_id)

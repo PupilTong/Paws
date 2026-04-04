@@ -506,7 +506,9 @@ mod tests {
             .set_inline_style(id, "height".to_string(), "50px".to_string())
             .unwrap();
 
-        let layout_box = state.commit();
+        state.commit();
+        let root_id = state.doc.root_element_id().unwrap();
+        let layout_box = engine::compute_layout(&mut state.doc, root_id).unwrap();
         tree.process(&layout_box, &mut ops);
 
         let tags = collect_tags(&ops);
@@ -522,7 +524,9 @@ mod tests {
         let id = state.create_element("div".to_string());
         state.append_element(0, id).unwrap();
 
-        let layout_box = state.commit();
+        state.commit();
+        let root_id = state.doc.root_element_id().unwrap();
+        let layout_box = engine::compute_layout(&mut state.doc, root_id).unwrap();
         let bg = extract_background_color(&layout_box);
         assert!(bg.is_none(), "transparent background should return None");
     }
@@ -705,7 +709,9 @@ mod tests {
         let txt_id = state.create_text_node("Paws text".to_string());
         state.append_element(div_id, txt_id).unwrap();
 
-        let layout_box = state.commit();
+        state.commit();
+        let root_id = state.doc.root_element_id().unwrap();
+        let layout_box = engine::compute_layout(&mut state.doc, root_id).unwrap();
         tree.process(&layout_box, &mut ops);
 
         let tags = collect_tags(&ops);

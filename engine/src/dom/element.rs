@@ -36,10 +36,14 @@ pub(crate) enum NodeType {
 ///
 /// Integrates with Stylo for CSS style computation via
 /// [`ElementDataWrapper`]-managed element data and selector flags.
-pub struct PawsElement {
+///
+/// The type parameter `S` is the per-node render state for the
+/// [`EngineRenderer`](crate::EngineRenderer) backend. Each platform
+/// defines its own `S` (e.g. `IosNodeState`). Tests use `()`.
+pub struct PawsElement<S: Default + Send + 'static = ()> {
     /// Raw pointer to the slab containing this node.
     /// Only accessed via the safe `tree()` accessor or within the `engine` crate.
-    pub(crate) tree: *mut Slab<PawsElement>,
+    pub(crate) tree: *mut Slab<PawsElement<S>>,
 
     /// The ID of this node in the slab.
     pub id: taffy::NodeId,
@@ -94,11 +98,17 @@ pub struct PawsElement {
     pub(crate) unrounded_layout: taffy::tree::Layout,
     /// Pixel-snapped final layout.
     pub(crate) final_layout: taffy::tree::Layout,
+
+    /// Per-node render state for the [`EngineRenderer`](crate::EngineRenderer) backend.
+    ///
+    /// Stored directly on each node so there is truly one tree — no separate
+    /// HashMap or snapshot store. For `()` (tests/headless) this is zero-sized.
+    pub(crate) render_state: S,
 }
 
-impl PawsElement {
+impl<S: Default + Send + 'static> PawsElement<S> {
     pub(crate) fn new(
-        tree: *mut Slab<PawsElement>,
+        tree: *mut Slab<PawsElement<S>>,
         id: taffy::NodeId,
         guard: SharedRwLock,
         node_type: NodeType,
@@ -130,10 +140,12 @@ impl PawsElement {
             layout_cache: taffy::Cache::new(),
             unrounded_layout: taffy::tree::Layout::with_order(0),
             final_layout: taffy::tree::Layout::with_order(0),
+
+            render_state: S::default(),
         }
     }
 
-    pub(crate) fn tree(&self) -> &Slab<PawsElement> {
+    pub(crate) fn tree(&self) -> &Slab<PawsElement<S>> {
         // SAFETY: The `tree` pointer is set during construction by Document, which owns
         // the Box<Slab<PawsElement>> this pointer references. The Box ensures the slab
         // is heap-allocated and never moved. We only produce a shared reference here,
@@ -141,7 +153,7 @@ impl PawsElement {
         unsafe { &*self.tree }
     }
 
-    pub(crate) fn with(&self, id: taffy::NodeId) -> &PawsElement {
+    pub(crate) fn with(&self, id: taffy::NodeId) -> &PawsElement<S> {
         self.tree()
             .get(u64::from(id) as usize)
             .expect("Node not found in slab")
@@ -152,6 +164,29 @@ impl PawsElement {
     /// Available after [`Document::resolve_style`] has been called.
     pub fn get_computed_values(&self) -> Option<&Arc<style::properties::ComputedValues>> {
         self.computed_values.as_ref()
+    }
+
+    /// Returns the final pixel-snapped layout (position + size).
+    ///
+    /// Available after [`crate::layout::compute_layout_in_place`] has been called.
+    pub fn layout(&self) -> &taffy::tree::Layout {
+        &self.final_layout
+    }
+
+    /// Returns the z-index if explicitly set, or `None` for `auto`.
+    pub fn z_index(&self) -> Option<i32> {
+        self.computed_values.as_ref().and_then(|cv| {
+            use style::values::generics::position::ZIndex;
+            match cv.clone_z_index() {
+                ZIndex::Integer(n) => Some(n),
+                ZIndex::Auto => None,
+            }
+        })
+    }
+
+    /// Returns whether this node has a computed Taffy style (i.e., is a styled element).
+    pub fn has_style(&self) -> bool {
+        self.taffy_style.is_some()
     }
 
     pub fn is_element(&self) -> bool {
@@ -235,20 +270,20 @@ impl PawsElement {
 }
 
 // Implement equality and hash based on ID (reference identity)
-impl PartialEq for PawsElement {
+impl<S: Default + Send + 'static> PartialEq for PawsElement<S> {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
-impl Eq for PawsElement {}
+impl<S: Default + Send + 'static> Eq for PawsElement<S> {}
 
-impl std::hash::Hash for PawsElement {
+impl<S: Default + Send + 'static> std::hash::Hash for PawsElement<S> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
 
-impl std::fmt::Debug for PawsElement {
+impl<S: Default + Send + 'static> std::fmt::Debug for PawsElement<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PawsElement")
             .field("id", &self.id)
