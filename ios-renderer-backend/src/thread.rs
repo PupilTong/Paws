@@ -18,7 +18,7 @@
 
 use std::thread;
 
-use engine::RuntimeState;
+use engine::{EngineRenderer, RuntimeState};
 
 use crate::ops::OpBuffer;
 use crate::renderer::ViewTree;
@@ -136,38 +136,67 @@ impl Drop for EngineHandle {
     }
 }
 
-/// Entry point for the background engine thread.
+/// iOS renderer backend that implements [`EngineRenderer`].
 ///
-/// Creates engine state, wires the commit hook to deliver ops via the
-/// completion callback, and runs the WASM module. The WASM drives its own
-/// internal event loop — all commits and op delivery happen from within via
-/// the `__commit` host function. When the WASM loop exits, all engine state
-/// drops and the UIKit sub-tree is released.
-fn run_engine(base_url: String, wasm_bytes: Vec<u8>, func_name: String, cb: SendCallback) {
-    let mut state = RuntimeState::new(base_url);
+/// Bundles the [`ViewTree`] diff engine, an [`OpBuffer`], and the completion
+/// callback together. On each commit the ViewTree generates minimal ops
+/// and delivers them to Swift via the callback.
+struct IosRenderer {
+    view_tree: ViewTree,
+    op_buffer: OpBuffer,
+    callback: SendCallback,
+}
 
-    // Wire the commit hook: ViewTree + OpBuffer live on the engine thread.
-    // Each __commit call processes the LayoutBox tree and delivers ops.
-    let mut view_tree = ViewTree::new();
-    let mut op_buffer = OpBuffer::new();
+// SAFETY: `SendCallback` is already `Send` (see its unsafe impl above).
+// `ViewTree` and `OpBuffer` are plain data structures with no thread-affine
+// pointers — they are trivially `Send`.
+unsafe impl Send for IosRenderer {}
 
-    // SAFETY: `cb` is a SendCallback (Send impl above) — the context pointer
-    // is only forwarded to the completion callback which dispatches to main queue.
-    // We capture `cb` as a whole (not individual fields) so Rust sees the
-    // Send impl on the struct rather than the non-Send *mut c_void field.
-    state.commit_hook = Some(Box::new(move |layout| {
-        let _ = &cb; // Force whole-struct capture
-        view_tree.process(layout, &mut op_buffer);
-        if op_buffer.len() > 0 {
-            (cb.completion)(
-                op_buffer.as_ptr(),
-                op_buffer.len(),
-                op_buffer.strings_ptr(),
-                op_buffer.strings_len(),
-                cb.context,
+impl EngineRenderer for IosRenderer {
+    type NodeState = ();
+
+    fn on_commit(
+        &mut self,
+        doc: &mut engine::dom::Document<()>,
+        root_element: Option<engine::NodeId>,
+    ) {
+        let Some(root_id) = root_element else {
+            return;
+        };
+
+        // Extract a LayoutBox tree for the ViewTree to process.
+        // TODO: refactor ViewTree to walk Document directly and remove this.
+        let Some(layout) = engine::compute_layout(doc, root_id) else {
+            return;
+        };
+
+        self.view_tree.process(&layout, &mut self.op_buffer);
+        if self.op_buffer.len() > 0 {
+            (self.callback.completion)(
+                self.op_buffer.as_ptr(),
+                self.op_buffer.len(),
+                self.op_buffer.strings_ptr(),
+                self.op_buffer.strings_len(),
+                self.callback.context,
             );
         }
-    }));
+    }
+}
+
+/// Entry point for the background engine thread.
+///
+/// Creates engine state with an [`IosRenderer`] and runs the WASM module.
+/// The WASM drives its own internal event loop — all commits and op delivery
+/// happen from within via the `__commit` host function, which calls
+/// [`EngineRenderer::on_commit`]. When the WASM loop exits, all engine state
+/// drops and the UIKit sub-tree is released.
+fn run_engine(base_url: String, wasm_bytes: Vec<u8>, func_name: String, cb: SendCallback) {
+    let renderer = IosRenderer {
+        view_tree: ViewTree::new(),
+        op_buffer: OpBuffer::new(),
+        callback: cb,
+    };
+    let state = RuntimeState::with_renderer(base_url, renderer);
 
     // Blocks until WASM's own event loop exits.
     let _ = wasmtime_engine::run_wasm(state, &wasm_bytes, &func_name);

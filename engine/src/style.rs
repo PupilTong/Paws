@@ -96,9 +96,9 @@ fn build_device() -> Device {
 /// Parses only the new property value (not the entire block) and merges it
 /// into the existing `PropertyDeclarationBlock`, avoiding the overhead of
 /// serializing and re-parsing the full style attribute.
-pub(crate) fn update_inline_style(
+pub(crate) fn update_inline_style<S: Default + Send + 'static>(
     context: &StyleContext,
-    element: &mut PawsElement,
+    element: &mut PawsElement<S>,
     name: &str,
     value: &str,
 ) {
@@ -145,10 +145,10 @@ pub(crate) fn update_inline_style(
     element.style_attribute = Some(Arc::new(lock.wrap(block)));
 }
 
-pub(crate) fn compute_style_for_node(
-    _doc: &crate::dom::Document,
+pub(crate) fn compute_style_for_node<S: Default + Send + 'static>(
+    _doc: &crate::dom::Document<S>,
     style_context: &StyleContext,
-    node: &PawsElement,
+    node: &PawsElement<S>,
     parent_style: Option<&ComputedValues>,
 ) -> Arc<ComputedValues> {
     let lock = &style_context.lock;
@@ -174,13 +174,13 @@ pub(crate) fn compute_style_for_node(
     let animations = Default::default();
     let mut match_results = smallvec::SmallVec::new();
 
-    // push_applicable_declarations args using &PawsElement
+    // push_applicable_declarations args using &PawsElement<S>
     style_context
         .stylist
-        .push_applicable_declarations::<&PawsElement>(
+        .push_applicable_declarations::<&PawsElement<S>>(
             node,
             None,
-            <&PawsElement as TElement>::style_attribute(&node),
+            <&PawsElement<S> as TElement>::style_attribute(&node),
             None,
             animations,
             RuleInclusion::All,

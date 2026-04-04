@@ -38,9 +38,12 @@ impl std::error::Error for DomError {}
 /// Taffy's layout traits (`TraversePartialTree`, `LayoutPartialTree`, etc.)
 /// are implemented on this type in the `layout::block` module (the "fat tree"
 /// pattern inspired by Blitz).
-pub struct Document {
+///
+/// The type parameter `S` is the per-node render state for the
+/// [`EngineRenderer`](crate::EngineRenderer) backend. Tests use `()`.
+pub struct Document<S: Default + Send + 'static = ()> {
     /// A slab-backed tree of nodes
-    pub(crate) nodes: Box<Slab<PawsElement>>,
+    pub(crate) nodes: Box<Slab<PawsElement<S>>>,
 
     /// Stylo shared lock
     pub(crate) guard: SharedRwLock,
@@ -59,12 +62,19 @@ pub struct Document {
     ///
     /// Created eagerly in [`Document::new`] and reused across layout passes.
     pub(crate) text_cx: TextLayoutContext,
+
+    /// Render states captured from nodes removed since last commit.
+    ///
+    /// When a node is removed from the slab, its `render_state` is saved here
+    /// so the [`EngineRenderer`](crate::EngineRenderer) can emit release ops.
+    /// Cleared after each commit.
+    pub(crate) removed_render_states: Vec<(taffy::NodeId, S)>,
 }
 
-impl Document {
+impl<S: Default + Send + 'static> Document<S> {
     pub(crate) fn new(guard: SharedRwLock, url: url::Url) -> Self {
         let mut nodes = Box::new(Slab::new());
-        let slab_ptr = nodes.as_mut() as *mut Slab<PawsElement>;
+        let slab_ptr = nodes.as_mut() as *mut Slab<PawsElement<S>>;
 
         // Create root node (Document)
         let root_entry = nodes.vacant_entry();
@@ -88,36 +98,50 @@ impl Document {
             stylesheets: Vec::new(),
             url,
             text_cx: TextLayoutContext::new(),
+            removed_render_states: Vec::new(),
         }
     }
 
     #[allow(dead_code)]
-    pub(crate) fn tree(&self) -> &Slab<PawsElement> {
+    pub(crate) fn tree(&self) -> &Slab<PawsElement<S>> {
         &self.nodes
     }
 
-    pub fn get_node(&self, id: taffy::NodeId) -> Option<&PawsElement> {
+    /// Returns the first element child of the document root.
+    ///
+    /// This is the "root element" used for layout — the document node
+    /// itself is not a styled element.
+    pub fn root_element_id(&self) -> Option<taffy::NodeId> {
+        self.get_node(self.root).and_then(|root| {
+            root.children
+                .iter()
+                .copied()
+                .find(|&id| self.get_node(id).is_some_and(|n| n.is_element()))
+        })
+    }
+
+    pub fn get_node(&self, id: taffy::NodeId) -> Option<&PawsElement<S>> {
         self.nodes.get(u64::from(id) as usize)
     }
 
-    pub(crate) fn get_node_mut(&mut self, id: taffy::NodeId) -> Option<&mut PawsElement> {
+    pub fn get_node_mut(&mut self, id: taffy::NodeId) -> Option<&mut PawsElement<S>> {
         self.nodes.get_mut(u64::from(id) as usize)
     }
 
     /// Panicking accessor for layout passes. Use `get_node` for fallible access.
     #[inline]
-    pub(crate) fn node(&self, id: taffy::NodeId) -> &PawsElement {
+    pub(crate) fn node(&self, id: taffy::NodeId) -> &PawsElement<S> {
         self.get_node(id).expect("valid node id during layout")
     }
 
     /// Panicking mutable accessor for layout passes. Use `get_node_mut` for fallible access.
     #[inline]
-    pub(crate) fn node_mut(&mut self, id: taffy::NodeId) -> &mut PawsElement {
+    pub(crate) fn node_mut(&mut self, id: taffy::NodeId) -> &mut PawsElement<S> {
         self.get_node_mut(id).expect("valid node id during layout")
     }
 
     pub(crate) fn create_node(&mut self, node_type: NodeType) -> taffy::NodeId {
-        let slab_ptr = self.nodes.as_mut() as *mut Slab<PawsElement>;
+        let slab_ptr = self.nodes.as_mut() as *mut Slab<PawsElement<S>>;
         let guard = self.guard.clone();
 
         let entry = self.nodes.vacant_entry();
@@ -204,7 +228,7 @@ impl Document {
     fn traverse_nodes_dfs_mut(
         &mut self,
         node_id: taffy::NodeId,
-        mut f: impl FnMut(&mut PawsElement),
+        mut f: impl FnMut(&mut PawsElement<S>),
     ) {
         let mut stack = vec![node_id];
         while let Some(id) = stack.pop() {
@@ -215,7 +239,7 @@ impl Document {
         }
     }
 
-    fn traverse_nodes_dfs(&self, node_id: taffy::NodeId, mut f: impl FnMut(&PawsElement)) {
+    fn traverse_nodes_dfs(&self, node_id: taffy::NodeId, mut f: impl FnMut(&PawsElement<S>)) {
         let mut stack = vec![node_id];
         while let Some(id) = stack.pop() {
             if let Some(node) = self.get_node(id) {
@@ -397,7 +421,9 @@ impl Document {
         for node_id in to_remove {
             let index = u64::from(node_id) as usize;
             if self.nodes.contains(index) {
-                self.nodes.remove(index);
+                let removed = self.nodes.remove(index);
+                self.removed_render_states
+                    .push((node_id, removed.render_state));
             }
         }
         Ok(())

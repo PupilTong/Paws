@@ -4,7 +4,7 @@ pub mod wasm;
 
 pub use wasm::{build_linker, read_cstr};
 
-use engine::RuntimeState;
+use engine::{EngineRenderer, RuntimeState};
 use wasmtime::{Engine as WasmEngine, MemoryType, Module, SharedMemory, Store};
 
 /// Create a [`wasmtime::Engine`] configured for the current platform.
@@ -31,14 +31,14 @@ pub fn create_engine() -> WasmEngine {
 /// Error returned by [`run_wasm`] when WASM execution fails.
 ///
 /// Contains the recovered `RuntimeState` so the caller can reuse it.
-pub struct RunWasmError {
+pub struct RunWasmError<R: EngineRenderer = ()> {
     /// The `RuntimeState` recovered from the wasmtime `Store`.
-    pub state: RuntimeState,
+    pub state: RuntimeState<R>,
     /// The underlying error.
     pub error: anyhow::Error,
 }
 
-impl std::fmt::Debug for RunWasmError {
+impl<R: EngineRenderer> std::fmt::Debug for RunWasmError<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunWasmError")
             .field("error", &self.error)
@@ -49,11 +49,11 @@ impl std::fmt::Debug for RunWasmError {
 /// Compiles and runs a binary WASM module against a [`RuntimeState`].
 ///
 /// The `RuntimeState` is always recovered, even on error.
-pub fn run_wasm(
-    state: RuntimeState,
+pub fn run_wasm<R: EngineRenderer>(
+    state: RuntimeState<R>,
     wasm_bytes: &[u8],
     func_name: &str,
-) -> Result<RuntimeState, Box<RunWasmError>> {
+) -> Result<RuntimeState<R>, Box<RunWasmError<R>>> {
     let engine = create_engine();
     let module = match Module::new(&engine, wasm_bytes) {
         Ok(m) => m,
@@ -112,9 +112,10 @@ mod tests {
         let _ = state.set_inline_style(id, "height".to_string(), "80px".to_string());
         let _ = state.set_inline_style(id, "width".to_string(), "120px".to_string());
 
-        let layout = state.commit();
-        assert_eq!(layout.width, 120.0);
-        assert_eq!(layout.height, 80.0);
+        state.commit();
+        let node = state.doc.get_node(engine::NodeId::from(id as u64)).unwrap();
+        assert_eq!(node.layout().size.width, 120.0);
+        assert_eq!(node.layout().size.height, 80.0);
     }
 
     #[test]
@@ -680,9 +681,14 @@ mod tests {
 
         // Verify that commit also computed layout (re-commit is a no-op
         // style-wise but returns the same layout tree)
-        let layout = store.data_mut().commit();
-        assert_eq!(layout.width, 150.0);
-        assert_eq!(layout.height, 75.0);
+        store.data_mut().commit();
+        let node = store
+            .data()
+            .doc
+            .get_node(engine::NodeId::from(1_u64))
+            .unwrap();
+        assert_eq!(node.layout().size.width, 150.0);
+        assert_eq!(node.layout().size.height, 75.0);
     }
 
     // -----------------------------------------------------------------------

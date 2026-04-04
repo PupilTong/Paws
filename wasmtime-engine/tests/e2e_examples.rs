@@ -53,9 +53,14 @@ fn test_styled_element_layout_dimensions() {
     let mut state = run_example("example_styled_element");
 
     // Resolve styles + compute layout
-    let layout = state.commit();
-    assert_eq!(layout.width, 200.0, "div width should be 200px");
-    assert_eq!(layout.height, 100.0, "div height should be 100px");
+    state.commit();
+    let node = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+    assert_eq!(node.layout().size.width, 200.0, "div width should be 200px");
+    assert_eq!(
+        node.layout().size.height,
+        100.0,
+        "div height should be 100px"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -98,8 +103,13 @@ fn test_nested_elements_parent_child() {
 fn test_stylesheet_cascade_height() {
     let mut state = run_example("example_stylesheet_cascade");
 
-    let layout = state.commit();
-    assert_eq!(layout.height, 77.0, "cascaded height should be 77px");
+    state.commit();
+    let node = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+    assert_eq!(
+        node.layout().size.height,
+        77.0,
+        "cascaded height should be 77px"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -111,9 +121,11 @@ fn test_parsed_stylesheet_display_flex() {
     let mut state = run_example("example_parsed_stylesheet");
 
     // Trigger style resolution
-    let layout = state.commit();
+    state.commit();
+    let node = state.doc.get_node(NodeId::from(1_u64)).unwrap();
     assert_eq!(
-        layout.width, 200.0,
+        node.layout().size.width,
+        200.0,
         "width should be 200px from parsed stylesheet"
     );
 
@@ -191,10 +203,15 @@ fn test_commit_full_pipeline() {
     let mut state = run_example("example_commit_full");
 
     // commit() was already called inside the wasm module, but we can call
-    // it again (idempotent) to get the LayoutBox
-    let layout = state.commit();
-    assert_eq!(layout.width, 300.0, "div width should be 300px");
-    assert_eq!(layout.height, 150.0, "div height should be 150px");
+    // it again (idempotent) to verify layout
+    state.commit();
+    let node = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+    assert_eq!(node.layout().size.width, 300.0, "div width should be 300px");
+    assert_eq!(
+        node.layout().size.height,
+        150.0,
+        "div height should be 150px"
+    );
 }
 
 // -----------------------------------------------------------------------

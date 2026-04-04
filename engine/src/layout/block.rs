@@ -74,13 +74,39 @@ impl Default for LayoutBox {
 /// Layout data is written directly onto DOM nodes (`PawsElement` fields:
 /// `layout_cache`, `unrounded_layout`, `final_layout`). Text leaf nodes are
 /// measured via the `Document`'s embedded [`TextLayoutContext`].
-pub fn compute_layout(doc: &mut Document, root_id: NodeId) -> Option<LayoutBox> {
+pub fn compute_layout<S: Default + Send + 'static>(
+    doc: &mut Document<S>,
+    root_id: NodeId,
+) -> Option<LayoutBox> {
     // Bail early if the root node has no style.
     doc.get_node(root_id).and_then(|n| n.taffy_style.as_ref())?;
 
     compute_root_layout(doc, root_id, Size::MAX_CONTENT);
     round_layout(doc, root_id);
     extract_layout_tree(doc, root_id)
+}
+
+/// Computes layout in-place on the Document tree without extracting a LayoutBox.
+///
+/// Layout data is written directly onto DOM nodes (`PawsElement` fields:
+/// `layout_cache`, `unrounded_layout`, `final_layout`). This is the preferred
+/// API — use [`compute_layout`] only if you need a detached `LayoutBox` tree.
+///
+/// Returns `true` if layout was computed, `false` if the root node has no style.
+pub fn compute_layout_in_place<S: Default + Send + 'static>(
+    doc: &mut Document<S>,
+    root_id: NodeId,
+) -> bool {
+    if doc
+        .get_node(root_id)
+        .and_then(|n| n.taffy_style.as_ref())
+        .is_none()
+    {
+        return false;
+    }
+    compute_root_layout(doc, root_id, Size::MAX_CONTENT);
+    round_layout(doc, root_id);
+    true
 }
 
 // ─── ChildIter ───────────────────────────────────────────────────────
@@ -99,7 +125,7 @@ impl Iterator for ChildIter<'_> {
 
 // ─── TraversePartialTree ─────────────────────────────────────────────
 
-impl taffy::TraversePartialTree for Document {
+impl<S: Default + Send + 'static> taffy::TraversePartialTree for Document<S> {
     type ChildIter<'a> = ChildIter<'a>;
 
     #[inline]
@@ -120,11 +146,11 @@ impl taffy::TraversePartialTree for Document {
 
 // ─── TraverseTree (marker) ───────────────────────────────────────────
 
-impl taffy::TraverseTree for Document {}
+impl<S: Default + Send + 'static> taffy::TraverseTree for Document<S> {}
 
 // ─── LayoutPartialTree ───────────────────────────────────────────────
 
-impl taffy::LayoutPartialTree for Document {
+impl<S: Default + Send + 'static> taffy::LayoutPartialTree for Document<S> {
     type CoreContainerStyle<'a> = &'a taffy::Style;
 
     type CustomIdent = String;
@@ -188,7 +214,11 @@ impl taffy::LayoutPartialTree for Document {
 }
 
 /// Computes layout for a text leaf node using the Parley text layout context.
-fn compute_text_leaf(doc: &mut Document, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
+fn compute_text_leaf<S: Default + Send + 'static>(
+    doc: &mut Document<S>,
+    node_id: NodeId,
+    inputs: LayoutInput,
+) -> LayoutOutput {
     let node = doc.node(node_id);
     let (font_size, font_weight) = node
         .computed_values
@@ -231,7 +261,7 @@ fn compute_text_leaf(doc: &mut Document, node_id: NodeId, inputs: LayoutInput) -
 
 // ─── CacheTree ───────────────────────────────────────────────────────
 
-impl CacheTree for Document {
+impl<S: Default + Send + 'static> CacheTree for Document<S> {
     fn cache_get(
         &self,
         node_id: NodeId,
@@ -267,7 +297,7 @@ impl CacheTree for Document {
 
 // ─── LayoutFlexboxContainer ──────────────────────────────────────────
 
-impl taffy::LayoutFlexboxContainer for Document {
+impl<S: Default + Send + 'static> taffy::LayoutFlexboxContainer for Document<S> {
     type FlexboxContainerStyle<'a> = &'a taffy::Style;
 
     type FlexboxItemStyle<'a> = &'a taffy::Style;
@@ -289,7 +319,7 @@ impl taffy::LayoutFlexboxContainer for Document {
 
 // ─── LayoutGridContainer ─────────────────────────────────────────────
 
-impl taffy::LayoutGridContainer for Document {
+impl<S: Default + Send + 'static> taffy::LayoutGridContainer for Document<S> {
     type GridContainerStyle<'a> = &'a taffy::Style;
 
     type GridItemStyle<'a> = &'a taffy::Style;
@@ -311,7 +341,7 @@ impl taffy::LayoutGridContainer for Document {
 
 // ─── LayoutBlockContainer ────────────────────────────────────────────
 
-impl taffy::LayoutBlockContainer for Document {
+impl<S: Default + Send + 'static> taffy::LayoutBlockContainer for Document<S> {
     type BlockContainerStyle<'a> = &'a taffy::Style;
 
     type BlockItemStyle<'a> = &'a taffy::Style;
@@ -333,7 +363,7 @@ impl taffy::LayoutBlockContainer for Document {
 
 // ─── RoundTree ───────────────────────────────────────────────────────
 
-impl taffy::RoundTree for Document {
+impl<S: Default + Send + 'static> taffy::RoundTree for Document<S> {
     fn get_unrounded_layout(&self, node_id: NodeId) -> Layout {
         self.node(node_id).unrounded_layout
     }
@@ -346,7 +376,10 @@ impl taffy::RoundTree for Document {
 // ─── Result extraction ───────────────────────────────────────────────
 
 /// Recursively extracts the positioned layout tree from DOM nodes.
-fn extract_layout_tree(doc: &Document, node_id: NodeId) -> Option<LayoutBox> {
+fn extract_layout_tree<S: Default + Send + 'static>(
+    doc: &Document<S>,
+    node_id: NodeId,
+) -> Option<LayoutBox> {
     let node = doc.get_node(node_id)?;
     node.taffy_style.as_ref()?;
 
@@ -406,7 +439,7 @@ mod tests {
     #[test]
     fn test_compute_layout_extract_tree() {
         let guard = SharedRwLock::new();
-        let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
+        let mut doc: Document = Document::new(guard, Url::parse("http://test.com").unwrap());
 
         let elem1 = doc.create_element(QualName::new(None, "".into(), "div".into()));
         doc.append_child(doc.root, elem1).unwrap();
@@ -427,7 +460,7 @@ mod tests {
     #[test]
     fn test_layout_no_style_returns_none() {
         let guard = SharedRwLock::new();
-        let mut doc = Document::new(guard, Url::parse("http://test.com").unwrap());
+        let mut doc: Document = Document::new(guard, Url::parse("http://test.com").unwrap());
 
         // Don't resolve styles — taffy_style will be None.
         let el = doc.create_element(QualName::new(None, "".into(), "div".into()));
@@ -594,7 +627,8 @@ mod tests {
         let text = state.create_text_node("Layout test".to_string());
         state.append_element(div, text).unwrap();
 
-        let layout = state.commit();
+        state.commit();
+        let layout = compute_layout(&mut state.doc, NodeId::from(div as u64)).unwrap();
         assert!(layout.width > 0.0);
         assert!(!layout.children.is_empty(), "div should have text child");
         let text_child = &layout.children[0];

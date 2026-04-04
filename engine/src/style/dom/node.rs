@@ -4,7 +4,7 @@ use style::dom::{NodeInfo, OpaqueNode, TNode};
 
 use crate::dom::{NodeFlags, NodeType, PawsElement};
 
-impl NodeInfo for &PawsElement {
+impl<S: Default + Send + 'static> NodeInfo for &PawsElement<S> {
     fn is_element(&self) -> bool {
         self.node_type == NodeType::Element
     }
@@ -14,10 +14,10 @@ impl NodeInfo for &PawsElement {
     }
 }
 
-impl<'a> TNode for &'a PawsElement {
-    type ConcreteElement = &'a PawsElement;
-    type ConcreteDocument = &'a PawsElement;
-    type ConcreteShadowRoot = &'a PawsElement;
+impl<'a, S: Default + Send + 'static> TNode for &'a PawsElement<S> {
+    type ConcreteElement = &'a PawsElement<S>;
+    type ConcreteDocument = &'a PawsElement<S>;
+    type ConcreteShadowRoot = &'a PawsElement<S>;
 
     fn parent_node(&self) -> Option<Self> {
         self.parent.map(|id| self.with(id))
@@ -75,7 +75,7 @@ impl<'a> TNode for &'a PawsElement {
         }
     }
 
-    fn as_shadow_root(&self) -> Option<&'a PawsElement> {
+    fn as_shadow_root(&self) -> Option<&'a PawsElement<S>> {
         if self.node_type == NodeType::ShadowRoot {
             Some(self)
         } else {
@@ -84,7 +84,7 @@ impl<'a> TNode for &'a PawsElement {
     }
 
     fn opaque(&self) -> OpaqueNode {
-        let ptr: *const PawsElement = *self;
+        let ptr: *const PawsElement<S> = *self;
         // SAFETY: OpaqueNode is a newtype around usize, used as an opaque identity token
         // by Stylo. We transmute a valid pointer-as-usize into OpaqueNode. The value is
         // only used for identity comparison, never dereferenced back to a pointer by Stylo.
