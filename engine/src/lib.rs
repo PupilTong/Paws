@@ -5,7 +5,7 @@ pub mod layout;
 mod runtime;
 mod style;
 
-pub use layout::{compute_layout, compute_layout_in_place, LayoutBox};
+pub use layout::{compute_layout, compute_layout_in_place, LayoutBox, PaintLayer};
 pub use runtime::{EngineRenderer, HostErrorCode, RuntimeState};
 pub use style::typed_om::{CSSKeywordValue, CSSStyleValue, CSSUnitValue, StylePropertyMapReadOnly};
 pub use taffy::NodeId;

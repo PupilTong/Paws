@@ -23,6 +23,8 @@ Layout Module Architecture & Socratic Reasoning
 */
 
 pub(crate) mod block;
+pub(crate) mod stacking;
 pub(crate) mod text;
 
 pub use block::{compute_layout, compute_layout_in_place, LayoutBox};
+pub use stacking::PaintLayer;
