@@ -1516,4 +1516,92 @@ mod tests {
         assert_eq!(r2, HostErrorCode::InvalidChild.as_i32());
         assert_eq!(r3, HostErrorCode::InvalidChild.as_i32());
     }
+
+    #[test]
+    fn wasm_create_text_node_and_commit() {
+        // E2E test: create a div, create a text node, append text to div,
+        // commit, and verify text node appears in the layout with content.
+        let wat = r#"
+(module
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__create_text_node" (func $text (param i32) (result i32)))
+    (import "env" "__set_inline_style" (func $style (param i32 i32 i32) (result i32)))
+    (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+    (import "env" "__commit" (func $commit (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (data (i32.const 16) "width\00")
+    (data (i32.const 32) "200px\00")
+    (data (i32.const 48) "Hello Paws\00")
+    (global $div_id (mut i32) (i32.const 0))
+    (global $txt_id (mut i32) (i32.const 0))
+    (export "div_id" (global $div_id))
+    (export "txt_id" (global $txt_id))
+    (func (export "run") (result i32)
+        ;; Create div with width
+        (global.set $div_id (call $create (i32.const 0)))
+        (drop (call $append (i32.const 0) (global.get $div_id)))
+        (drop (call $style (global.get $div_id) (i32.const 16) (i32.const 32)))
+        ;; Create text node and append to div
+        (global.set $txt_id (call $text (i32.const 48)))
+        (drop (call $append (global.get $div_id) (global.get $txt_id)))
+        ;; Commit triggers style + layout
+        (drop (call $commit))
+        (i32.const 0)
+    )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        run.call(&mut store, ()).expect("run");
+
+        let div_id = instance
+            .get_global(&mut store, "div_id")
+            .unwrap()
+            .get(&mut store)
+            .i32()
+            .unwrap();
+        let txt_id = instance
+            .get_global(&mut store, "txt_id")
+            .unwrap()
+            .get(&mut store)
+            .i32()
+            .unwrap();
+
+        // Verify text node exists in the DOM
+        let state = store.data();
+        let text_node = state
+            .doc
+            .get_node(engine::NodeId::from(txt_id as u64))
+            .expect("text node should exist");
+        assert!(text_node.is_text_node());
+
+        // Verify layout includes text node with non-zero dimensions
+        let state = store.data_mut();
+        state.doc.resolve_style(&state.style_context);
+        let layout =
+            engine::layout::compute_layout(&mut state.doc, engine::NodeId::from(div_id as u64))
+                .expect("layout should compute");
+        assert!(!layout.children.is_empty(), "div should have text child");
+        let text_box = &layout.children[0];
+        assert!(text_box.is_text, "child should be a text node");
+        assert_eq!(
+            text_box.text_content.as_deref(),
+            Some("Hello Paws"),
+            "LayoutBox should carry text content"
+        );
+        assert!(text_box.width > 0.0, "text should have positive width");
+        assert!(text_box.height > 0.0, "text should have positive height");
+    }
 }

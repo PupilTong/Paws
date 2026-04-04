@@ -1,0 +1,62 @@
+name: iOS Tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim,wasm32-wasip1-threads
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Rust static library for iOS Simulator
+        run: cargo build -p ios-renderer-backend --target aarch64-apple-ios-sim --release
+
+      - name: Boot iOS Simulator
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          for runtime, devices in data['devices'].items():
+              if 'iOS' in runtime:
+                  for d in devices:
+                      if 'iPhone' in d['name'] and d['isAvailable']:
+                          print(d['udid'])
+                          sys.exit(0)
+          sys.exit(1)
+          ")
+          xcrun simctl boot "$DEVICE" || true
+          echo "DEVICE_UDID=$DEVICE" >> "$GITHUB_ENV"
+
+      - name: Run Xcode tests
+        run: |
+          xcodebuild test \
+            -project ios-example-app/PawsExample.xcodeproj \
+            -scheme PawsExample \
+            -destination "platform=iOS Simulator,id=$DEVICE_UDID" \
+            -resultBundlePath TestResults \
+            CODE_SIGNING_ALLOWED=NO \
+            LIBRARY_SEARCH_PATHS="$(pwd)/target/aarch64-apple-ios-sim/release" \
+            | xcpretty || true
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results
+          path: TestResults

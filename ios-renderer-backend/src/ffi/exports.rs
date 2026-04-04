@@ -136,6 +136,38 @@ pub extern "C" fn paws_renderer_post_run_wasm(
     }
 }
 
+/// Starts the rendering pipeline using WAT (WebAssembly Text) source.
+///
+/// Compiles the WAT text to WASM bytes and runs the module. This is a
+/// convenience function for testing — production code should use
+/// [`paws_renderer_post_run_wasm`] with pre-compiled WASM bytes.
+///
+/// Returns `0` on success, or a negative error code.
+#[no_mangle]
+pub extern "C" fn paws_renderer_post_run_wat(
+    renderer: *mut PawsRenderer,
+    wat_text: *const c_char,
+    func_name: *const c_char,
+) -> i32 {
+    let renderer = get_renderer!(renderer);
+    let wat_str = get_cstr!(wat_text);
+    let func_str = get_cstr!(func_name);
+
+    let wasm_bytes = match wat::parse_str(wat_str) {
+        Ok(bytes) => bytes,
+        Err(_) => return RendererError::EngineFailed.as_i32(),
+    };
+
+    if renderer
+        .engine
+        .post_run_wasm(wasm_bytes.to_vec(), func_str.to_string())
+    {
+        0
+    } else {
+        RendererError::EngineFailed.as_i32()
+    }
+}
+
 /// Converts a raw renderer pointer to a mutable reference.
 ///
 /// Returns `None` if the pointer is null.
@@ -267,6 +299,49 @@ mod tests {
             wasm_bytes.len(),
             func.as_ptr(),
         );
+        assert_eq!(result, RendererError::InvalidHandle.as_i32());
+
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_post_run_wat_success() {
+        let renderer = create_test_renderer();
+        let wat = CString::new(crate::test_util::make_wat_module()).unwrap();
+        let func = CString::new("run").unwrap();
+
+        let result = paws_renderer_post_run_wat(renderer, wat.as_ptr(), func.as_ptr());
+        assert_eq!(result, 0, "post_run_wat should succeed");
+
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_post_run_wat_invalid_syntax() {
+        let renderer = create_test_renderer();
+        let bad_wat = CString::new("not valid wat").unwrap();
+        let func = CString::new("run").unwrap();
+
+        let result = paws_renderer_post_run_wat(renderer, bad_wat.as_ptr(), func.as_ptr());
+        assert_eq!(
+            result,
+            RendererError::EngineFailed.as_i32(),
+            "invalid WAT should return EngineFailed"
+        );
+
+        paws_renderer_destroy(renderer);
+    }
+
+    #[test]
+    fn test_post_run_wat_null_params() {
+        let renderer = create_test_renderer();
+        let func = CString::new("run").unwrap();
+
+        let result = paws_renderer_post_run_wat(renderer, std::ptr::null(), func.as_ptr());
+        assert_eq!(result, RendererError::InvalidHandle.as_i32());
+
+        let wat = CString::new("(module)").unwrap();
+        let result = paws_renderer_post_run_wat(renderer, wat.as_ptr(), std::ptr::null());
         assert_eq!(result, RendererError::InvalidHandle.as_i32());
 
         paws_renderer_destroy(renderer);

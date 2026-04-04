@@ -8,25 +8,27 @@
 //! 5. Op-codes are sent to Swift's main thread for UIKit execution
 //!
 //! The op-code buffer is a flat array of 32-byte slots passed via a
-//! completion callback. Swift's `OpExecutor` decodes and executes them.
+//! completion callback. Variable-length text content is passed alongside
+//! in a separate string table buffer.
 
 mod error;
 pub(crate) mod ffi;
-// TODO: ops and renderer are temporarily unused at the crate root because
-// op delivery is not yet wired into __commit. They are still tested
-// independently and will be re-integrated when __commit delivers ops.
-#[allow(dead_code)]
 mod ops;
-#[allow(dead_code)]
 mod renderer;
 mod thread;
 
 /// Shared test utilities used by `thread::tests` and `ffi::exports::tests`.
 #[cfg(test)]
 pub(crate) mod test_util {
-    /// No-op completion callback. Op delivery from `__commit` is not yet wired,
-    /// so this is never called in the current implementation.
-    pub(crate) extern "C" fn noop_completion(_: *const u8, _: usize, _: *mut std::ffi::c_void) {}
+    /// No-op completion callback for tests.
+    pub(crate) extern "C" fn noop_completion(
+        _ops: *const u8,
+        _ops_len: usize,
+        _strings: *const u8,
+        _strings_len: usize,
+        _ctx: *mut std::ffi::c_void,
+    ) {
+    }
 
     /// WAT module that creates a styled div and commits.
     ///

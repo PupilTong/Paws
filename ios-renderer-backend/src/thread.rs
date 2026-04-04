@@ -20,14 +20,26 @@ use std::thread;
 
 use engine::RuntimeState;
 
+use crate::ops::OpBuffer;
+use crate::renderer::ViewTree;
+
 /// Completion callback type.
 ///
 /// Called from the background thread each time the engine commits a frame.
-/// `ops_ptr` points to a buffer of 32-byte op-code slots valid only for the
-/// duration of the call — Swift must copy or process it before returning and
-/// must dispatch all UIKit mutations to the main queue.
-pub(crate) type CompletionFn =
-    extern "C" fn(ops_ptr: *const u8, ops_len: usize, ctx: *mut std::ffi::c_void);
+/// - `ops_ptr` / `ops_len`: buffer of 32-byte op-code slots
+/// - `strings_ptr` / `strings_len`: UTF-8 string table referenced by text ops
+/// - `ctx`: opaque pointer passed from Swift (typically `Unmanaged<OpExecutor>`)
+///
+/// Both buffers are valid only for the duration of the call — Swift must copy
+/// or process them before returning and must dispatch all UIKit mutations to
+/// the main queue.
+pub(crate) type CompletionFn = extern "C" fn(
+    ops_ptr: *const u8,
+    ops_len: usize,
+    strings_ptr: *const u8,
+    strings_len: usize,
+    ctx: *mut std::ffi::c_void,
+);
 
 /// Bundles the completion callback and its opaque context pointer for
 /// cross-thread transfer.
@@ -126,17 +138,38 @@ impl Drop for EngineHandle {
 
 /// Entry point for the background engine thread.
 ///
-/// Creates engine state and runs the WASM module. The WASM drives its own
+/// Creates engine state, wires the commit hook to deliver ops via the
+/// completion callback, and runs the WASM module. The WASM drives its own
 /// internal event loop — all commits and op delivery happen from within via
 /// the `__commit` host function. When the WASM loop exits, all engine state
 /// drops and the UIKit sub-tree is released.
-fn run_engine(base_url: String, wasm_bytes: Vec<u8>, func_name: String, _cb: SendCallback) {
-    let state = RuntimeState::new(base_url);
+fn run_engine(base_url: String, wasm_bytes: Vec<u8>, func_name: String, cb: SendCallback) {
+    let mut state = RuntimeState::new(base_url);
+
+    // Wire the commit hook: ViewTree + OpBuffer live on the engine thread.
+    // Each __commit call processes the LayoutBox tree and delivers ops.
+    let mut view_tree = ViewTree::new();
+    let mut op_buffer = OpBuffer::new();
+
+    // SAFETY: `cb` is a SendCallback (Send impl above) — the context pointer
+    // is only forwarded to the completion callback which dispatches to main queue.
+    // We capture `cb` as a whole (not individual fields) so Rust sees the
+    // Send impl on the struct rather than the non-Send *mut c_void field.
+    state.commit_hook = Some(Box::new(move |layout| {
+        let _ = &cb; // Force whole-struct capture
+        view_tree.process(layout, &mut op_buffer);
+        if op_buffer.len() > 0 {
+            (cb.completion)(
+                op_buffer.as_ptr(),
+                op_buffer.len(),
+                op_buffer.strings_ptr(),
+                op_buffer.strings_len(),
+                cb.context,
+            );
+        }
+    }));
 
     // Blocks until WASM's own event loop exits.
-    // WASM calls __commit() internally to trigger style resolution + layout.
-    // TODO: wire ViewTree + OpBuffer + completion callback into __commit
-    // so that op delivery happens from within the WASM loop.
     let _ = wasmtime_engine::run_wasm(state, &wasm_bytes, &func_name);
 }
 

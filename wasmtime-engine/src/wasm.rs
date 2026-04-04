@@ -182,6 +182,27 @@ pub fn build_linker(engine: &WasmEngine) -> Linker<RuntimeState> {
     linker
         .func_wrap(
             "env",
+            "__create_text_node",
+            |mut caller: Caller<'_, RuntimeState>, text_ptr: i32| -> Result<i32> {
+                let text = match read_cstr(&mut caller, text_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                caller.data_mut().clear_error();
+                let id = caller.data_mut().create_text_node(text);
+                Ok(id as i32)
+            },
+        )
+        .expect("link __create_text_node");
+
+    linker
+        .func_wrap(
+            "env",
             "__set_inline_style",
             |mut caller: Caller<'_, RuntimeState>,
              id: i32,

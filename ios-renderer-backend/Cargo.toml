@@ -12,6 +12,7 @@ engine = { path = "../engine" }
 wasmtime-engine = { path = "../wasmtime-engine" }
 stylo = "0.13"
 fnv = "1.0.7"
+wat = "1"
 
 [build-dependencies]
 cbindgen = "0.27"

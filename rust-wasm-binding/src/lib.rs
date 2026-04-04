@@ -27,6 +27,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 #[link(wasm_import_module = "env")]
 extern "C" {
     fn __create_element(name_ptr: *const u8) -> i32;
+    fn __create_text_node(text_ptr: *const u8) -> i32;
     fn __set_inline_style(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
     fn __set_attribute(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
     fn __append_element(parent: i32, child: i32) -> i32;
@@ -139,6 +140,21 @@ pub fn create_element(name: &str) -> Result<i32, i32> {
     // SAFETY: `ptr` points to a null-terminated string in WASM linear memory.
     // The host reads from this memory region during the call.
     let id = unsafe { __create_element(ptr) };
+    if id < 0 {
+        Err(id)
+    } else {
+        Ok(id)
+    }
+}
+
+/// Creates a new DOM text node with the given content.
+///
+/// Returns the node's numeric ID on success, or a negative host error code.
+pub fn create_text_node(text: &str) -> Result<i32, i32> {
+    let ptr = write_cstr(text);
+    // SAFETY: `ptr` points to a null-terminated string in WASM linear memory.
+    // The host reads from this memory region during the call.
+    let id = unsafe { __create_text_node(ptr) };
     if id < 0 {
         Err(id)
     } else {

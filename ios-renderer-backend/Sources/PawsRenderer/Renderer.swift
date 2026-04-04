@@ -17,24 +17,45 @@ import PawsRendererFFI
 
 /// C completion callback — called from the Rust background thread.
 ///
-/// Copies the op buffer and dispatches to the main queue for execution.
+/// Copies the op buffer and string table, then dispatches to the main
+/// queue for execution via `OpExecutor`.
 private func pawsCompletionCallback(
     opsPtr: UnsafePointer<UInt8>?,
     opsLen: Int,
+    stringsPtr: UnsafePointer<UInt8>?,
+    stringsLen: Int,
     ctx: UnsafeMutableRawPointer?
 ) {
     guard let opsPtr = opsPtr, let ctx = ctx, opsLen > 0 else { return }
 
-    // Copy the buffer — it's only valid during this callback invocation.
-    let data = Data(bytes: opsPtr, count: opsLen)
+    // Copy both buffers — they're only valid during this callback invocation.
+    let opsData = Data(bytes: opsPtr, count: opsLen)
+    let stringsData: Data? = if let stringsPtr = stringsPtr, stringsLen > 0 {
+        Data(bytes: stringsPtr, count: stringsLen)
+    } else {
+        nil
+    }
     let executor = Unmanaged<OpExecutor>.fromOpaque(ctx).takeUnretainedValue()
 
     DispatchQueue.main.async {
-        data.withUnsafeBytes { rawBuffer in
+        opsData.withUnsafeBytes { rawBuffer in
             guard let basePtr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
                 return
             }
-            executor.execute(ptr: basePtr, byteCount: opsLen)
+            if let stringsData = stringsData {
+                stringsData.withUnsafeBytes { strBuf in
+                    let strPtr = strBuf.baseAddress?.assumingMemoryBound(to: UInt8.self)
+                    executor.execute(
+                        ptr: basePtr, byteCount: opsLen,
+                        stringsPtr: strPtr, stringsLen: stringsLen
+                    )
+                }
+            } else {
+                executor.execute(
+                    ptr: basePtr, byteCount: opsLen,
+                    stringsPtr: nil, stringsLen: 0
+                )
+            }
         }
     }
 }
@@ -105,6 +126,19 @@ public final class PawsRendererInstance {
         }
         precondition(result == 0, "postRunWasm failed with error code \(result)")
     }
+
+    /// Convenience: compiles WAT text to WASM and runs it.
+    ///
+    /// Primarily for testing — production code should use `postRunWasm`.
+    public func postRunWat(_ watText: String, functionName: String = "run") {
+        let result = watText.withCString { watPtr in
+            functionName.withCString { funcPtr in
+                paws_renderer_post_run_wat(handle, watPtr, funcPtr)
+            }
+        }
+        precondition(result == 0, "postRunWat failed with error code \(result)")
+    }
+
 }
 
 #endif
