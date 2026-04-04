@@ -26,6 +26,7 @@ struct NodeSnapshot {
     kind: ViewKind,
     parent_id: u64,
     parent_kind: ViewKind,
+    child_index: u32,
     x: f32,
     y: f32,
     w: f32,
@@ -66,7 +67,7 @@ impl ViewTree {
     pub(crate) fn process(&mut self, layout: &LayoutBox, ops: &mut OpBuffer) {
         ops.clear();
         let mut current = FnvHashMap::default();
-        self.process_node(layout, u64::MAX, ViewKind::View, true, ops, &mut current);
+        self.process_node(layout, u64::MAX, ViewKind::View, true, 0, ops, &mut current);
 
         // Emit Release ops for nodes removed since last frame.
         for (id, snap) in &self.prev {
@@ -79,12 +80,14 @@ impl ViewTree {
         self.prev = current;
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process_node(
         &self,
         node: &LayoutBox,
         parent_id: u64,
         parent_kind: ViewKind,
         is_root: bool,
+        child_index: u32,
         ops: &mut OpBuffer,
         current: &mut FnvHashMap<u64, NodeSnapshot>,
     ) {
@@ -112,6 +115,7 @@ impl ViewTree {
             kind,
             parent_id,
             parent_kind,
+            child_index,
             x: node.x,
             y: node.y,
             w: node.width,
@@ -141,7 +145,10 @@ impl ViewTree {
                 if prev.x != snap.x || prev.y != snap.y || prev.w != snap.w || prev.h != snap.h {
                     ops.push_set_frame(kind, node_id, snap.x, snap.y, snap.w, snap.h);
                 }
-                if prev.parent_id != parent_id || prev.parent_kind != parent_kind {
+                if prev.parent_id != parent_id
+                    || prev.parent_kind != parent_kind
+                    || prev.child_index != child_index
+                {
                     ops.push_attach(node_id, kind, parent_id, parent_kind);
                 }
 
@@ -182,11 +189,10 @@ impl ViewTree {
 
         current.insert(node_id, snap);
 
-        // Recurse children in z-index order.
-        let mut sorted: Vec<&LayoutBox> = node.children.iter().collect();
-        sorted.sort_unstable_by_key(|c| c.z_index.unwrap_or(0));
-        for child in &sorted {
-            self.process_node(child, node_id, kind, false, ops, current);
+        // Children are already sorted in CSS 2.1 Appendix E paint order by
+        // the engine's stacking context pass. Simple DFS, no allocation.
+        for (idx, child) in node.children.iter().enumerate() {
+            self.process_node(child, node_id, kind, false, idx as u32, ops, current);
         }
     }
 }
@@ -458,20 +464,22 @@ mod tests {
     }
 
     #[test]
-    fn test_z_index_sorting() {
+    fn test_presorted_paint_order_preserved() {
+        // Children are now pre-sorted by the engine's stacking context pass.
+        // The renderer should process them in the order given (plain DFS).
         let mut tree = ViewTree::new();
         let mut ops = OpBuffer::new();
 
-        let mut child_a = layout_with_frame(2, 0.0, 0.0, 10.0, 10.0);
-        child_a.z_index = Some(3);
         let mut child_b = layout_with_frame(3, 0.0, 0.0, 10.0, 10.0);
         child_b.z_index = Some(1);
+        let mut child_a = layout_with_frame(2, 0.0, 0.0, 10.0, 10.0);
+        child_a.z_index = Some(3);
 
+        // Pre-sorted: z-index 1 first, then z-index 3 (engine handles this).
         let mut root = layout(1);
-        root.children = vec![child_a, child_b];
+        root.children = vec![child_b, child_a];
         tree.process(&root, &mut ops);
 
-        // Find the DeclareLayer ops and check their node_ids are in z-order.
         let mut layer_ids = Vec::new();
         for i in 0..ops.op_count() {
             if ops.tag_at(i) == Some(OpTag::DeclareLayer as u8) {
@@ -483,7 +491,30 @@ mod tests {
         assert_eq!(
             layer_ids,
             vec![3, 2],
-            "z-index 1 (node 3) should come before z-index 3 (node 2)"
+            "renderer should process children in pre-sorted order"
+        );
+    }
+
+    #[test]
+    fn test_child_index_change_triggers_reattach() {
+        let mut tree = ViewTree::new();
+        let mut ops = OpBuffer::new();
+
+        // Frame 1: children in order [A, B].
+        let mut root = layout(1);
+        root.children = vec![layout(2), layout(3)];
+        tree.process(&root, &mut ops);
+
+        // Frame 2: children swapped [B, A] (e.g., paint order changed).
+        let mut root2 = layout(1);
+        root2.children = vec![layout(3), layout(2)];
+        tree.process(&root2, &mut ops);
+
+        let tags = collect_tags(&ops);
+        // Both children should get Attach ops due to changed child_index.
+        assert!(
+            tags.contains(&(OpTag::Attach as u8)),
+            "swapped child order should trigger Attach ops"
         );
     }
 

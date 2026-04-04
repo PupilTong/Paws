@@ -48,6 +48,10 @@ pub struct LayoutBox {
     /// Text content for text nodes (`None` for element nodes).
     pub text_content: Option<String>,
     pub children: Vec<LayoutBox>,
+    /// Whether this node establishes a new stacking context.
+    pub creates_stacking_context: bool,
+    /// The CSS 2.1 Appendix E paint layer this node belongs to.
+    pub paint_layer: super::stacking::PaintLayer,
 }
 
 impl Default for LayoutBox {
@@ -63,6 +67,8 @@ impl Default for LayoutBox {
             is_text: false,
             text_content: None,
             children: Vec::new(),
+            creates_stacking_context: false,
+            paint_layer: super::stacking::PaintLayer::default(),
         }
     }
 }
@@ -83,7 +89,13 @@ pub fn compute_layout<S: Default + Send + 'static>(
 
     compute_root_layout(doc, root_id, Size::MAX_CONTENT);
     round_layout(doc, root_id);
-    extract_layout_tree(doc, root_id)
+    let mut tree = extract_layout_tree(doc, root_id)?;
+    super::stacking::apply_paint_order(
+        &mut tree,
+        style::values::specified::box_::Display::None,
+        true,
+    );
+    Some(tree)
 }
 
 /// Computes layout in-place on the Document tree without extracting a LayoutBox.
@@ -423,6 +435,8 @@ fn extract_layout_tree<S: Default + Send + 'static>(
         is_text,
         text_content,
         children,
+        creates_stacking_context: false,
+        paint_layer: super::stacking::PaintLayer::default(),
     })
 }
 
