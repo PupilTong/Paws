@@ -107,10 +107,6 @@ impl<S: Default + Send + 'static> Document<S> {
         &self.nodes
     }
 
-    /// Returns the first element child of the document root.
-    ///
-    /// This is the "root element" used for layout — the document node
-    /// itself is not a styled element.
     /// Returns render states captured from nodes removed since last commit.
     ///
     /// The renderer should process these to emit release/detach ops,

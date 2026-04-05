@@ -383,26 +383,18 @@ fn compute_content_size<S: Default + Send + 'static>(
     doc: &Document<S>,
     node_id: engine::NodeId,
 ) -> (f32, f32) {
-    let node = doc.get_node(node_id).unwrap();
-    let w = node
+    doc.get_node(node_id)
+        .unwrap()
         .children
         .iter()
         .filter_map(|&cid| doc.get_node(cid))
         .map(|c| {
             let l = c.layout();
-            l.location.x + l.size.width
+            (l.location.x + l.size.width, l.location.y + l.size.height)
         })
-        .fold(0.0_f32, f32::max);
-    let h = node
-        .children
-        .iter()
-        .filter_map(|&cid| doc.get_node(cid))
-        .map(|c| {
-            let l = c.layout();
-            l.location.y + l.size.height
+        .fold((0.0, 0.0), |(max_w, max_h), (w, h)| {
+            (max_w.max(w), max_h.max(h))
         })
-        .fold(0.0_f32, f32::max);
-    (w, h)
 }
 
 #[cfg(test)]
