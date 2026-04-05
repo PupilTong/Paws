@@ -4,7 +4,6 @@
 //! pattern). Layout data (cache, unrounded/final layouts) lives on
 //! [`PawsElement`] for persistence across passes (future CSS Containment).
 
-use style::servo_arc::Arc;
 use style::values::computed::length::CSSPixelLength;
 use style::values::computed::length_percentage::CalcLengthPercentage;
 use style::values::specified::font::FONT_MEDIUM_PX;
@@ -20,73 +19,9 @@ use taffy::{
     compute_leaf_layout, compute_root_layout, round_layout, CacheTree,
 };
 
-// ─── Public output type ──────────────────────────────────────────────
-
-/// A fully-resolved layout node with absolute position, size, and children.
-///
-/// Produced by [`compute_layout`] and consumed by the iOS renderer backend's
-/// conversion layer to build `LayoutNode` trees.
-///
-/// Style-derived values (overflow, background color, etc.) are accessible
-/// through [`computed_values`](Self::computed_values) rather than being
-/// extracted into separate fields.
-pub struct LayoutBox {
-    /// The DOM node ID this layout box corresponds to.
-    pub node_id: taffy::NodeId,
-    /// X offset relative to the parent's content box.
-    pub x: f32,
-    /// Y offset relative to the parent's content box.
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    /// Stacking order. `None` means `auto`.
-    pub z_index: Option<i32>,
-    /// The full computed style for this node (overflow, colors, etc.).
-    pub computed_values: Option<Arc<style::properties::ComputedValues>>,
-    /// Whether this node is a text leaf node.
-    pub is_text: bool,
-    /// Text content for text nodes (`None` for element nodes).
-    pub text_content: Option<String>,
-    pub children: Vec<LayoutBox>,
-}
-
-impl Default for LayoutBox {
-    fn default() -> Self {
-        Self {
-            node_id: taffy::NodeId::from(0_u64),
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-            z_index: None,
-            computed_values: None,
-            is_text: false,
-            text_content: None,
-            children: Vec::new(),
-        }
-    }
-}
-
 // ─── Public API ──────────────────────────────────────────────────────
 
-/// Computes layout for a subtree rooted at `root_id`.
-///
-/// Layout data is written directly onto DOM nodes (`PawsElement` fields:
-/// `layout_cache`, `unrounded_layout`, `final_layout`). Text leaf nodes are
-/// measured via the `Document`'s embedded [`TextLayoutContext`].
-pub fn compute_layout<S: Default + Send + 'static>(
-    doc: &mut Document<S>,
-    root_id: NodeId,
-) -> Option<LayoutBox> {
-    // Bail early if the root node has no style.
-    doc.get_node(root_id).and_then(|n| n.taffy_style.as_ref())?;
-
-    compute_root_layout(doc, root_id, Size::MAX_CONTENT);
-    round_layout(doc, root_id);
-    extract_layout_tree(doc, root_id)
-}
-
-/// Computes layout in-place on the Document tree without extracting a LayoutBox.
+/// Computes layout in-place on the Document tree.
 ///
 /// Layout data is written directly onto DOM nodes (`PawsElement` fields:
 /// `layout_cache`, `unrounded_layout`, `final_layout`). This is the preferred
@@ -373,59 +308,6 @@ impl<S: Default + Send + 'static> taffy::RoundTree for Document<S> {
     }
 }
 
-// ─── Result extraction ───────────────────────────────────────────────
-
-/// Recursively extracts the positioned layout tree from DOM nodes.
-fn extract_layout_tree<S: Default + Send + 'static>(
-    doc: &Document<S>,
-    node_id: NodeId,
-) -> Option<LayoutBox> {
-    let node = doc.get_node(node_id)?;
-    node.taffy_style.as_ref()?;
-
-    let layout = &node.final_layout;
-
-    let children: Vec<LayoutBox> = node
-        .children
-        .iter()
-        .filter_map(|&child_id| extract_layout_tree(doc, child_id))
-        .collect();
-
-    // Extract z-index and computed values from the DOM node.
-    let (z_index, computed_values) = node
-        .computed_values
-        .as_ref()
-        .map(|cv| {
-            use style::values::generics::position::ZIndex;
-            let z = match cv.clone_z_index() {
-                ZIndex::Integer(n) => Some(n),
-                ZIndex::Auto => None,
-            };
-            (z, Some(Arc::clone(cv)))
-        })
-        .unwrap_or((None, None));
-
-    let is_text = node.node_type == NodeType::Text;
-    let text_content = if is_text {
-        node.text_content.clone()
-    } else {
-        None
-    };
-
-    Some(LayoutBox {
-        node_id,
-        x: layout.location.x,
-        y: layout.location.y,
-        width: layout.size.width,
-        height: layout.size.height,
-        z_index,
-        computed_values,
-        is_text,
-        text_content,
-        children,
-    })
-}
-
 // ─── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -437,7 +319,7 @@ mod tests {
     use url::Url;
 
     #[test]
-    fn test_compute_layout_extract_tree() {
+    fn test_compute_layout_in_place() {
         let guard = SharedRwLock::new();
         let mut doc: Document = Document::new(guard, Url::parse("http://test.com").unwrap());
 
@@ -451,21 +333,27 @@ mod tests {
         let style_ctx = crate::style::StyleContext::new(url);
         doc.resolve_style(&style_ctx);
 
-        let layout = compute_layout(&mut doc, elem1);
-        assert!(layout.is_some());
-        let layout = layout.unwrap();
-        assert_eq!(layout.children.len(), 1);
+        assert!(compute_layout_in_place(&mut doc, elem1));
+        let node = doc.get_node(elem1).unwrap();
+        // elem1 has one styled child (elem2).
+        assert_eq!(
+            node.children
+                .iter()
+                .filter(|&&c| doc.get_node(c).is_some_and(|n| n.has_style()))
+                .count(),
+            1
+        );
     }
 
     #[test]
-    fn test_layout_no_style_returns_none() {
+    fn test_layout_no_style_returns_false() {
         let guard = SharedRwLock::new();
         let mut doc: Document = Document::new(guard, Url::parse("http://test.com").unwrap());
 
         // Don't resolve styles — taffy_style will be None.
         let el = doc.create_element(QualName::new(None, "".into(), "div".into()));
         doc.append_child(doc.root, el).unwrap();
-        assert!(compute_layout(&mut doc, el).is_none());
+        assert!(!compute_layout_in_place(&mut doc, el));
     }
 
     #[test]
@@ -493,12 +381,12 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(&mut state.doc, NodeId::from(parent as u64)).unwrap();
+        compute_layout_in_place(&mut state.doc, NodeId::from(parent as u64));
 
         // Hidden child should have zero dimensions.
-        let hidden_box = &layout.children[0];
-        assert_eq!(hidden_box.width, 0.0);
-        assert_eq!(hidden_box.height, 0.0);
+        let hidden_node = state.doc.get_node(NodeId::from(hidden as u64)).unwrap();
+        assert_eq!(hidden_node.layout().size.width, 0.0);
+        assert_eq!(hidden_node.layout().size.height, 0.0);
     }
 
     #[test]
@@ -520,9 +408,13 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(&mut state.doc, NodeId::from(grid as u64)).unwrap();
-        assert_eq!(layout.children.len(), 1);
-        assert!(layout.height > 0.0, "grid should have positive height");
+        compute_layout_in_place(&mut state.doc, NodeId::from(grid as u64));
+
+        let grid_node = state.doc.get_node(NodeId::from(grid as u64)).unwrap();
+        assert!(
+            grid_node.layout().size.height > 0.0,
+            "grid should have positive height"
+        );
     }
 
     #[test]
@@ -538,10 +430,11 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(&mut state.doc, NodeId::from(el as u64)).unwrap();
-        assert_eq!(layout.width, 100.0);
-        assert_eq!(layout.height, 60.0);
-        assert!(layout.children.is_empty());
+        compute_layout_in_place(&mut state.doc, NodeId::from(el as u64));
+
+        let node = state.doc.get_node(NodeId::from(el as u64)).unwrap();
+        assert_eq!(node.layout().size.width, 100.0);
+        assert_eq!(node.layout().size.height, 60.0);
     }
 
     #[test]
@@ -563,10 +456,13 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(&mut state.doc, NodeId::from(block as u64)).unwrap();
-        assert_eq!(layout.width, 200.0);
-        assert_eq!(layout.children.len(), 1);
-        assert_eq!(layout.children[0].height, 30.0);
+        compute_layout_in_place(&mut state.doc, NodeId::from(block as u64));
+
+        let block_node = state.doc.get_node(NodeId::from(block as u64)).unwrap();
+        assert_eq!(block_node.layout().size.width, 200.0);
+
+        let child_node = state.doc.get_node(NodeId::from(child as u64)).unwrap();
+        assert_eq!(child_node.layout().size.height, 30.0);
     }
 
     #[test]
@@ -581,11 +477,12 @@ mod tests {
         // Childless leaf — exercises the !has_children branch in compute_child_layout.
         let leaf = state.create_element("div".to_string());
         state.append_element(flex, leaf).unwrap();
-        // No children, no text — pure leaf.
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(&mut state.doc, NodeId::from(flex as u64)).unwrap();
-        assert_eq!(layout.children.len(), 1);
+        assert!(compute_layout_in_place(
+            &mut state.doc,
+            NodeId::from(flex as u64)
+        ));
     }
 
     #[test]
@@ -601,15 +498,19 @@ mod tests {
         state.append_element(div, text).unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        let layout = compute_layout(&mut state.doc, NodeId::from(div as u64)).unwrap();
+        compute_layout_in_place(&mut state.doc, NodeId::from(div as u64));
 
-        // Text child should be present with measured dimensions.
-        assert_eq!(layout.children.len(), 1);
-        let text_box = &layout.children[0];
-        assert!(text_box.is_text, "child should be a text node");
-        assert_eq!(text_box.text_content.as_deref(), Some("Hello Paws"));
-        assert!(text_box.width > 0.0, "text should have positive width");
-        assert!(text_box.height > 0.0, "text should have positive height");
+        let text_node = state.doc.get_node(NodeId::from(text as u64)).unwrap();
+        assert!(text_node.is_text_node(), "child should be a text node");
+        assert_eq!(text_node.text_content.as_deref(), Some("Hello Paws"));
+        assert!(
+            text_node.layout().size.width > 0.0,
+            "text should have positive width"
+        );
+        assert!(
+            text_node.layout().size.height > 0.0,
+            "text should have positive height"
+        );
     }
 
     #[test]
@@ -628,11 +529,12 @@ mod tests {
         state.append_element(div, text).unwrap();
 
         state.commit();
-        let layout = compute_layout(&mut state.doc, NodeId::from(div as u64)).unwrap();
-        assert!(layout.width > 0.0);
-        assert!(!layout.children.is_empty(), "div should have text child");
-        let text_child = &layout.children[0];
-        assert!(text_child.is_text);
-        assert_eq!(text_child.text_content.as_deref(), Some("Layout test"));
+
+        let div_node = state.doc.get_node(NodeId::from(div as u64)).unwrap();
+        assert!(div_node.layout().size.width > 0.0);
+
+        let text_node = state.doc.get_node(NodeId::from(text as u64)).unwrap();
+        assert!(text_node.is_text_node());
+        assert_eq!(text_node.text_content.as_deref(), Some("Layout test"));
     }
 }

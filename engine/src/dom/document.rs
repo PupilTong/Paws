@@ -111,6 +111,18 @@ impl<S: Default + Send + 'static> Document<S> {
     ///
     /// This is the "root element" used for layout — the document node
     /// itself is not a styled element.
+    /// Returns render states captured from nodes removed since last commit.
+    ///
+    /// The renderer should process these to emit release/detach ops,
+    /// then `RuntimeState::commit()` clears them.
+    pub fn removed_render_states(&self) -> &[(taffy::NodeId, S)] {
+        &self.removed_render_states
+    }
+
+    /// Returns the first element child of the document root.
+    ///
+    /// This is the "root element" used for layout — the document node
+    /// itself is not a styled element.
     pub fn root_element_id(&self) -> Option<taffy::NodeId> {
         self.get_node(self.root).and_then(|root| {
             root.children

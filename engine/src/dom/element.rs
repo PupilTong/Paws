@@ -184,6 +184,21 @@ impl<S: Default + Send + 'static> PawsElement<S> {
         })
     }
 
+    /// Returns a reference to the per-node render state for the backend.
+    pub fn render_state(&self) -> &S {
+        &self.render_state
+    }
+
+    /// Replaces the per-node render state.
+    pub fn set_render_state(&mut self, state: S) {
+        self.render_state = state;
+    }
+
+    /// Returns the text content of this node, if any.
+    pub fn text(&self) -> Option<&str> {
+        self.text_content.as_deref()
+    }
+
     /// Returns whether this node has a computed Taffy style (i.e., is a styled element).
     pub fn has_style(&self) -> bool {
         self.taffy_style.is_some()

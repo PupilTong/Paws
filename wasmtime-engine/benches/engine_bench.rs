@@ -38,7 +38,7 @@ fn bench_computed_style(c: &mut Criterion) {
 
     c.bench_function("layout_simple", |b| {
         b.iter(|| {
-            engine::layout::compute_layout(
+            engine::layout::compute_layout_in_place(
                 black_box(&mut state.doc),
                 black_box(engine::NodeId::from(id as u64)),
             );

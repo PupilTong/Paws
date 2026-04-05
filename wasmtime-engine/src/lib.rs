@@ -157,13 +157,12 @@ mod tests {
         let id = run.call(&mut store, ()).expect("run wasm"); // Capture the returned ID
 
         let state = store.data_mut();
-        // Resolve styles first
-        state.doc.resolve_style(&state.style_context);
-
-        let layout =
-            engine::layout::compute_layout(&mut state.doc, engine::NodeId::from(id as u64))
-                .expect("layout");
-        assert_eq!(layout.height, 100.0);
+        state.commit();
+        let node = state
+            .doc
+            .get_node(engine::NodeId::from(id as u64))
+            .expect("node");
+        assert_eq!(node.layout().size.height, 100.0);
     }
 
     #[test]
@@ -482,13 +481,12 @@ mod tests {
         let id = run.call(&mut store, ()).expect("run wasm");
 
         let state = store.data_mut();
-        // Resolve styles first
-        state.doc.resolve_style(&state.style_context);
-
-        let layout =
-            engine::layout::compute_layout(&mut state.doc, engine::NodeId::from(id as u64))
-                .expect("layout");
-        assert_eq!(layout.height, 77.0);
+        state.commit();
+        let node = state
+            .doc
+            .get_node(engine::NodeId::from(id as u64))
+            .expect("node");
+        assert_eq!(node.layout().size.height, 77.0);
     }
 
     #[test]
@@ -1572,7 +1570,7 @@ mod tests {
             .expect("get run");
         run.call(&mut store, ()).expect("run");
 
-        let div_id = instance
+        let _div_id = instance
             .get_global(&mut store, "div_id")
             .unwrap()
             .get(&mut store)
@@ -1595,19 +1593,20 @@ mod tests {
 
         // Verify layout includes text node with non-zero dimensions
         let state = store.data_mut();
-        state.doc.resolve_style(&state.style_context);
-        let layout =
-            engine::layout::compute_layout(&mut state.doc, engine::NodeId::from(div_id as u64))
-                .expect("layout should compute");
-        assert!(!layout.children.is_empty(), "div should have text child");
-        let text_box = &layout.children[0];
-        assert!(text_box.is_text, "child should be a text node");
-        assert_eq!(
-            text_box.text_content.as_deref(),
-            Some("Hello Paws"),
-            "LayoutBox should carry text content"
+        state.commit();
+        let text_node = state
+            .doc
+            .get_node(engine::NodeId::from(txt_id as u64))
+            .expect("text node");
+        assert!(text_node.is_text_node(), "child should be a text node");
+        assert_eq!(text_node.text(), Some("Hello Paws"));
+        assert!(
+            text_node.layout().size.width > 0.0,
+            "text should have positive width"
         );
-        assert!(text_box.width > 0.0, "text should have positive width");
-        assert!(text_box.height > 0.0, "text should have positive height");
+        assert!(
+            text_node.layout().size.height > 0.0,
+            "text should have positive height"
+        );
     }
 }
