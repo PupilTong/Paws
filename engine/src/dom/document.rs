@@ -491,9 +491,32 @@ impl<S: Default + Send + 'static> Document<S> {
                     for &child_id in &children {
                         queue.push_back(child_id);
                     }
+                    // Determine if this element creates a stacking context.
+                    let parent_display_inside = node
+                        .parent
+                        .and_then(|pid| self.get_node(pid))
+                        .and_then(|p| p.computed_values.as_ref())
+                        .map(|cv| cv.clone_display().inside())
+                        .unwrap_or(style::values::specified::box_::DisplayInside::Flow);
+                    let is_root = node.parent.is_none_or(|pid| {
+                        self.get_node(pid)
+                            .is_some_and(|p| p.node_type == super::element::NodeType::Document)
+                    });
+                    let is_flex_or_grid_item = matches!(
+                        parent_display_inside,
+                        style::values::specified::box_::DisplayInside::Flex
+                            | style::values::specified::box_::DisplayInside::Grid
+                    );
+                    let is_sc = crate::layout::stacking::creates_stacking_context(
+                        &computed,
+                        is_root,
+                        is_flex_or_grid_item,
+                    );
+
                     if let Some(mut_node) = self.get_node_mut(id) {
                         mut_node.taffy_style = Some(crate::style::to_taffy_style(&computed));
                         mut_node.computed_values = Some(computed);
+                        mut_node.creates_stacking_context = is_sc;
                         mut_node.unset_dirty_descendants();
                     }
                 } else if node.is_text_node() {
