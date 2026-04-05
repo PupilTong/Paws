@@ -15,6 +15,9 @@ use style::values::specified::font::FONT_MEDIUM_PX;
 
 use crate::ops::{OpBuffer, ViewKind};
 
+/// Sentinel parent ID for the root node. Swift maps this to `rootView`.
+const ROOT_PARENT_ID: u64 = u64::MAX;
+
 /// Per-node render state stored directly on each `PawsElement`.
 ///
 /// Replaces the old `FnvHashMap<u64, NodeSnapshot>` — diff state now
@@ -55,6 +58,7 @@ pub(crate) struct ViewTree {
 }
 
 impl ViewTree {
+    /// Creates a new ViewTree with an empty op buffer.
     pub(crate) fn new() -> Self {
         Self {
             ops: OpBuffer::new(),
@@ -81,7 +85,7 @@ impl ViewTree {
         self.ops.clear();
 
         if let Some(root_id) = root {
-            self.process_node(doc, root_id, u64::MAX, ViewKind::View, true);
+            self.process_node(doc, root_id, ROOT_PARENT_ID, ViewKind::View, true);
         }
 
         // Emit Release ops for nodes removed since last commit.
@@ -276,8 +280,8 @@ fn emit_full_node(node_id: u64, state: &IosNodeState, ops: &mut OpBuffer) {
         }
     }
 
-    // Attach to parent — root uses sentinel u64::MAX which Swift maps to rootView.
-    if state.parent_id != u64::MAX {
+    // Attach to parent — root uses sentinel ROOT_PARENT_ID which Swift maps to rootView.
+    if state.parent_id != ROOT_PARENT_ID {
         ops.push_attach(node_id, state.kind, state.parent_id, state.parent_kind);
     }
 }

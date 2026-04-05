@@ -102,11 +102,6 @@ impl<S: Default + Send + 'static> Document<S> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn tree(&self) -> &Slab<PawsElement<S>> {
-        &self.nodes
-    }
-
     /// Returns render states captured from nodes removed since last commit.
     ///
     /// The renderer should process these to emit release/detach ops,
