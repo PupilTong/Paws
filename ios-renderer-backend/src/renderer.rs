@@ -225,29 +225,16 @@ impl ViewTree {
             }
         }
 
-        // Update render state on the node.
-        // Collect child info before mutating.
-        let children: Vec<(engine::NodeId, Option<i32>)> = node
-            .children
-            .iter()
-            .filter_map(|&cid| {
-                let child = doc.get_node(cid)?;
-                if child.has_style() {
-                    Some((cid, child.z_index()))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Collect children in paint order before mutating render state.
+        let children = engine::paint_order_children(doc, node_id);
 
         doc.get_node_mut(node_id)
             .unwrap()
             .set_render_state(new_state);
 
-        // Recurse children in z-index order.
-        let mut sorted = children;
-        sorted.sort_unstable_by_key(|&(_, z)| z.unwrap_or(0));
-        for (child_id, _) in sorted {
+        // Recurse children in paint order (already sorted by the engine's
+        // stacking context logic).
+        for child_id in children {
             self.process_node(doc, child_id, nid, kind, false);
         }
     }

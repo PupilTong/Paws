@@ -99,6 +99,12 @@ pub struct PawsElement<S: Default + Send + 'static = ()> {
     /// Pixel-snapped final layout.
     pub(crate) final_layout: taffy::tree::Layout,
 
+    /// Whether this node establishes a CSS stacking context.
+    ///
+    /// Set during [`Document::resolve_style`] based on the node's computed
+    /// style values. Used by renderers to determine paint order.
+    pub creates_stacking_context: bool,
+
     /// Per-node render state for the [`EngineRenderer`](crate::EngineRenderer) backend.
     ///
     /// Stored directly on each node so there is truly one tree — no separate
@@ -141,6 +147,7 @@ impl<S: Default + Send + 'static> PawsElement<S> {
             unrounded_layout: taffy::tree::Layout::with_order(0),
             final_layout: taffy::tree::Layout::with_order(0),
 
+            creates_stacking_context: false,
             render_state: S::default(),
         }
     }
