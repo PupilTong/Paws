@@ -20,8 +20,7 @@ use std::thread;
 
 use engine::{EngineRenderer, RuntimeState};
 
-use crate::ops::OpBuffer;
-use crate::renderer::ViewTree;
+use crate::renderer::{IosNodeState, ViewTree};
 
 /// Completion callback type.
 ///
@@ -138,45 +137,34 @@ impl Drop for EngineHandle {
 
 /// iOS renderer backend that implements [`EngineRenderer`].
 ///
-/// Bundles the [`ViewTree`] diff engine, an [`OpBuffer`], and the completion
-/// callback together. On each commit the ViewTree generates minimal ops
-/// and delivers them to Swift via the callback.
+/// Bundles the [`ViewTree`] diff engine and the completion callback.
+/// On each commit the ViewTree walks the Document tree directly,
+/// generates minimal ops, and delivers them to Swift via the callback.
 struct IosRenderer {
     view_tree: ViewTree,
-    op_buffer: OpBuffer,
     callback: SendCallback,
 }
 
 // SAFETY: `SendCallback` is already `Send` (see its unsafe impl above).
-// `ViewTree` and `OpBuffer` are plain data structures with no thread-affine
-// pointers — they are trivially `Send`.
+// `ViewTree` is a plain data structure with no thread-affine pointers.
 unsafe impl Send for IosRenderer {}
 
 impl EngineRenderer for IosRenderer {
-    type NodeState = ();
+    type NodeState = IosNodeState;
 
     fn on_commit(
         &mut self,
-        doc: &mut engine::dom::Document<()>,
+        doc: &mut engine::dom::Document<IosNodeState>,
         root_element: Option<engine::NodeId>,
     ) {
-        let Some(root_id) = root_element else {
-            return;
-        };
-
-        // Extract a LayoutBox tree for the ViewTree to process.
-        // TODO: refactor ViewTree to walk Document directly and remove this.
-        let Some(layout) = engine::compute_layout(doc, root_id) else {
-            return;
-        };
-
-        self.view_tree.process(&layout, &mut self.op_buffer);
-        if self.op_buffer.len() > 0 {
+        self.view_tree.process(doc, root_element);
+        let ops = self.view_tree.ops();
+        if ops.len() > 0 {
             (self.callback.completion)(
-                self.op_buffer.as_ptr(),
-                self.op_buffer.len(),
-                self.op_buffer.strings_ptr(),
-                self.op_buffer.strings_len(),
+                ops.as_ptr(),
+                ops.len(),
+                ops.strings_ptr(),
+                ops.strings_len(),
                 self.callback.context,
             );
         }
@@ -193,7 +181,6 @@ impl EngineRenderer for IosRenderer {
 fn run_engine(base_url: String, wasm_bytes: Vec<u8>, func_name: String, cb: SendCallback) {
     let renderer = IosRenderer {
         view_tree: ViewTree::new(),
-        op_buffer: OpBuffer::new(),
         callback: cb,
     };
     let state = RuntimeState::with_renderer(base_url, renderer);

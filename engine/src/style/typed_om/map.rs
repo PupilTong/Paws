@@ -140,13 +140,12 @@ impl StylePropertyMapReadOnly {
 ///
 /// # Panics
 ///
-/// Debug-asserts that `i` is in `0..property_counts::LONGHANDS`.
+/// Panics if `i` is not in `0..property_counts::LONGHANDS`.
 #[inline]
 fn longhand_id_from_index(i: usize) -> LonghandId {
-    debug_assert!(i < property_counts::LONGHANDS);
+    assert!(i < property_counts::LONGHANDS);
     // SAFETY: LonghandId is repr(u16) with variants 0..LONGHANDS-1.
-    // The debug_assert above guards the bound; in release builds the
-    // caller (a bounded loop) guarantees the invariant.
+    // The assert above guards the bound in both debug and release builds.
     unsafe { std::mem::transmute(i as u16) }
 }
 

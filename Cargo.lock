@@ -1208,7 +1208,6 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "engine",
- "fnv",
  "stylo",
  "wasmtime-engine",
  "wat",

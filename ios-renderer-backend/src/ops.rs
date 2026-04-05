@@ -340,10 +340,11 @@ impl OpBuffer {
 }
 
 /// Discriminant for the type of UIKit object backing a node.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[repr(u8)]
 pub(crate) enum ViewKind {
     /// A plain `UIView`.
+    #[default]
     View = 0,
     /// A `UIScrollView`.
     ScrollView = 1,

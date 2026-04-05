@@ -2462,13 +2462,17 @@ mod tests {
         let map = state.computed_style_map(container).unwrap();
         let _ = map.get("display", &mut state.doc, &state.style_context);
 
-        let result =
-            crate::layout::compute_layout(&mut state.doc, taffy::NodeId::from(container as u64));
-        assert!(result.is_some(), "layout should compute");
-        let layout = result.unwrap();
+        assert!(crate::layout::compute_layout_in_place(
+            &mut state.doc,
+            taffy::NodeId::from(container as u64)
+        ));
+        let node = state
+            .doc
+            .get_node(taffy::NodeId::from(container as u64))
+            .unwrap();
         // Two 100px-wide children in a flex row → container should be 200px wide
-        assert_eq!(layout.width, 200.0);
-        assert_eq!(layout.height, 50.0);
+        assert_eq!(node.layout().size.width, 200.0);
+        assert_eq!(node.layout().size.height, 50.0);
     }
 
     #[test]
@@ -2503,14 +2507,20 @@ mod tests {
         let map = state.computed_style_map(container).unwrap();
         let _ = map.get("display", &mut state.doc, &state.style_context);
 
-        let result =
-            crate::layout::compute_layout(&mut state.doc, taffy::NodeId::from(container as u64));
-        assert!(result.is_some(), "grid layout should compute");
-        let layout = result.unwrap();
-        // Grid auto-places two items; verify layout computed without crash
-        assert!(layout.width > 0.0, "grid layout should have positive width");
+        assert!(crate::layout::compute_layout_in_place(
+            &mut state.doc,
+            taffy::NodeId::from(container as u64)
+        ));
+        let node = state
+            .doc
+            .get_node(taffy::NodeId::from(container as u64))
+            .unwrap();
         assert!(
-            layout.height > 0.0,
+            node.layout().size.width > 0.0,
+            "grid layout should have positive width"
+        );
+        assert!(
+            node.layout().size.height > 0.0,
             "grid layout should have positive height"
         );
     }
@@ -2541,11 +2551,13 @@ mod tests {
         );
 
         // Verify layout computes
-        let result = crate::layout::compute_layout(&mut state.doc, taffy::NodeId::from(el as u64));
-        assert!(result.is_some(), "layout should compute");
-        let layout = result.unwrap();
-        assert_eq!(layout.width, 100.0);
-        assert_eq!(layout.height, 100.0);
+        assert!(crate::layout::compute_layout_in_place(
+            &mut state.doc,
+            taffy::NodeId::from(el as u64)
+        ));
+        let node = state.doc.get_node(taffy::NodeId::from(el as u64)).unwrap();
+        assert_eq!(node.layout().size.width, 100.0);
+        assert_eq!(node.layout().size.height, 100.0);
     }
 
     #[test]

@@ -102,9 +102,12 @@ impl<S: Default + Send + 'static> Document<S> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn tree(&self) -> &Slab<PawsElement<S>> {
-        &self.nodes
+    /// Returns render states captured from nodes removed since last commit.
+    ///
+    /// The renderer should process these to emit release/detach ops,
+    /// then `RuntimeState::commit()` clears them.
+    pub fn removed_render_states(&self) -> &[(taffy::NodeId, S)] {
+        &self.removed_render_states
     }
 
     /// Returns the first element child of the document root.
