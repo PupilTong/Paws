@@ -1,6 +1,7 @@
 //! Engine crate: core DOM, style, and layout.
 
 pub mod dom;
+pub mod events;
 pub mod layout;
 mod runtime;
 mod style;

@@ -14,6 +14,9 @@ pub enum HostErrorCode {
     ChildAlreadyHasParent = -3,
     CycleDetected = -4,
     MemoryError = -5,
+    InvalidEventTarget = -6,
+    NoActiveEvent = -7,
+    EventAlreadyDispatching = -8,
 }
 
 impl HostErrorCode {
@@ -30,6 +33,9 @@ impl HostErrorCode {
             HostErrorCode::ChildAlreadyHasParent => "child already has a parent",
             HostErrorCode::CycleDetected => "append would create a cycle",
             HostErrorCode::MemoryError => "invalid memory access",
+            HostErrorCode::InvalidEventTarget => "invalid event target id",
+            HostErrorCode::NoActiveEvent => "no event is currently being dispatched",
+            HostErrorCode::EventAlreadyDispatching => "an event is already being dispatched",
         }
     }
 }
@@ -86,6 +92,11 @@ pub struct RuntimeState<R: EngineRenderer = ()> {
     pub style_context: StyleContext,
     pub(crate) stylesheet_cache: crate::style::StylesheetCache,
     pub renderer: R,
+    /// The event currently being dispatched, if any.
+    ///
+    /// Set by `dispatch_event` and cleared after the dispatch loop completes.
+    /// WASM event accessor host functions read/mutate this field.
+    pub current_event: Option<crate::events::Event>,
 }
 
 impl RuntimeState<()> {
@@ -116,6 +127,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
             style_context: context,
             stylesheet_cache,
             renderer,
+            current_event: None,
         }
     }
     /// Creates a new HTML element with the given tag name. Returns the node ID.
@@ -576,6 +588,85 @@ impl<R: EngineRenderer> RuntimeState<R> {
             return Err(HostErrorCode::InvalidChild);
         }
         node.remove_attribute(name);
+        Ok(())
+    }
+
+    // ── Event system ────────────────────────────────────────────────
+
+    /// Registers an event listener on a DOM node.
+    ///
+    /// Per the W3C spec, listeners are deduplicated by the triple
+    /// `(event_type, callback_id, capture)`. Adding an identical listener
+    /// is a no-op.
+    pub fn add_event_listener(
+        &mut self,
+        target_id: u32,
+        event_type: stylo_atoms::Atom,
+        callback_id: u32,
+        options: crate::events::ListenerOptions,
+    ) -> Result<(), HostErrorCode> {
+        let node = self
+            .doc
+            .get_node_mut(taffy::NodeId::from(target_id as u64))
+            .ok_or(HostErrorCode::InvalidEventTarget)?;
+
+        // W3C dedup: skip if an identical (type, callback_id, capture) exists
+        let already_exists = node.event_listeners.iter().any(|l| {
+            l.event_type == event_type
+                && l.callback_id == callback_id
+                && l.capture == options.capture
+        });
+        if already_exists {
+            return Ok(());
+        }
+
+        node.event_listeners
+            .push(crate::events::EventListenerEntry {
+                event_type,
+                callback_id,
+                capture: options.capture,
+                passive: options.passive,
+                once: options.once,
+                removed: false,
+            });
+
+        Ok(())
+    }
+
+    /// Removes an event listener from a DOM node.
+    ///
+    /// Matches by `(event_type, callback_id, capture)`. If a dispatch is
+    /// currently active, the entry is marked `removed` instead of being
+    /// deleted (the dispatch loop checks this flag before invoking).
+    pub fn remove_event_listener(
+        &mut self,
+        target_id: u32,
+        event_type: stylo_atoms::Atom,
+        callback_id: u32,
+        capture: bool,
+    ) -> Result<(), HostErrorCode> {
+        let dispatching = self.current_event.as_ref().is_some_and(|e| e.dispatch_flag);
+
+        let node = self
+            .doc
+            .get_node_mut(taffy::NodeId::from(target_id as u64))
+            .ok_or(HostErrorCode::InvalidEventTarget)?;
+
+        if let Some(entry) = node.event_listeners.iter_mut().find(|l| {
+            l.event_type == event_type && l.callback_id == callback_id && l.capture == capture
+        }) {
+            if dispatching {
+                entry.removed = true;
+            } else {
+                // Not dispatching — safe to remove immediately
+                node.event_listeners.retain(|l| {
+                    !(l.event_type == event_type
+                        && l.callback_id == callback_id
+                        && l.capture == capture)
+                });
+            }
+        }
+
         Ok(())
     }
 }

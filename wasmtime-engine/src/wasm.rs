@@ -958,5 +958,531 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         )
         .expect("link paws_add_parsed_stylesheet");
 
+    // ── Event system host functions ─────────────────────────────────
+
     linker
+        .func_wrap(
+            "env",
+            "__add_event_listener",
+            |mut caller: Caller<'_, RuntimeState<R>>,
+             target_id: i32,
+             type_ptr: i32,
+             callback_id: i32,
+             options_flags: i32|
+             -> Result<i32> {
+                if target_id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidEventTarget, "negative target id");
+                    return Ok(code);
+                }
+                let event_type = match read_cstr(&mut caller, type_ptr) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                caller.data_mut().clear_error();
+                let options = engine::events::ListenerOptions::from_bits(options_flags as u32);
+                match caller.data_mut().add_event_listener(
+                    target_id as u32,
+                    stylo_atoms::Atom::from(event_type),
+                    callback_id as u32,
+                    options,
+                ) {
+                    Ok(()) => Ok(0),
+                    Err(code) => {
+                        caller.data_mut().set_error(code, code.message());
+                        Ok(code.as_i32())
+                    }
+                }
+            },
+        )
+        .expect("link __add_event_listener");
+
+    linker
+        .func_wrap(
+            "env",
+            "__remove_event_listener",
+            |mut caller: Caller<'_, RuntimeState<R>>,
+             target_id: i32,
+             type_ptr: i32,
+             callback_id: i32,
+             options_flags: i32|
+             -> Result<i32> {
+                if target_id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidEventTarget, "negative target id");
+                    return Ok(code);
+                }
+                let event_type = match read_cstr(&mut caller, type_ptr) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                caller.data_mut().clear_error();
+                let capture = (options_flags as u32) & 0b001 != 0;
+                match caller.data_mut().remove_event_listener(
+                    target_id as u32,
+                    stylo_atoms::Atom::from(event_type),
+                    callback_id as u32,
+                    capture,
+                ) {
+                    Ok(()) => Ok(0),
+                    Err(code) => {
+                        caller.data_mut().set_error(code, code.message());
+                        Ok(code.as_i32())
+                    }
+                }
+            },
+        )
+        .expect("link __remove_event_listener");
+
+    linker
+        .func_wrap(
+            "env",
+            "__dispatch_event",
+            |mut caller: Caller<'_, RuntimeState<R>>,
+             target_id: i32,
+             type_ptr: i32,
+             bubbles: i32,
+             cancelable: i32,
+             composed: i32|
+             -> Result<i32> {
+                if target_id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidEventTarget, "negative target id");
+                    return Ok(code);
+                }
+
+                let event_type = match read_cstr(&mut caller, type_ptr) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+
+                // Check for re-entrant dispatch
+                if caller
+                    .data()
+                    .current_event
+                    .as_ref()
+                    .is_some_and(|e| e.dispatch_flag)
+                {
+                    let code = caller.data_mut().set_error(
+                        HostErrorCode::EventAlreadyDispatching,
+                        HostErrorCode::EventAlreadyDispatching.message(),
+                    );
+                    return Ok(code);
+                }
+
+                caller.data_mut().clear_error();
+
+                dispatch_event_wasm(
+                    &mut caller,
+                    target_id as u32,
+                    stylo_atoms::Atom::from(event_type),
+                    bubbles != 0,
+                    cancelable != 0,
+                    composed != 0,
+                )
+            },
+        )
+        .expect("link __dispatch_event");
+
+    // ── Event state accessors (mutation) ────────────────────────────
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_stop_propagation",
+            |mut caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data_mut().current_event.as_mut() {
+                    Some(ev) => {
+                        ev.stop_propagation_flag = true;
+                        Ok(0)
+                    }
+                    None => {
+                        let code = caller.data_mut().set_error(
+                            HostErrorCode::NoActiveEvent,
+                            HostErrorCode::NoActiveEvent.message(),
+                        );
+                        Ok(code)
+                    }
+                }
+            },
+        )
+        .expect("link __event_stop_propagation");
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_stop_immediate_propagation",
+            |mut caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data_mut().current_event.as_mut() {
+                    Some(ev) => {
+                        ev.stop_propagation_flag = true;
+                        ev.stop_immediate_propagation_flag = true;
+                        Ok(0)
+                    }
+                    None => {
+                        let code = caller.data_mut().set_error(
+                            HostErrorCode::NoActiveEvent,
+                            HostErrorCode::NoActiveEvent.message(),
+                        );
+                        Ok(code)
+                    }
+                }
+            },
+        )
+        .expect("link __event_stop_immediate_propagation");
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_prevent_default",
+            |mut caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data_mut().current_event.as_mut() {
+                    Some(ev) => {
+                        if ev.cancelable && !ev.in_passive_listener {
+                            ev.canceled_flag = true;
+                        }
+                        Ok(0)
+                    }
+                    None => {
+                        let code = caller.data_mut().set_error(
+                            HostErrorCode::NoActiveEvent,
+                            HostErrorCode::NoActiveEvent.message(),
+                        );
+                        Ok(code)
+                    }
+                }
+            },
+        )
+        .expect("link __event_prevent_default");
+
+    // ── Event state accessors (read-only) ───────────────────────────
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_target",
+            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data().current_event.as_ref() {
+                    Some(ev) => Ok(ev.target.map_or(-1, |id| u64::from(id) as i32)),
+                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
+                }
+            },
+        )
+        .expect("link __event_target");
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_current_target",
+            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data().current_event.as_ref() {
+                    Some(ev) => Ok(ev.current_target.map_or(-1, |id| u64::from(id) as i32)),
+                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
+                }
+            },
+        )
+        .expect("link __event_current_target");
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_phase",
+            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data().current_event.as_ref() {
+                    Some(ev) => Ok(ev.event_phase as i32),
+                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
+                }
+            },
+        )
+        .expect("link __event_phase");
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_bubbles",
+            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data().current_event.as_ref() {
+                    Some(ev) => Ok(ev.bubbles as i32),
+                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
+                }
+            },
+        )
+        .expect("link __event_bubbles");
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_cancelable",
+            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data().current_event.as_ref() {
+                    Some(ev) => Ok(ev.cancelable as i32),
+                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
+                }
+            },
+        )
+        .expect("link __event_cancelable");
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_default_prevented",
+            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data().current_event.as_ref() {
+                    Some(ev) => Ok(ev.default_prevented() as i32),
+                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
+                }
+            },
+        )
+        .expect("link __event_default_prevented");
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_composed",
+            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
+                match caller.data().current_event.as_ref() {
+                    Some(ev) => Ok(ev.composed as i32),
+                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
+                }
+            },
+        )
+        .expect("link __event_composed");
+
+    linker
+        .func_wrap(
+            "env",
+            "__event_timestamp",
+            |caller: Caller<'_, RuntimeState<R>>| -> Result<f64> {
+                match caller.data().current_event.as_ref() {
+                    Some(ev) => Ok(ev.time_stamp),
+                    None => Ok(-1.0),
+                }
+            },
+        )
+        .expect("link __event_timestamp");
+
+    linker
+}
+
+/// Implements the three-phase W3C event dispatch algorithm using wasmtime's
+/// `Caller` for re-entrant WASM calls.
+///
+/// This function handles the borrow juggling required by wasmtime: each
+/// `Caller::data()` / `Caller::data_mut()` borrow must be released before
+/// calling into WASM (which re-enters host functions).
+fn dispatch_event_wasm<R: EngineRenderer>(
+    caller: &mut Caller<'_, RuntimeState<R>>,
+    target_id: u32,
+    event_type: stylo_atoms::Atom,
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+) -> Result<i32> {
+    use engine::events::dispatch::build_event_path;
+    use engine::events::event::EventPhase;
+    use engine::events::Event;
+
+    let target_nid = taffy::NodeId::from(target_id as u64);
+
+    // 1. Build event path (borrow doc, then release)
+    let path = match build_event_path(&caller.data().doc, target_nid) {
+        Some(p) => p,
+        None => {
+            let code = caller.data_mut().set_error(
+                HostErrorCode::InvalidEventTarget,
+                "target not found in tree",
+            );
+            return Ok(code);
+        }
+    };
+
+    let target_index = path.len() - 1;
+
+    // 2. Initialize event and store in RuntimeState
+    let mut event = Event::new(event_type.clone(), bubbles, cancelable, composed);
+    event.target = Some(target_nid);
+    event.dispatch_flag = true;
+    caller.data_mut().current_event = Some(event);
+
+    // 3. Get the WASM export for listener invocation
+    let invoke_fn = caller
+        .get_export("__paws_invoke_listener")
+        .and_then(|e| e.into_func());
+
+    // 4. Capture phase: path[0..target_index]
+    for &node_id in &path[..target_index] {
+        {
+            let ev = caller.data().current_event.as_ref().unwrap();
+            if ev.stop_propagation_flag {
+                break;
+            }
+        }
+
+        {
+            let ev = caller.data_mut().current_event.as_mut().unwrap();
+            ev.event_phase = EventPhase::Capturing;
+            ev.current_target = Some(node_id);
+        }
+
+        dispatch_listeners_on_node(
+            caller,
+            node_id,
+            &event_type,
+            EventPhase::Capturing,
+            invoke_fn.as_ref(),
+        )?;
+    }
+
+    // 5. At-target phase
+    {
+        let ev = caller.data().current_event.as_ref().unwrap();
+        if !ev.stop_propagation_flag {
+            {
+                let ev = caller.data_mut().current_event.as_mut().unwrap();
+                ev.event_phase = EventPhase::AtTarget;
+                ev.current_target = Some(target_nid);
+            }
+            dispatch_listeners_on_node(
+                caller,
+                target_nid,
+                &event_type,
+                EventPhase::AtTarget,
+                invoke_fn.as_ref(),
+            )?;
+        }
+    }
+
+    // 6. Bubble phase (only if bubbles)
+    if bubbles {
+        for i in (0..target_index).rev() {
+            {
+                let ev = caller.data().current_event.as_ref().unwrap();
+                if ev.stop_propagation_flag {
+                    break;
+                }
+            }
+
+            {
+                let ev = caller.data_mut().current_event.as_mut().unwrap();
+                ev.event_phase = EventPhase::Bubbling;
+                ev.current_target = Some(path[i]);
+            }
+
+            dispatch_listeners_on_node(
+                caller,
+                path[i],
+                &event_type,
+                EventPhase::Bubbling,
+                invoke_fn.as_ref(),
+            )?;
+        }
+    }
+
+    // 7. Finalize
+    let canceled = {
+        let ev = caller.data_mut().current_event.as_mut().unwrap();
+        ev.dispatch_flag = false;
+        ev.event_phase = EventPhase::None;
+        ev.current_target = None;
+        ev.default_prevented()
+    };
+    caller.data_mut().current_event = None;
+
+    // 8. Clean up removed listeners
+    for &node_id in &path {
+        if let Some(node) = caller.data_mut().doc.get_node_mut(node_id) {
+            node.event_listeners.retain(|l| !l.removed);
+        }
+    }
+
+    // Return 1 if NOT canceled, 0 if canceled (matches W3C dispatchEvent return)
+    Ok(if canceled { 0 } else { 1 })
+}
+
+/// Invokes matching listeners on a single node during WASM dispatch.
+fn dispatch_listeners_on_node<R: EngineRenderer>(
+    caller: &mut Caller<'_, RuntimeState<R>>,
+    node_id: taffy::NodeId,
+    event_type: &stylo_atoms::Atom,
+    phase: engine::events::event::EventPhase,
+    invoke_fn: Option<&wasmtime::Func>,
+) -> Result<()> {
+    use engine::events::dispatch::collect_matching_listeners;
+
+    // Snapshot listeners (borrow released after)
+    let listeners = collect_matching_listeners(&caller.data().doc, node_id, event_type, phase);
+
+    for snap in &listeners {
+        // Re-check removed flag
+        {
+            let active = caller
+                .data()
+                .doc
+                .get_node(node_id)
+                .and_then(|n| n.event_listeners.get(snap.index))
+                .is_some_and(|l| !l.removed);
+            if !active {
+                continue;
+            }
+        }
+
+        // Mark once listeners for removal
+        if snap.once {
+            if let Some(node) = caller.data_mut().doc.get_node_mut(node_id) {
+                if let Some(entry) = node.event_listeners.get_mut(snap.index) {
+                    entry.removed = true;
+                }
+            }
+        }
+
+        // Set passive flag
+        {
+            let ev = caller.data_mut().current_event.as_mut().unwrap();
+            ev.in_passive_listener = snap.passive;
+        }
+
+        // Invoke the WASM listener callback (if the export exists)
+        if let Some(func) = invoke_fn {
+            let mut results = [];
+            func.call(
+                &mut *caller,
+                &[wasmtime::Val::I32(snap.callback_id as i32)],
+                &mut results,
+            )?;
+        }
+
+        // Clear passive flag
+        {
+            let ev = caller.data_mut().current_event.as_mut().unwrap();
+            ev.in_passive_listener = false;
+        }
+
+        // Check stop immediate propagation
+        {
+            let ev = caller.data().current_event.as_ref().unwrap();
+            if ev.stop_immediate_propagation_flag {
+                break;
+            }
+        }
+    }
+
+    Ok(())
 }

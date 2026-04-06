@@ -51,6 +51,38 @@ extern "C" {
     fn __clone_node(id: i32, deep: i32) -> i32;
     fn __set_node_value(id: i32, value_ptr: *const u8) -> i32;
     fn __get_node_type(id: i32) -> i32;
+
+    // Event system
+    fn __add_event_listener(
+        target_id: i32,
+        type_ptr: *const u8,
+        callback_id: i32,
+        options_flags: i32,
+    ) -> i32;
+    fn __remove_event_listener(
+        target_id: i32,
+        type_ptr: *const u8,
+        callback_id: i32,
+        options_flags: i32,
+    ) -> i32;
+    fn __dispatch_event(
+        target_id: i32,
+        type_ptr: *const u8,
+        bubbles: i32,
+        cancelable: i32,
+        composed: i32,
+    ) -> i32;
+    fn __event_stop_propagation() -> i32;
+    fn __event_stop_immediate_propagation() -> i32;
+    fn __event_prevent_default() -> i32;
+    fn __event_target() -> i32;
+    fn __event_current_target() -> i32;
+    fn __event_phase() -> i32;
+    fn __event_bubbles() -> i32;
+    fn __event_cancelable() -> i32;
+    fn __event_default_prevented() -> i32;
+    fn __event_composed() -> i32;
+    fn __event_timestamp() -> f64;
 }
 
 #[link(wasm_import_module = "paws")]
@@ -412,6 +444,256 @@ pub fn get_node_type(id: i32) -> Option<i32> {
         Some(result)
     } else {
         None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event system wrappers
+// ---------------------------------------------------------------------------
+
+/// Options for `add_event_listener`.
+///
+/// Encoded as a bitfield for the host: bit 0 = capture, bit 1 = passive,
+/// bit 2 = once. Use the builder methods to set flags.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EventListenerOptions(i32);
+
+impl EventListenerOptions {
+    /// Creates default options (no capture, no passive, no once).
+    pub fn new() -> Self {
+        Self(0)
+    }
+
+    /// Registers the listener for the capture phase.
+    pub fn capture(mut self) -> Self {
+        self.0 |= 0b001;
+        self
+    }
+
+    /// Marks the listener as passive (cannot call `preventDefault`).
+    pub fn passive(mut self) -> Self {
+        self.0 |= 0b010;
+        self
+    }
+
+    /// Automatically removes the listener after its first invocation.
+    pub fn once(mut self) -> Self {
+        self.0 |= 0b100;
+        self
+    }
+}
+
+/// Registers an event listener on a DOM node.
+///
+/// `callback_id` is an opaque identifier managed by the guest. When the
+/// event fires, the host calls `__paws_invoke_listener(callback_id)`.
+pub fn add_event_listener(
+    target_id: i32,
+    event_type: &str,
+    callback_id: i32,
+    options: EventListenerOptions,
+) -> Result<(), i32> {
+    let type_ptr = write_cstr(event_type);
+    // SAFETY: `type_ptr` points to a null-terminated string in WASM linear memory.
+    let code = unsafe { __add_event_listener(target_id, type_ptr, callback_id, options.0) };
+    check(code)
+}
+
+/// Removes an event listener from a DOM node.
+///
+/// Only the `capture` flag of `options` is used for matching (per W3C spec).
+pub fn remove_event_listener(
+    target_id: i32,
+    event_type: &str,
+    callback_id: i32,
+    capture: bool,
+) -> Result<(), i32> {
+    let type_ptr = write_cstr(event_type);
+    let flags = if capture { 1 } else { 0 };
+    // SAFETY: `type_ptr` points to a null-terminated string in WASM linear memory.
+    let code = unsafe { __remove_event_listener(target_id, type_ptr, callback_id, flags) };
+    check(code)
+}
+
+/// Dispatches an event on a DOM node using the W3C three-phase algorithm.
+///
+/// Returns `Ok(true)` if the event was NOT canceled, `Ok(false)` if it was.
+pub fn dispatch_event(
+    target_id: i32,
+    event_type: &str,
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+) -> Result<bool, i32> {
+    let type_ptr = write_cstr(event_type);
+    // SAFETY: `type_ptr` points to a null-terminated string in WASM linear memory.
+    let result = unsafe {
+        __dispatch_event(
+            target_id,
+            type_ptr,
+            bubbles as i32,
+            cancelable as i32,
+            composed as i32,
+        )
+    };
+    match result {
+        1 => Ok(true),  // not canceled
+        0 => Ok(false), // canceled
+        err => Err(err),
+    }
+}
+
+/// Stops event propagation to ancestor/descendant nodes.
+///
+/// Must be called from within an event listener (during dispatch).
+pub fn event_stop_propagation() -> Result<(), i32> {
+    // SAFETY: No memory pointers involved.
+    let code = unsafe { __event_stop_propagation() };
+    check(code)
+}
+
+/// Stops all remaining listeners, including on the current node.
+///
+/// Must be called from within an event listener (during dispatch).
+pub fn event_stop_immediate_propagation() -> Result<(), i32> {
+    // SAFETY: No memory pointers involved.
+    let code = unsafe { __event_stop_immediate_propagation() };
+    check(code)
+}
+
+/// Cancels the event's default action.
+///
+/// No-op if the event is not cancelable or the listener is passive.
+/// Must be called from within an event listener (during dispatch).
+pub fn event_prevent_default() -> Result<(), i32> {
+    // SAFETY: No memory pointers involved.
+    let code = unsafe { __event_prevent_default() };
+    check(code)
+}
+
+/// Returns the target node ID of the current event, or `None` if no
+/// event is being dispatched.
+pub fn event_target() -> Option<i32> {
+    // SAFETY: No memory pointers involved.
+    let result = unsafe { __event_target() };
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+/// Returns the current target node ID during dispatch, or `None`.
+pub fn event_current_target() -> Option<i32> {
+    // SAFETY: No memory pointers involved.
+    let result = unsafe { __event_current_target() };
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+/// Returns the current event phase (0=none, 1=capturing, 2=at-target, 3=bubbling).
+pub fn event_phase() -> i32 {
+    // SAFETY: No memory pointers involved.
+    unsafe { __event_phase() }
+}
+
+/// Returns whether the current event bubbles.
+pub fn event_bubbles() -> bool {
+    // SAFETY: No memory pointers involved.
+    unsafe { __event_bubbles() == 1 }
+}
+
+/// Returns whether the current event is cancelable.
+pub fn event_cancelable() -> bool {
+    // SAFETY: No memory pointers involved.
+    unsafe { __event_cancelable() == 1 }
+}
+
+/// Returns whether `preventDefault()` was called on the current event.
+pub fn event_default_prevented() -> bool {
+    // SAFETY: No memory pointers involved.
+    unsafe { __event_default_prevented() == 1 }
+}
+
+/// Returns whether the current event is composed (crosses shadow boundaries).
+pub fn event_composed() -> bool {
+    // SAFETY: No memory pointers involved.
+    unsafe { __event_composed() == 1 }
+}
+
+/// Returns the timestamp of the current event in milliseconds.
+pub fn event_timestamp() -> f64 {
+    // SAFETY: No memory pointers involved.
+    unsafe { __event_timestamp() }
+}
+
+// ---------------------------------------------------------------------------
+// Listener callback infrastructure
+// ---------------------------------------------------------------------------
+
+/// Maximum number of listeners that can be registered via [`register_listener`].
+const MAX_LISTENERS: usize = 256;
+
+/// Static listener table mapping callback IDs to function pointers.
+///
+/// The table is fixed-size for `#![no_std]` compatibility. Applications
+/// needing closures with captured state should use global variables.
+type ListenerSlots = [Option<fn()>; MAX_LISTENERS];
+
+struct ListenerTable {
+    table: UnsafeCell<ListenerSlots>,
+    next_id: UnsafeCell<u32>,
+}
+
+// SAFETY: WASM is single-threaded; the listener table is never accessed
+// concurrently. This impl is required for a static, but no actual sharing
+// occurs.
+unsafe impl Sync for ListenerTable {}
+
+static LISTENERS: ListenerTable = ListenerTable {
+    table: UnsafeCell::new([None; MAX_LISTENERS]),
+    next_id: UnsafeCell::new(0),
+};
+
+/// Registers a function pointer as an event listener callback.
+///
+/// Returns the `callback_id` to pass to [`add_event_listener`].
+///
+/// # Panics
+///
+/// Panics if the listener table is full (`MAX_LISTENERS` reached).
+pub fn register_listener(callback: fn()) -> u32 {
+    // SAFETY: Single-threaded WASM execution — no concurrent access to the
+    // listener table. We obtain raw pointers from UnsafeCell and perform
+    // bounded writes within the table.
+    unsafe {
+        let id_ptr = LISTENERS.next_id.get();
+        let id = *id_ptr;
+        assert!((id as usize) < MAX_LISTENERS, "listener table full");
+        let table = &mut *LISTENERS.table.get();
+        table[id as usize] = Some(callback);
+        *id_ptr = id + 1;
+        id
+    }
+}
+
+/// WASM export called by the host during event dispatch to invoke a listener.
+///
+/// The host calls this function for each matching listener during the
+/// three-phase dispatch algorithm. The `callback_id` maps to a function
+/// pointer registered via [`register_listener`].
+#[export_name = "__paws_invoke_listener"]
+pub extern "C" fn paws_invoke_listener(callback_id: i32) {
+    // SAFETY: Single-threaded WASM execution — no concurrent access to the
+    // listener table. We read a single entry at a bounded index.
+    unsafe {
+        let table = &*LISTENERS.table.get();
+        if let Some(Some(callback)) = table.get(callback_id as usize) {
+            callback();
+        }
     }
 }
 
