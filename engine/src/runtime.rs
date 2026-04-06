@@ -3011,6 +3011,27 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_before_self_is_noop() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let a = state.create_element("a".to_string());
+        let b = state.create_element("b".to_string());
+
+        state.append_element(parent, a).unwrap();
+        state.append_element(parent, b).unwrap();
+
+        // Insert a before a → no-op, order stays [a, b]
+        state.insert_before(parent, a, a).unwrap();
+
+        let p = state
+            .doc
+            .get_node(taffy::NodeId::from(parent as u64))
+            .unwrap();
+        let children: Vec<u32> = p.children.iter().map(|&id| u64::from(id) as u32).collect();
+        assert_eq!(children, vec![a, b]);
+    }
+
+    #[test]
     fn test_insert_before_errors() {
         let mut state = RuntimeState::new("https://example.com".to_string());
         let parent = state.create_element("div".to_string());

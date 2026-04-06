@@ -419,6 +419,11 @@ impl<S: Default + Send + 'static> Document<S> {
             return Err(DomError::InvalidChild);
         }
 
+        // Inserting a node before itself is a no-op per the W3C DOM spec
+        if new_child_id == ref_child_id {
+            return Ok(());
+        }
+
         // Cycle detection
         if new_child_id == parent_id {
             return Err(DomError::CycleDetected);
@@ -457,6 +462,7 @@ impl<S: Default + Send + 'static> Document<S> {
         if let Some(parent) = self.get_node_mut(parent_id) {
             parent.children.insert(pos, new_child_id);
             parent.set_dirty_descendants();
+            parent.mark_ancestors_dirty();
             parent_in_doc = parent.flags.contains(NodeFlags::IS_IN_DOCUMENT);
         }
 

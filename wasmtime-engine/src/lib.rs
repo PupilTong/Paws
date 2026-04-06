@@ -1609,4 +1609,470 @@ mod tests {
             "text should have positive height"
         );
     }
+
+    // ─── insert_before WAT tests ──────────────────────────────────
+
+    #[test]
+    fn wasm_insert_before_success() {
+        let wat = r#"
+(module
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+    (import "env" "__insert_before" (func $insert_before (param i32 i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (data (i32.const 16) "span\00")
+    (data (i32.const 32) "em\00")
+    (func (export "run") (result i32)
+        (local $parent i32)
+        (local $a i32)
+        (local $b i32)
+        (local.set $parent (call $create (i32.const 0)))
+        (local.set $a (call $create (i32.const 16)))
+        (local.set $b (call $create (i32.const 32)))
+        ;; parent -> [a]
+        (drop (call $append (local.get $parent) (local.get $a)))
+        ;; insert b before a → parent -> [b, a]
+        (call $insert_before (local.get $parent) (local.get $b) (local.get $a))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let status = run.call(&mut store, ()).expect("run");
+        assert_eq!(status, 0);
+
+        let state = store.data();
+        let parent = state.doc.get_node(engine::NodeId::from(1_u64)).unwrap();
+        assert_eq!(
+            parent.children,
+            vec![engine::NodeId::from(3_u64), engine::NodeId::from(2_u64)]
+        );
+    }
+
+    #[test]
+    fn wasm_insert_before_negative_id_returns_error() {
+        let wat = r#"
+(module
+    (import "env" "__insert_before" (func $insert_before (param i32 i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (func (export "run") (result i32)
+        (call $insert_before (i32.const -1) (i32.const 1) (i32.const 2))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let status = run.call(&mut store, ()).expect("run");
+        assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
+    }
+
+    #[test]
+    fn wasm_insert_before_invalid_ref_returns_error() {
+        let wat = r#"
+(module
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__insert_before" (func $insert_before (param i32 i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (func (export "run") (result i32)
+        (local $parent i32)
+        (local $child i32)
+        (local.set $parent (call $create (i32.const 0)))
+        (local.set $child (call $create (i32.const 0)))
+        ;; ref_child (99) does not exist
+        (call $insert_before (local.get $parent) (local.get $child) (i32.const 99))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let status = run.call(&mut store, ()).expect("run");
+        assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
+    }
+
+    // ─── clone_node WAT tests ─────────────────────────────────────
+
+    #[test]
+    fn wasm_clone_node_shallow() {
+        let wat = r#"
+(module
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+    (import "env" "__set_attribute" (func $set_attr (param i32 i32 i32) (result i32)))
+    (import "env" "__clone_node" (func $clone (param i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (data (i32.const 16) "span\00")
+    (data (i32.const 32) "id\00")
+    (data (i32.const 48) "myid\00")
+    (func (export "run") (result i32)
+        (local $el i32)
+        (local $child i32)
+        (local $cloned i32)
+        (local.set $el (call $create (i32.const 0)))
+        (local.set $child (call $create (i32.const 16)))
+        (drop (call $set_attr (local.get $el) (i32.const 32) (i32.const 48)))
+        (drop (call $append (local.get $el) (local.get $child)))
+        ;; shallow clone (deep=0)
+        (local.set $cloned (call $clone (local.get $el) (i32.const 0)))
+        (local.get $cloned)
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let cloned_id = run.call(&mut store, ()).expect("run");
+        assert!(cloned_id > 0, "clone should return a positive ID");
+
+        let state = store.data();
+        let cloned = state
+            .doc
+            .get_node(engine::NodeId::from(cloned_id as u64))
+            .expect("cloned node should exist");
+        assert!(cloned.is_element());
+        // Verify attribute was cloned via RuntimeState's public API
+        let attr = store
+            .data()
+            .get_attribute(cloned_id as u32, "id")
+            .expect("get_attribute should work");
+        assert_eq!(attr.as_deref(), Some("myid"));
+        // Shallow clone: no children
+        assert!(cloned.children.is_empty());
+        assert!(cloned.parent.is_none());
+    }
+
+    #[test]
+    fn wasm_clone_node_deep() {
+        let wat = r#"
+(module
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+    (import "env" "__clone_node" (func $clone (param i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (data (i32.const 16) "span\00")
+    (func (export "run") (result i32)
+        (local $parent i32)
+        (local $child i32)
+        (local $cloned i32)
+        (local.set $parent (call $create (i32.const 0)))
+        (local.set $child (call $create (i32.const 16)))
+        (drop (call $append (local.get $parent) (local.get $child)))
+        ;; deep clone (deep=1)
+        (local.set $cloned (call $clone (local.get $parent) (i32.const 1)))
+        (local.get $cloned)
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let cloned_id = run.call(&mut store, ()).expect("run");
+        assert!(cloned_id > 0);
+
+        let state = store.data();
+        let cloned = state
+            .doc
+            .get_node(engine::NodeId::from(cloned_id as u64))
+            .expect("cloned node");
+        assert!(cloned.is_element());
+        assert_eq!(cloned.children.len(), 1, "deep clone should have 1 child");
+
+        let cloned_child = state
+            .doc
+            .get_node(cloned.children[0])
+            .expect("cloned child");
+        assert!(cloned_child.is_element());
+        // Verify the cloned child is a "span" element via node type
+        assert!(cloned_child.is_element());
+        assert_eq!(
+            cloned_child.parent,
+            Some(engine::NodeId::from(cloned_id as u64))
+        );
+    }
+
+    #[test]
+    fn wasm_clone_node_negative_id_returns_error() {
+        let wat = r#"
+(module
+    (import "env" "__clone_node" (func $clone (param i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (func (export "run") (result i32)
+        (call $clone (i32.const -1) (i32.const 0))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let status = run.call(&mut store, ()).expect("run");
+        assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
+    }
+
+    // ─── set_node_value WAT tests ─────────────────────────────────
+
+    #[test]
+    fn wasm_set_node_value_text_node() {
+        let wat = r#"
+(module
+    (import "env" "__create_text_node" (func $create_text (param i32) (result i32)))
+    (import "env" "__set_node_value" (func $set_value (param i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "old\00")
+    (data (i32.const 16) "new\00")
+    (func (export "run") (result i32)
+        (local $text i32)
+        (local.set $text (call $create_text (i32.const 0)))
+        (call $set_value (local.get $text) (i32.const 16))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let status = run.call(&mut store, ()).expect("run");
+        assert_eq!(status, 0);
+
+        let state = store.data();
+        let text = state
+            .doc
+            .get_node(engine::NodeId::from(1_u64))
+            .expect("text node");
+        assert_eq!(text.text(), Some("new"));
+    }
+
+    #[test]
+    fn wasm_set_node_value_element_noop() {
+        let wat = r#"
+(module
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__set_node_value" (func $set_value (param i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (data (i32.const 16) "ignored\00")
+    (func (export "run") (result i32)
+        (local $el i32)
+        (local.set $el (call $create (i32.const 0)))
+        (call $set_value (local.get $el) (i32.const 16))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let status = run.call(&mut store, ()).expect("run");
+        // Should return 0 (no-op, not an error)
+        assert_eq!(status, 0);
+    }
+
+    #[test]
+    fn wasm_set_node_value_negative_id_returns_error() {
+        let wat = r#"
+(module
+    (import "env" "__set_node_value" (func $set_value (param i32 i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "val\00")
+    (func (export "run") (result i32)
+        (call $set_value (i32.const -1) (i32.const 0))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let status = run.call(&mut store, ()).expect("run");
+        assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
+    }
+
+    // ─── get_node_type WAT tests ──────────────────────────────────
+
+    #[test]
+    fn wasm_get_node_type_element() {
+        let wat = r#"
+(module
+    (import "env" "__create_element" (func $create (param i32) (result i32)))
+    (import "env" "__get_node_type" (func $get_type (param i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "div\00")
+    (func (export "run") (result i32)
+        (local $el i32)
+        (local.set $el (call $create (i32.const 0)))
+        (call $get_type (local.get $el))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let node_type = run.call(&mut store, ()).expect("run");
+        assert_eq!(node_type, 1); // ELEMENT_NODE
+    }
+
+    #[test]
+    fn wasm_get_node_type_text() {
+        let wat = r#"
+(module
+    (import "env" "__create_text_node" (func $create_text (param i32) (result i32)))
+    (import "env" "__get_node_type" (func $get_type (param i32) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "hi\00")
+    (func (export "run") (result i32)
+        (local $text i32)
+        (local.set $text (call $create_text (i32.const 0)))
+        (call $get_type (local.get $text))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let node_type = run.call(&mut store, ()).expect("run");
+        assert_eq!(node_type, 3); // TEXT_NODE
+    }
+
+    #[test]
+    fn wasm_get_node_type_document() {
+        let wat = r#"
+(module
+    (import "env" "__get_node_type" (func $get_type (param i32) (result i32)))
+    (memory (export "memory") 1)
+    (func (export "run") (result i32)
+        ;; Document root is id 0
+        (call $get_type (i32.const 0))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let node_type = run.call(&mut store, ()).expect("run");
+        assert_eq!(node_type, 9); // DOCUMENT_NODE
+    }
+
+    #[test]
+    fn wasm_get_node_type_negative_id_returns_error() {
+        let wat = r#"
+(module
+    (import "env" "__get_node_type" (func $get_type (param i32) (result i32)))
+    (memory (export "memory") 1)
+    (func (export "run") (result i32)
+        (call $get_type (i32.const -1))
+    )
+)
+"#;
+
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let status = run.call(&mut store, ()).expect("run");
+        assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
+    }
 }
