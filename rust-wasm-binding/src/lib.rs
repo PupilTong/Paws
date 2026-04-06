@@ -47,6 +47,10 @@ extern "C" {
     fn __remove_attribute(id: i32, name_ptr: *const u8) -> i32;
     fn __remove_child(parent: i32, child: i32) -> i32;
     fn __replace_child(parent: i32, new_child: i32, old_child: i32) -> i32;
+    fn __insert_before(parent: i32, new_child: i32, ref_child: i32) -> i32;
+    fn __clone_node(id: i32, deep: i32) -> i32;
+    fn __set_node_value(id: i32, value_ptr: *const u8) -> i32;
+    fn __get_node_type(id: i32) -> i32;
 }
 
 #[link(wasm_import_module = "paws")]
@@ -365,6 +369,50 @@ pub fn replace_child(parent: i32, new_child: i32, old_child: i32) -> Result<(), 
     // SAFETY: No memory pointers involved — only integer IDs.
     let code = unsafe { __replace_child(parent, new_child, old_child) };
     check(code)
+}
+
+/// Inserts a new child before a reference child in the parent's children list.
+pub fn insert_before(parent: i32, new_child: i32, ref_child: i32) -> Result<(), i32> {
+    // SAFETY: No memory pointers involved — only integer IDs.
+    let code = unsafe { __insert_before(parent, new_child, ref_child) };
+    check(code)
+}
+
+/// Clones a DOM node. If `deep` is true, all descendants are cloned recursively.
+///
+/// Returns the new node's ID on success, or a negative error code.
+pub fn clone_node(id: i32, deep: bool) -> Result<i32, i32> {
+    // SAFETY: No memory pointers involved — only integer IDs.
+    let result = unsafe { __clone_node(id, if deep { 1 } else { 0 }) };
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result)
+    }
+}
+
+/// Sets the node's text value (for Text and Comment nodes).
+///
+/// For Element, Document, and ShadowRoot nodes, this is a no-op per the DOM spec.
+pub fn set_node_value(id: i32, value: &str) -> Result<(), i32> {
+    let value_ptr = write_cstr(value);
+    // SAFETY: `value_ptr` points to a null-terminated string in WASM linear memory.
+    let code = unsafe { __set_node_value(id, value_ptr) };
+    check(code)
+}
+
+/// Returns the W3C DOM `nodeType` constant for the given node.
+///
+/// Element=1, Text=3, Comment=8, Document=9, ShadowRoot(DocumentFragment)=11.
+/// Returns `None` if the node does not exist.
+pub fn get_node_type(id: i32) -> Option<i32> {
+    // SAFETY: No memory pointers involved — only integer ID.
+    let result = unsafe { __get_node_type(id) };
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
