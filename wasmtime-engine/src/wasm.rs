@@ -822,6 +822,123 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
 
     linker
         .func_wrap(
+            "env",
+            "__insert_before",
+            |mut caller: Caller<'_, RuntimeState<R>>,
+             parent: i32,
+             new_child: i32,
+             ref_child: i32|
+             -> Result<i32> {
+                if parent < 0 || new_child < 0 || ref_child < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative element id");
+                    return Ok(code);
+                }
+                match caller.data_mut().insert_before(
+                    parent as u32,
+                    new_child as u32,
+                    ref_child as u32,
+                ) {
+                    Ok(()) => {
+                        caller.data_mut().clear_error();
+                        Ok(0)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __insert_before");
+
+    linker
+        .func_wrap(
+            "env",
+            "__clone_node",
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32, deep: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data_mut().clone_node(id as u32, deep != 0) {
+                    Ok(new_id) => {
+                        caller.data_mut().clear_error();
+                        Ok(new_id as i32)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __clone_node");
+
+    linker
+        .func_wrap(
+            "env",
+            "__set_node_value",
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32, value_ptr: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                let value = match read_cstr(&mut caller, value_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                match caller.data_mut().set_node_value(id as u32, value) {
+                    Ok(()) => {
+                        caller.data_mut().clear_error();
+                        Ok(0)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __set_node_value");
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_node_type",
+            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data().get_node_type(id as u32) {
+                    Ok(type_code) => {
+                        caller.data_mut().clear_error();
+                        Ok(type_code as i32)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __get_node_type");
+
+    linker
+        .func_wrap(
             "paws",
             "paws_add_parsed_stylesheet",
             |mut caller: Caller<'_, RuntimeState<R>>, ptr: i32, len: i32| -> Result<()> {

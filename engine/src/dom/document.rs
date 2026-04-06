@@ -391,6 +391,145 @@ impl<S: Default + Send + 'static> Document<S> {
         Ok(())
     }
 
+    /// Inserts a new child before a reference child in the parent's children list.
+    ///
+    /// Per the W3C DOM spec, `parentNode.insertBefore(newChild, refChild)`.
+    /// The reference child must be a child of the parent. If the new child
+    /// already belongs to the same parent, it is moved to the new position.
+    pub(crate) fn insert_before(
+        &mut self,
+        parent_id: taffy::NodeId,
+        new_child_id: taffy::NodeId,
+        ref_child_id: taffy::NodeId,
+    ) -> Result<(), DomError> {
+        // Validate existence
+        if !self.nodes.contains(u64::from(parent_id) as usize) {
+            return Err(DomError::InvalidParent);
+        }
+        if !self.nodes.contains(u64::from(new_child_id) as usize) {
+            return Err(DomError::InvalidChild);
+        }
+        if !self.nodes.contains(u64::from(ref_child_id) as usize) {
+            return Err(DomError::InvalidChild);
+        }
+
+        // Verify ref_child is a child of parent
+        let ref_parent = self.get_node(ref_child_id).unwrap().parent;
+        if ref_parent != Some(parent_id) {
+            return Err(DomError::InvalidChild);
+        }
+
+        // Cycle detection
+        if new_child_id == parent_id {
+            return Err(DomError::CycleDetected);
+        }
+        let mut ancestor = Some(parent_id);
+        while let Some(curr) = ancestor {
+            if curr == new_child_id {
+                return Err(DomError::CycleDetected);
+            }
+            ancestor = self.get_node(curr).and_then(|n| n.parent);
+        }
+
+        // Check if new_child already has a parent
+        let old_parent = self.get_node(new_child_id).unwrap().parent;
+        let needs_detach = old_parent == Some(parent_id);
+        if !needs_detach && old_parent.is_some() {
+            return Err(DomError::ChildAlreadyHasParent);
+        }
+
+        // Detach new_child if it's already in this parent (re-insert at new position)
+        if needs_detach {
+            self.detach_node(new_child_id);
+        }
+
+        // Re-find ref_child's position after potential detach (index may have shifted)
+        let pos = self
+            .get_node(parent_id)
+            .unwrap()
+            .children
+            .iter()
+            .position(|&id| id == ref_child_id)
+            .unwrap();
+
+        // Insert new_child before ref_child
+        let mut parent_in_doc = false;
+        if let Some(parent) = self.get_node_mut(parent_id) {
+            parent.children.insert(pos, new_child_id);
+            parent.set_dirty_descendants();
+            parent_in_doc = parent.flags.contains(NodeFlags::IS_IN_DOCUMENT);
+        }
+
+        // Set new_child's parent
+        if let Some(child) = self.get_node_mut(new_child_id) {
+            child.parent = Some(parent_id);
+        }
+
+        // Propagate IS_IN_DOCUMENT flag
+        if parent_in_doc {
+            self.propagate_in_document_flag(new_child_id);
+        }
+
+        Ok(())
+    }
+
+    /// Creates a copy of a DOM node.
+    ///
+    /// If `deep` is true, all descendants are cloned recursively and attached
+    /// to the cloned node. The cloned node has no parent (is orphaned) and is
+    /// not connected to the document.
+    ///
+    /// Copies: node type, tag name, attributes, classes, id, text content,
+    /// and inline style (Arc-cloned).
+    /// Does NOT copy: parent, computed styles, layout data, render state,
+    /// stylo element data, or shadow root.
+    pub(crate) fn clone_node(
+        &mut self,
+        node_id: taffy::NodeId,
+        deep: bool,
+    ) -> Result<taffy::NodeId, DomError> {
+        if !self.nodes.contains(u64::from(node_id) as usize) {
+            return Err(DomError::InvalidChild);
+        }
+
+        // Read source node data
+        let source = self.get_node(node_id).unwrap();
+        let node_type = source.node_type;
+        let name = source.name.clone();
+        let id_attr = source.id_attr.clone();
+        let attrs = source.attrs.clone();
+        let classes = source.classes.clone();
+        let style_attribute = source.style_attribute.clone();
+        let text_content = source.text_content.clone();
+        let children: Vec<taffy::NodeId> = if deep {
+            source.children.clone()
+        } else {
+            Vec::new()
+        };
+
+        // Create the new node
+        let new_id = self.create_node(node_type);
+        let new_node = self.get_node_mut(new_id).unwrap();
+        new_node.name = name;
+        new_node.id_attr = id_attr;
+        new_node.attrs = attrs;
+        new_node.classes = classes;
+        new_node.style_attribute = style_attribute;
+        new_node.text_content = text_content;
+
+        // Deep clone: recursively clone children and append
+        if deep {
+            for child_id in children {
+                let cloned_child_id = self.clone_node(child_id, true)?;
+                // append_child won't fail here: no cycles, no existing parent
+                self.append_child(new_id, cloned_child_id)
+                    .expect("cloned child append cannot fail");
+            }
+        }
+
+        Ok(new_id)
+    }
+
     /// Returns the next sibling of the given node, or `None`.
     pub(crate) fn get_next_sibling(&self, node_id: taffy::NodeId) -> Option<taffy::NodeId> {
         let parent_id = self.get_node(node_id)?.parent?;

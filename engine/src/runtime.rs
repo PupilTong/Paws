@@ -396,6 +396,75 @@ impl<R: EngineRenderer> RuntimeState<R> {
             .map_err(dom_error_to_host)
     }
 
+    /// Inserts a new child before a reference child under a given parent.
+    pub fn insert_before(
+        &mut self,
+        parent: u32,
+        new_child: u32,
+        ref_child: u32,
+    ) -> Result<(), HostErrorCode> {
+        self.doc
+            .insert_before(
+                taffy::NodeId::from(parent as u64),
+                taffy::NodeId::from(new_child as u64),
+                taffy::NodeId::from(ref_child as u64),
+            )
+            .map_err(dom_error_to_host)
+    }
+
+    /// Clones a DOM node. If `deep` is true, all descendants are cloned recursively.
+    ///
+    /// Returns the new node's ID on success.
+    pub fn clone_node(&mut self, id: u32, deep: bool) -> Result<u32, HostErrorCode> {
+        self.doc
+            .clone_node(taffy::NodeId::from(id as u64), deep)
+            .map(|new_id| u64::from(new_id) as u32)
+            .map_err(dom_error_to_host)
+    }
+
+    /// Sets the node's value (text content for Text/Comment nodes).
+    ///
+    /// Per the W3C DOM spec, setting `nodeValue` on Element, Document, or
+    /// ShadowRoot nodes is a no-op.
+    pub fn set_node_value(&mut self, id: u32, value: String) -> Result<(), HostErrorCode> {
+        let node_id = taffy::NodeId::from(id as u64);
+        let node = self
+            .doc
+            .get_node_mut(node_id)
+            .ok_or(HostErrorCode::InvalidChild)?;
+
+        use crate::dom::NodeType;
+        match node.node_type {
+            NodeType::Text | NodeType::Comment => {
+                node.text_content = Some(value);
+                node.mark_ancestors_dirty();
+                Ok(())
+            }
+            // Per DOM spec, setting nodeValue on these types is a no-op
+            NodeType::Element | NodeType::Document | NodeType::ShadowRoot => Ok(()),
+        }
+    }
+
+    /// Returns the W3C DOM `nodeType` constant for the given node.
+    ///
+    /// Element=1, Text=3, Comment=8, Document=9, ShadowRoot(DocumentFragment)=11.
+    pub fn get_node_type(&self, id: u32) -> Result<u32, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+
+        use crate::dom::NodeType;
+        let type_code = match node.node_type {
+            NodeType::Element => 1,
+            NodeType::Text => 3,
+            NodeType::Comment => 8,
+            NodeType::Document => 9,
+            NodeType::ShadowRoot => 11,
+        };
+        Ok(type_code)
+    }
+
     /// Returns the first child of the given node, or `None`.
     pub fn get_first_child(&self, id: u32) -> Result<Option<u32>, HostErrorCode> {
         let node = self
@@ -2871,5 +2940,294 @@ mod tests {
         let node = state.doc.get_node(taffy::NodeId::from(div as u64)).unwrap();
         assert_eq!(node.layout().size.width, 50.0);
         assert_eq!(node.layout().size.height, 50.0);
+    }
+
+    // ─── insert_before tests ──────────────────────────────────────
+
+    #[test]
+    fn test_insert_before_basic() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let a = state.create_element("a".to_string());
+        let b = state.create_element("b".to_string());
+        let x = state.create_element("x".to_string());
+
+        state.append_element(parent, a).unwrap();
+        state.append_element(parent, b).unwrap();
+
+        // Insert x before b → order should be [a, x, b]
+        state.insert_before(parent, x, b).unwrap();
+
+        let p = state
+            .doc
+            .get_node(taffy::NodeId::from(parent as u64))
+            .unwrap();
+        let children: Vec<u32> = p.children.iter().map(|&id| u64::from(id) as u32).collect();
+        assert_eq!(children, vec![a, x, b]);
+    }
+
+    #[test]
+    fn test_insert_before_at_beginning() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let a = state.create_element("a".to_string());
+        let x = state.create_element("x".to_string());
+
+        state.append_element(parent, a).unwrap();
+
+        // Insert x before a → order should be [x, a]
+        state.insert_before(parent, x, a).unwrap();
+
+        let p = state
+            .doc
+            .get_node(taffy::NodeId::from(parent as u64))
+            .unwrap();
+        let children: Vec<u32> = p.children.iter().map(|&id| u64::from(id) as u32).collect();
+        assert_eq!(children, vec![x, a]);
+    }
+
+    #[test]
+    fn test_insert_before_same_parent_reorder() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let a = state.create_element("a".to_string());
+        let b = state.create_element("b".to_string());
+        let c = state.create_element("c".to_string());
+
+        state.append_element(parent, a).unwrap();
+        state.append_element(parent, b).unwrap();
+        state.append_element(parent, c).unwrap();
+        // [a, b, c]
+
+        // Move a before c → [b, a, c]
+        state.insert_before(parent, a, c).unwrap();
+
+        let p = state
+            .doc
+            .get_node(taffy::NodeId::from(parent as u64))
+            .unwrap();
+        let children: Vec<u32> = p.children.iter().map(|&id| u64::from(id) as u32).collect();
+        assert_eq!(children, vec![b, a, c]);
+    }
+
+    #[test]
+    fn test_insert_before_errors() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
+        let other_parent = state.create_element("section".to_string());
+        let other_child = state.create_element("em".to_string());
+
+        state.append_element(parent, child).unwrap();
+        state.append_element(other_parent, other_child).unwrap();
+
+        let new_node = state.create_element("p".to_string());
+
+        // ref_child not a child of parent
+        assert_eq!(
+            state.insert_before(parent, new_node, other_child),
+            Err(HostErrorCode::InvalidChild)
+        );
+
+        // Cycle detection
+        assert_eq!(
+            state.insert_before(parent, parent, child),
+            Err(HostErrorCode::CycleDetected)
+        );
+
+        // new_child has different parent
+        assert_eq!(
+            state.insert_before(parent, other_child, child),
+            Err(HostErrorCode::ChildAlreadyHasParent)
+        );
+    }
+
+    #[test]
+    fn test_insert_before_in_document_propagation() {
+        use crate::dom::NodeFlags;
+
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
+        let new_node = state.create_element("em".to_string());
+
+        // Connect parent to document
+        state.append_element(0, parent).unwrap();
+        state.append_element(parent, child).unwrap();
+
+        // Insert new_node before child — should propagate IS_IN_DOCUMENT
+        state.insert_before(parent, new_node, child).unwrap();
+
+        assert!(state
+            .doc
+            .get_node(taffy::NodeId::from(new_node as u64))
+            .unwrap()
+            .flags
+            .contains(NodeFlags::IS_IN_DOCUMENT));
+    }
+
+    // ─── clone_node tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_clone_node_shallow() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state
+            .set_attribute(el, "id".to_string(), "foo".to_string())
+            .unwrap();
+        state
+            .set_attribute(el, "class".to_string(), "bar baz".to_string())
+            .unwrap();
+
+        let child = state.create_element("span".to_string());
+        state.append_element(el, child).unwrap();
+
+        // Shallow clone
+        let cloned = state.clone_node(el, false).unwrap();
+        assert_ne!(cloned, el);
+
+        let cloned_node = state
+            .doc
+            .get_node(taffy::NodeId::from(cloned as u64))
+            .unwrap();
+        assert!(cloned_node.is_element());
+        assert_eq!(cloned_node.name.as_ref().unwrap().local.as_ref(), "div");
+        assert_eq!(cloned_node.get_attribute("id"), Some("foo"));
+        assert!(cloned_node
+            .classes
+            .contains(&stylo_atoms::Atom::from("bar")));
+        assert!(cloned_node
+            .classes
+            .contains(&stylo_atoms::Atom::from("baz")));
+        // Shallow: no children
+        assert!(cloned_node.children.is_empty());
+        // No parent
+        assert!(cloned_node.parent.is_none());
+    }
+
+    #[test]
+    fn test_clone_node_deep() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
+        let text = state.create_text_node("hello".to_string());
+
+        state.append_element(parent, child).unwrap();
+        state.append_element(child, text).unwrap();
+
+        // Deep clone
+        let cloned = state.clone_node(parent, true).unwrap();
+        assert_ne!(cloned, parent);
+
+        let cloned_node = state
+            .doc
+            .get_node(taffy::NodeId::from(cloned as u64))
+            .unwrap();
+        assert_eq!(cloned_node.children.len(), 1);
+
+        let cloned_child_id = u64::from(cloned_node.children[0]) as u32;
+        assert_ne!(cloned_child_id, child);
+
+        let cloned_child = state
+            .doc
+            .get_node(taffy::NodeId::from(cloned_child_id as u64))
+            .unwrap();
+        assert!(cloned_child.is_element());
+        assert_eq!(cloned_child.name.as_ref().unwrap().local.as_ref(), "span");
+        assert_eq!(cloned_child.children.len(), 1);
+
+        let cloned_text_id = u64::from(cloned_child.children[0]) as u32;
+        let cloned_text = state
+            .doc
+            .get_node(taffy::NodeId::from(cloned_text_id as u64))
+            .unwrap();
+        assert!(cloned_text.is_text_node());
+        assert_eq!(cloned_text.text_content.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn test_clone_node_text() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let text = state.create_text_node("world".to_string());
+
+        let cloned = state.clone_node(text, false).unwrap();
+        let cloned_node = state
+            .doc
+            .get_node(taffy::NodeId::from(cloned as u64))
+            .unwrap();
+        assert!(cloned_node.is_text_node());
+        assert_eq!(cloned_node.text_content.as_deref(), Some("world"));
+    }
+
+    #[test]
+    fn test_clone_node_invalid() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        assert_eq!(
+            state.clone_node(999, false),
+            Err(HostErrorCode::InvalidChild)
+        );
+    }
+
+    // ─── set_node_value tests ─────────────────────────────────────
+
+    #[test]
+    fn test_set_node_value_text_node() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let text = state.create_text_node("old".to_string());
+
+        state.set_node_value(text, "new".to_string()).unwrap();
+
+        let node = state
+            .doc
+            .get_node(taffy::NodeId::from(text as u64))
+            .unwrap();
+        assert_eq!(node.text_content.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn test_set_node_value_element_noop() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+
+        // Should succeed (no-op, not an error)
+        state.set_node_value(el, "ignored".to_string()).unwrap();
+    }
+
+    #[test]
+    fn test_set_node_value_invalid() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        assert_eq!(
+            state.set_node_value(999, "value".to_string()),
+            Err(HostErrorCode::InvalidChild)
+        );
+    }
+
+    // ─── get_node_type tests ──────────────────────────────────────
+
+    #[test]
+    fn test_get_node_type_element() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        assert_eq!(state.get_node_type(el), Ok(1));
+    }
+
+    #[test]
+    fn test_get_node_type_text() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let text = state.create_text_node("hi".to_string());
+        assert_eq!(state.get_node_type(text), Ok(3));
+    }
+
+    #[test]
+    fn test_get_node_type_document() {
+        let state = RuntimeState::new("https://example.com".to_string());
+        // Document root is id 0
+        assert_eq!(state.get_node_type(0), Ok(9));
+    }
+
+    #[test]
+    fn test_get_node_type_invalid() {
+        let state = RuntimeState::new("https://example.com".to_string());
+        assert_eq!(state.get_node_type(999), Err(HostErrorCode::InvalidChild));
     }
 }
