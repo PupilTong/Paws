@@ -2661,4 +2661,328 @@ mod tests {
             .unwrap();
         assert_eq!(target_phase, 2, "target listener should see AT_TARGET (2)");
     }
+
+    /// Negative target ID returns InvalidEventTarget error.
+    #[test]
+    fn wasm_event_add_listener_negative_id() {
+        let wat = r#"
+(module
+  (import "env" "__add_event_listener" (func $add (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "click\00")
+  (func (export "run") (result i32)
+    ;; target_id = -1 (negative)
+    (call $add (i32.const -1) (i32.const 0) (i32.const 1) (i32.const 0))
+  )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let result = run.call(&mut store, ()).expect("run");
+        assert_eq!(result, HostErrorCode::InvalidEventTarget.as_i32());
+    }
+
+    /// Negative target ID on remove_event_listener returns error.
+    #[test]
+    fn wasm_event_remove_listener_negative_id() {
+        let wat = r#"
+(module
+  (import "env" "__remove_event_listener" (func $remove (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "click\00")
+  (func (export "run") (result i32)
+    (call $remove (i32.const -1) (i32.const 0) (i32.const 1) (i32.const 0))
+  )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let result = run.call(&mut store, ()).expect("run");
+        assert_eq!(result, HostErrorCode::InvalidEventTarget.as_i32());
+    }
+
+    /// Negative target ID on dispatch_event returns error.
+    #[test]
+    fn wasm_event_dispatch_negative_id() {
+        let wat = r#"
+(module
+  (import "env" "__dispatch_event" (func $dispatch (param i32 i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "click\00")
+  (func (export "run") (result i32)
+    (call $dispatch (i32.const -1) (i32.const 0) (i32.const 1) (i32.const 1) (i32.const 0))
+  )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let result = run.call(&mut store, ()).expect("run");
+        assert_eq!(result, HostErrorCode::InvalidEventTarget.as_i32());
+    }
+
+    /// Dispatch on nonexistent node returns InvalidEventTarget.
+    #[test]
+    fn wasm_event_dispatch_nonexistent_target() {
+        let wat = r#"
+(module
+  (import "env" "__dispatch_event" (func $dispatch (param i32 i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "click\00")
+  (func (export "run") (result i32)
+    ;; target_id=999, doesn't exist
+    (call $dispatch (i32.const 999) (i32.const 0) (i32.const 1) (i32.const 1) (i32.const 0))
+  )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let result = run.call(&mut store, ()).expect("run");
+        assert_eq!(result, HostErrorCode::InvalidEventTarget.as_i32());
+    }
+
+    /// Dispatch works without __paws_invoke_listener export (no-op listeners).
+    #[test]
+    fn wasm_event_dispatch_no_invoke_export() {
+        let wat = r#"
+(module
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__add_event_listener" (func $add (param i32 i32 i32 i32) (result i32)))
+  (import "env" "__dispatch_event" (func $dispatch (param i32 i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "div\00")
+  (data (i32.const 16) "click\00")
+  ;; No __paws_invoke_listener export — dispatch should still succeed
+  (func (export "run") (result i32)
+    (local $id i32)
+    (local.set $id (call $create (i32.const 0)))
+    (drop (call $append (i32.const 0) (local.get $id)))
+    (drop (call $add (local.get $id) (i32.const 16) (i32.const 1) (i32.const 0)))
+    ;; Dispatch — returns 1 (not canceled) since listener is a no-op
+    (call $dispatch (local.get $id) (i32.const 16) (i32.const 1) (i32.const 1) (i32.const 0))
+  )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let result = run.call(&mut store, ()).expect("run");
+        assert_eq!(
+            result, 1,
+            "dispatch without invoke export should return 1 (not canceled)"
+        );
+    }
+
+    /// Non-bubbling event: parent bubble listener doesn't fire.
+    #[test]
+    fn wasm_event_non_bubbling() {
+        let wat = r#"
+(module
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__add_event_listener" (func $add (param i32 i32 i32 i32) (result i32)))
+  (import "env" "__dispatch_event" (func $dispatch (param i32 i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "div\00")
+  (data (i32.const 16) "focus\00")
+  (global $counter (export "counter") (mut i32) (i32.const 0))
+  (func (export "__paws_invoke_listener") (param $cb_id i32)
+    (global.set $counter (i32.add (global.get $counter) (i32.const 1)))
+  )
+  (func (export "run") (result i32)
+    (local $parent i32)
+    (local $child i32)
+    (local.set $parent (call $create (i32.const 0)))
+    (local.set $child (call $create (i32.const 0)))
+    (drop (call $append (i32.const 0) (local.get $parent)))
+    (drop (call $append (local.get $parent) (local.get $child)))
+    ;; Bubble listener on parent
+    (drop (call $add (local.get $parent) (i32.const 16) (i32.const 1) (i32.const 0)))
+    ;; Listener on child
+    (drop (call $add (local.get $child) (i32.const 16) (i32.const 2) (i32.const 0)))
+    ;; Dispatch non-bubbling event (bubbles=0)
+    (drop (call $dispatch (local.get $child) (i32.const 16) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (global.get $counter)
+  )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let counter = run.call(&mut store, ()).expect("run");
+        assert_eq!(counter, 1, "non-bubbling event should only fire at-target");
+    }
+
+    /// Passive listener: preventDefault is ignored.
+    #[test]
+    fn wasm_event_passive_prevents_default() {
+        let wat = r#"
+(module
+  (import "env" "__create_element" (func $create (param i32) (result i32)))
+  (import "env" "__append_element" (func $append (param i32 i32) (result i32)))
+  (import "env" "__add_event_listener" (func $add (param i32 i32 i32 i32) (result i32)))
+  (import "env" "__dispatch_event" (func $dispatch (param i32 i32 i32 i32 i32) (result i32)))
+  (import "env" "__event_prevent_default" (func $prevent (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "div\00")
+  (data (i32.const 16) "scroll\00")
+  (func (export "__paws_invoke_listener") (param $cb_id i32)
+    ;; Try to preventDefault from passive listener — should be no-op
+    (drop (call $prevent))
+  )
+  (func (export "run") (result i32)
+    (local $id i32)
+    (local.set $id (call $create (i32.const 0)))
+    (drop (call $append (i32.const 0) (local.get $id)))
+    ;; Add passive listener (options_flags=2, bit 1 = passive)
+    (drop (call $add (local.get $id) (i32.const 16) (i32.const 1) (i32.const 2)))
+    ;; Dispatch cancelable event
+    (call $dispatch (local.get $id) (i32.const 16) (i32.const 1) (i32.const 1) (i32.const 0))
+  )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let result = run.call(&mut store, ()).expect("run");
+        assert_eq!(
+            result, 1,
+            "passive listener preventDefault should be ignored, event not canceled"
+        );
+    }
+
+    /// Add listener to nonexistent target returns error.
+    #[test]
+    fn wasm_event_add_listener_invalid_target() {
+        let wat = r#"
+(module
+  (import "env" "__add_event_listener" (func $add (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "click\00")
+  (func (export "run") (result i32)
+    ;; target_id=999, doesn't exist
+    (call $add (i32.const 999) (i32.const 0) (i32.const 1) (i32.const 0))
+  )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let result = run.call(&mut store, ()).expect("run");
+        assert_eq!(result, HostErrorCode::InvalidEventTarget.as_i32());
+    }
+
+    /// Remove listener from nonexistent target returns error.
+    #[test]
+    fn wasm_event_remove_listener_invalid_target() {
+        let wat = r#"
+(module
+  (import "env" "__remove_event_listener" (func $remove (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "click\00")
+  (func (export "run") (result i32)
+    (call $remove (i32.const 999) (i32.const 0) (i32.const 1) (i32.const 0))
+  )
+)
+"#;
+        let engine = WasmEngine::default();
+        let module = Module::new(&engine, wat).expect("compile");
+        let mut store = Store::new(
+            &engine,
+            RuntimeState::new("https://example.com".to_string()),
+        );
+        let linker = build_linker(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("get run");
+        let result = run.call(&mut store, ()).expect("run");
+        assert_eq!(result, HostErrorCode::InvalidEventTarget.as_i32());
+    }
 }
