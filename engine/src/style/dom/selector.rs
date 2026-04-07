@@ -33,6 +33,20 @@ impl<S: Default + Send + 'static> selectors::Element for &PawsElement<S> {
     }
 
     fn containing_shadow_host(&self) -> Option<Self> {
+        use crate::dom::NodeType;
+        // Walk up ancestors to find the containing shadow root, then return its host.
+        let mut current = self.parent;
+        while let Some(id) = current {
+            let node = self.with(id);
+            if node.node_type == NodeType::ShadowRoot {
+                // Shadow root's parent is the host element.
+                return node.parent.map(|host_id| self.with(host_id));
+            }
+            if node.node_type == NodeType::Document {
+                return None;
+            }
+            current = node.parent;
+        }
         None
     }
 
@@ -45,7 +59,7 @@ impl<S: Default + Send + 'static> selectors::Element for &PawsElement<S> {
     }
 
     fn assigned_slot(&self) -> Option<Self> {
-        None
+        self.assigned_slot_id.map(|id| self.with(id))
     }
 
     fn prev_sibling_element(&self) -> Option<Self> {
@@ -138,7 +152,7 @@ impl<S: Default + Send + 'static> selectors::Element for &PawsElement<S> {
         false
     }
     fn is_html_slot_element(&self) -> bool {
-        false
+        self.is_slot_element()
     }
 
     fn is_part(&self, _name: &<Self::Impl as selectors::SelectorImpl>::Identifier) -> bool {

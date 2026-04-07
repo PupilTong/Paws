@@ -83,6 +83,11 @@ extern "C" {
     fn __event_default_prevented() -> i32;
     fn __event_composed() -> i32;
     fn __event_timestamp() -> f64;
+
+    // Shadow DOM
+    fn __attach_shadow(host_id: i32, mode_ptr: *const u8) -> i32;
+    fn __get_shadow_root(host_id: i32) -> i32;
+    fn __add_shadow_stylesheet(shadow_root_id: i32, css_ptr: *const u8) -> i32;
 }
 
 #[link(wasm_import_module = "paws")]
@@ -695,6 +700,41 @@ pub extern "C" fn paws_invoke_listener(callback_id: i32) {
             callback();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shadow DOM
+// ---------------------------------------------------------------------------
+
+/// Attaches a shadow root to the given host element.
+///
+/// `mode` must be `"open"` or `"closed"`. Returns the shadow root's
+/// numeric ID on success, or a negative host error code.
+pub fn attach_shadow(host_id: i32, mode: &str) -> Result<i32, i32> {
+    let mode_ptr = write_cstr(mode);
+    let result = unsafe { __attach_shadow(host_id, mode_ptr) };
+    if result >= 0 {
+        Ok(result)
+    } else {
+        Err(result)
+    }
+}
+
+/// Returns the shadow root ID for the given host element, or `None`.
+pub fn get_shadow_root(host_id: i32) -> Option<i32> {
+    let result = unsafe { __get_shadow_root(host_id) };
+    if result >= 0 {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+/// Adds a CSS stylesheet scoped to a shadow root.
+pub fn add_shadow_stylesheet(shadow_root_id: i32, css: &str) -> Result<(), i32> {
+    let css_ptr = write_cstr(css);
+    let code = unsafe { __add_shadow_stylesheet(shadow_root_id, css_ptr) };
+    check(code)
 }
 
 // ---------------------------------------------------------------------------

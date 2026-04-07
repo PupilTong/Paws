@@ -93,6 +93,18 @@ impl<'a, S: Default + Send + 'static> TElement for &'a PawsElement<S> {
     }
 
     fn containing_shadow(&self) -> Option<Self::ConcreteNode> {
+        use crate::dom::NodeType;
+        let mut current = self.parent;
+        while let Some(id) = current {
+            let node = self.with(id);
+            if node.node_type == NodeType::ShadowRoot {
+                return Some(node);
+            }
+            if node.node_type == NodeType::Document {
+                return None;
+            }
+            current = node.parent;
+        }
         None
     }
 

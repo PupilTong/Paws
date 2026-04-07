@@ -147,12 +147,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
     pub fn destroy_element(&mut self, id: u32) -> Result<(), HostErrorCode> {
         self.doc
             .remove_node(taffy::NodeId::from(id as u64))
-            .map_err(|e| match e {
-                DomError::InvalidParent => HostErrorCode::InvalidParent,
-                DomError::InvalidChild => HostErrorCode::InvalidChild,
-                DomError::CycleDetected => HostErrorCode::CycleDetected,
-                DomError::ChildAlreadyHasParent => HostErrorCode::ChildAlreadyHasParent,
-            })
+            .map_err(dom_error_to_host)
     }
 
     /// Sets a single inline style property on an element.
@@ -344,12 +339,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
                 taffy::NodeId::from(parent as u64),
                 taffy::NodeId::from(child as u64),
             )
-            .map_err(|e| match e {
-                DomError::InvalidParent => HostErrorCode::InvalidParent,
-                DomError::InvalidChild => HostErrorCode::InvalidChild,
-                DomError::CycleDetected => HostErrorCode::CycleDetected,
-                DomError::ChildAlreadyHasParent => HostErrorCode::ChildAlreadyHasParent,
-            })
+            .map_err(dom_error_to_host)
     }
 
     /// Batch-appends multiple children to a parent with transactional pre-validation.
@@ -669,6 +659,88 @@ impl<R: EngineRenderer> RuntimeState<R> {
 
         Ok(())
     }
+
+    // ── Shadow DOM ─────────────────────────────────────────────────
+
+    /// Creates a shadow root on the given host element.
+    ///
+    /// Returns the shadow root's node ID. The shadow root is not part of the
+    /// host's `children` vec — it is only reachable via `host.shadow_root_id`.
+    /// Children can be appended to the shadow root using the regular
+    /// [`append_element`](Self::append_element) method.
+    pub fn attach_shadow(&mut self, host_id: u32, mode: &str) -> Result<u32, HostErrorCode> {
+        use crate::dom::element::ShadowRootMode;
+        let shadow_mode = match mode {
+            "open" => ShadowRootMode::Open,
+            "closed" => ShadowRootMode::Closed,
+            _ => return Err(HostErrorCode::InvalidParent),
+        };
+        let sr_id = self
+            .doc
+            .create_shadow_root(taffy::NodeId::from(host_id as u64), shadow_mode)
+            .map_err(dom_error_to_host)?;
+        Ok(u64::from(sr_id) as u32)
+    }
+
+    /// Returns the shadow root ID for the given host element, or `None`.
+    pub fn get_shadow_root(&self, host_id: u32) -> Option<u32> {
+        let node = self.doc.get_node(taffy::NodeId::from(host_id as u64))?;
+        node.shadow_root_id.map(|id| u64::from(id) as u32)
+    }
+
+    /// Parses and adds a CSS stylesheet scoped to a shadow root.
+    ///
+    /// The stylesheet's rules are collected into a per-shadow-root
+    /// [`CascadeData`](style::stylist::CascadeData) that Stylo queries
+    /// via [`TShadowRoot::style_data()`].
+    pub fn add_shadow_stylesheet(
+        &mut self,
+        shadow_root_id: u32,
+        css: String,
+    ) -> Result<(), HostErrorCode> {
+        let sr_node_id = taffy::NodeId::from(shadow_root_id as u64);
+        let sr = self
+            .doc
+            .get_node(sr_node_id)
+            .ok_or(HostErrorCode::InvalidChild)?;
+        if sr.node_type != crate::dom::element::NodeType::ShadowRoot {
+            return Err(HostErrorCode::InvalidChild);
+        }
+
+        // Parse the stylesheet
+        let sheet_arc = self.stylesheet_cache.get_or_parse(&css);
+        let doc_sheet = style::stylesheets::DocumentStyleSheet(sheet_arc);
+
+        // Build CascadeData from the stylesheet using AuthorStylesheetSet.
+        let lock = &self.style_context.lock;
+        let guard = lock.read();
+        let custom_media = style::stylesheets::CustomMediaMap::default();
+
+        let mut sheet_set = style::stylesheet_set::AuthorStylesheetSet::<
+            style::stylesheets::DocumentStyleSheet,
+        >::new();
+        sheet_set.append_stylesheet(None, &custom_media, doc_sheet, &guard);
+        let (flusher, _invalidations) = sheet_set.flush();
+
+        let mut cascade_data = style::stylist::CascadeData::new();
+        let mut difference = style::stylist::CascadeDataDifference::default();
+        let _ = cascade_data.rebuild(
+            self.style_context.stylist.device(),
+            style::context::QuirksMode::NoQuirks,
+            flusher.sheets,
+            &guard,
+            &mut difference,
+        );
+
+        // Store on the shadow root node
+        let sr_mut = self.doc.get_node_mut(sr_node_id).unwrap();
+        sr_mut.shadow_cascade_data = Some(Box::new(cascade_data));
+
+        // Mark ancestors dirty for re-resolution
+        sr_mut.mark_ancestors_dirty();
+
+        Ok(())
+    }
 }
 
 /// Maps a [`DomError`] to a [`HostErrorCode`] for FFI.
@@ -678,6 +750,7 @@ fn dom_error_to_host(e: DomError) -> HostErrorCode {
         DomError::InvalidChild => HostErrorCode::InvalidChild,
         DomError::CycleDetected => HostErrorCode::CycleDetected,
         DomError::ChildAlreadyHasParent => HostErrorCode::ChildAlreadyHasParent,
+        DomError::ShadowRootAlreadyExists => HostErrorCode::InvalidParent,
     }
 }
 
@@ -3154,6 +3227,55 @@ mod tests {
         );
     }
 
+    // ── Shadow DOM tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_attach_shadow_basic() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+        assert!(sr > 0);
+
+        // Verify shadow_root_id is set on host
+        let host_node = state
+            .doc
+            .get_node(taffy::NodeId::from(host as u64))
+            .unwrap();
+        assert_eq!(
+            host_node.shadow_root_id,
+            Some(taffy::NodeId::from(sr as u64))
+        );
+
+        // Verify get_shadow_root returns the same ID
+        assert_eq!(state.get_shadow_root(host), Some(sr));
+    }
+
+    #[test]
+    fn test_attach_shadow_duplicate_fails() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        assert!(state.attach_shadow(host, "open").is_ok());
+        assert!(state.attach_shadow(host, "open").is_err());
+    }
+
+    #[test]
+    fn test_attach_shadow_closed_mode() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "closed").unwrap();
+        let sr_node = state.doc.get_node(taffy::NodeId::from(sr as u64)).unwrap();
+        assert_eq!(
+            sr_node.shadow_mode,
+            Some(crate::dom::element::ShadowRootMode::Closed)
+        );
+    }
+
     #[test]
     fn test_insert_before_in_document_propagation() {
         use crate::dom::NodeFlags;
@@ -3534,5 +3656,308 @@ mod tests {
             HostErrorCode::EventAlreadyDispatching.message(),
             "an event is already being dispatched"
         );
+    }
+
+    #[test]
+    fn test_shadow_root_children_styled() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+
+        // Add a child to the shadow root
+        let inner = state.create_element("span".to_string());
+        state.append_element(sr, inner).unwrap();
+
+        // Commit should succeed — shadow tree children should be styled
+        state.commit();
+
+        let inner_node = state
+            .doc
+            .get_node(taffy::NodeId::from(inner as u64))
+            .unwrap();
+        assert!(inner_node.computed_values.is_some());
+    }
+
+    #[test]
+    fn test_shadow_tree_inherits_from_host() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+        state
+            .set_inline_style(host, "font-size".to_string(), "24px".to_string())
+            .unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+        let inner = state.create_element("span".to_string());
+        state.append_element(sr, inner).unwrap();
+
+        state.commit();
+
+        // The inner element should inherit font-size from the host
+        let inner_node = state
+            .doc
+            .get_node(taffy::NodeId::from(inner as u64))
+            .unwrap();
+        let cv = inner_node.computed_values.as_ref().unwrap();
+        let fs = cv.clone_font_size().computed_size().px();
+        assert_eq!(fs, 24.0);
+    }
+
+    #[test]
+    fn test_shadow_host_layout_uses_shadow_tree() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+
+        // Add styled child to shadow tree
+        let inner = state.create_element("div".to_string());
+        state.append_element(sr, inner).unwrap();
+        state
+            .set_inline_style(inner, "width".to_string(), "100px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(inner, "height".to_string(), "50px".to_string())
+            .unwrap();
+
+        // Also add a light DOM child (should NOT be rendered)
+        let light = state.create_element("div".to_string());
+        state.append_element(host, light).unwrap();
+        state
+            .set_inline_style(light, "width".to_string(), "200px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(light, "height".to_string(), "200px".to_string())
+            .unwrap();
+
+        state.commit();
+
+        // Shadow tree child should have its layout
+        let inner_node = state
+            .doc
+            .get_node(taffy::NodeId::from(inner as u64))
+            .unwrap();
+        assert_eq!(inner_node.layout().size.width, 100.0);
+        assert_eq!(inner_node.layout().size.height, 50.0);
+    }
+
+    #[test]
+    fn test_destroy_host_cleans_shadow_tree() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+        let inner = state.create_element("span".to_string());
+        state.append_element(sr, inner).unwrap();
+
+        // Destroy the host — should also remove shadow root and its children
+        state.destroy_element(host).unwrap();
+
+        assert!(state
+            .doc
+            .get_node(taffy::NodeId::from(host as u64))
+            .is_none());
+        assert!(state.doc.get_node(taffy::NodeId::from(sr as u64)).is_none());
+        assert!(state
+            .doc
+            .get_node(taffy::NodeId::from(inner as u64))
+            .is_none());
+    }
+
+    #[test]
+    fn test_slot_default_distribution() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+
+        // Create a default <slot> in the shadow tree
+        let slot = state.create_element("slot".to_string());
+        state.append_element(sr, slot).unwrap();
+
+        // Add a light DOM child to the host
+        let light_child = state.create_element("span".to_string());
+        state.append_element(host, light_child).unwrap();
+        state
+            .set_inline_style(light_child, "width".to_string(), "30px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(light_child, "height".to_string(), "30px".to_string())
+            .unwrap();
+
+        state.commit();
+
+        // The light child should be distributed to the default slot
+        let slot_node = state
+            .doc
+            .get_node(taffy::NodeId::from(slot as u64))
+            .unwrap();
+        assert_eq!(slot_node.assigned_nodes.len(), 1);
+        assert_eq!(
+            slot_node.assigned_nodes[0],
+            taffy::NodeId::from(light_child as u64)
+        );
+
+        // The light child should have its layout (distributed via slot)
+        let light_node = state
+            .doc
+            .get_node(taffy::NodeId::from(light_child as u64))
+            .unwrap();
+        assert_eq!(light_node.layout().size.width, 30.0);
+        assert_eq!(light_node.layout().size.height, 30.0);
+    }
+
+    #[test]
+    fn test_slot_named_distribution() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+
+        // Create named slots in the shadow tree
+        let header_slot = state.create_element("slot".to_string());
+        state.append_element(sr, header_slot).unwrap();
+        state
+            .set_attribute(header_slot, "name".to_string(), "header".to_string())
+            .unwrap();
+
+        let content_slot = state.create_element("slot".to_string());
+        state.append_element(sr, content_slot).unwrap();
+        state
+            .set_attribute(content_slot, "name".to_string(), "content".to_string())
+            .unwrap();
+
+        // Add light DOM children with slot attributes
+        let header = state.create_element("h1".to_string());
+        state.append_element(host, header).unwrap();
+        state
+            .set_attribute(header, "slot".to_string(), "header".to_string())
+            .unwrap();
+
+        let content = state.create_element("p".to_string());
+        state.append_element(host, content).unwrap();
+        state
+            .set_attribute(content, "slot".to_string(), "content".to_string())
+            .unwrap();
+
+        state.commit();
+
+        // Verify named slot assignment
+        let hs = state
+            .doc
+            .get_node(taffy::NodeId::from(header_slot as u64))
+            .unwrap();
+        assert_eq!(hs.assigned_nodes.len(), 1);
+        assert_eq!(hs.assigned_nodes[0], taffy::NodeId::from(header as u64));
+
+        let cs = state
+            .doc
+            .get_node(taffy::NodeId::from(content_slot as u64))
+            .unwrap();
+        assert_eq!(cs.assigned_nodes.len(), 1);
+        assert_eq!(cs.assigned_nodes[0], taffy::NodeId::from(content as u64));
+    }
+
+    #[test]
+    fn test_slot_fallback_content() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+
+        // Create a slot with fallback content
+        let slot = state.create_element("slot".to_string());
+        state.append_element(sr, slot).unwrap();
+
+        let fallback = state.create_element("em".to_string());
+        state.append_element(slot, fallback).unwrap();
+        state
+            .set_inline_style(fallback, "width".to_string(), "20px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(fallback, "height".to_string(), "20px".to_string())
+            .unwrap();
+
+        // No light DOM children — slot should use fallback
+        state.commit();
+
+        let slot_node = state
+            .doc
+            .get_node(taffy::NodeId::from(slot as u64))
+            .unwrap();
+        assert!(slot_node.assigned_nodes.is_empty());
+
+        // Fallback child should be laid out
+        let fb_node = state
+            .doc
+            .get_node(taffy::NodeId::from(fallback as u64))
+            .unwrap();
+        assert_eq!(fb_node.layout().size.width, 20.0);
+        assert_eq!(fb_node.layout().size.height, 20.0);
+    }
+
+    #[test]
+    fn test_containing_shadow_host() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+        let inner = state.create_element("span".to_string());
+        state.append_element(sr, inner).unwrap();
+
+        state.commit();
+
+        // Check containing_shadow returns the shadow root
+        use style::dom::TElement;
+        let inner_ref = state
+            .doc
+            .get_node(taffy::NodeId::from(inner as u64))
+            .unwrap();
+        let shadow = TElement::containing_shadow(&inner_ref);
+        assert!(shadow.is_some());
+        assert_eq!(shadow.unwrap().id, taffy::NodeId::from(sr as u64));
+
+        // Check containing_shadow_host returns the host
+        let host_elem =
+            <&crate::dom::PawsElement as selectors::Element>::containing_shadow_host(&inner_ref);
+        assert!(host_elem.is_some());
+        assert_eq!(host_elem.unwrap().id, taffy::NodeId::from(host as u64));
+    }
+
+    #[test]
+    fn test_get_shadow_root_nonexistent() {
+        let state = RuntimeState::new("https://example.com".to_string());
+        // Document root has no shadow root
+        assert_eq!(state.get_shadow_root(0), None);
+        // Nonexistent element
+        assert_eq!(state.get_shadow_root(999), None);
+    }
+
+    #[test]
+    fn test_add_shadow_stylesheet() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let sr = state.attach_shadow(host, "open").unwrap();
+        let inner = state.create_element("span".to_string());
+        state.append_element(sr, inner).unwrap();
+
+        // Add shadow-scoped stylesheet
+        state
+            .add_shadow_stylesheet(sr, "span { width: 42px; height: 42px; }".to_string())
+            .unwrap();
+
+        // Verify the CascadeData was stored
+        let sr_node = state.doc.get_node(taffy::NodeId::from(sr as u64)).unwrap();
+        assert!(sr_node.shadow_cascade_data.is_some());
     }
 }
