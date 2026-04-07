@@ -110,6 +110,13 @@ pub struct PawsElement<S: Default + Send + 'static = ()> {
     /// Stored directly on each node so there is truly one tree — no separate
     /// HashMap or snapshot store. For `()` (tests/headless) this is zero-sized.
     pub(crate) render_state: S,
+
+    /// Event listeners registered on this node via `addEventListener`.
+    ///
+    /// Stored as a `Vec` to preserve registration order (required by the
+    /// W3C spec for listener firing order). Most nodes have 0–5 listeners,
+    /// making linear search for deduplication negligible.
+    pub event_listeners: Vec<crate::events::EventListenerEntry>,
 }
 
 impl<S: Default + Send + 'static> PawsElement<S> {
@@ -149,6 +156,7 @@ impl<S: Default + Send + 'static> PawsElement<S> {
 
             creates_stacking_context: false,
             render_state: S::default(),
+            event_listeners: Vec::new(),
         }
     }
 

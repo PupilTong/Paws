@@ -2972,6 +2972,8 @@ dependencies = [
  "anyhow",
  "codspeed-criterion-compat",
  "engine",
+ "stylo_atoms",
+ "taffy",
  "wasmtime",
 ]
 

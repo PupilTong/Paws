@@ -14,6 +14,9 @@ pub enum HostErrorCode {
     ChildAlreadyHasParent = -3,
     CycleDetected = -4,
     MemoryError = -5,
+    InvalidEventTarget = -6,
+    NoActiveEvent = -7,
+    EventAlreadyDispatching = -8,
 }
 
 impl HostErrorCode {
@@ -30,6 +33,9 @@ impl HostErrorCode {
             HostErrorCode::ChildAlreadyHasParent => "child already has a parent",
             HostErrorCode::CycleDetected => "append would create a cycle",
             HostErrorCode::MemoryError => "invalid memory access",
+            HostErrorCode::InvalidEventTarget => "invalid event target id",
+            HostErrorCode::NoActiveEvent => "no event is currently being dispatched",
+            HostErrorCode::EventAlreadyDispatching => "an event is already being dispatched",
         }
     }
 }
@@ -86,6 +92,11 @@ pub struct RuntimeState<R: EngineRenderer = ()> {
     pub style_context: StyleContext,
     pub(crate) stylesheet_cache: crate::style::StylesheetCache,
     pub renderer: R,
+    /// The event currently being dispatched, if any.
+    ///
+    /// Set by `dispatch_event` and cleared after the dispatch loop completes.
+    /// WASM event accessor host functions read/mutate this field.
+    pub current_event: Option<crate::events::Event>,
 }
 
 impl RuntimeState<()> {
@@ -116,6 +127,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
             style_context: context,
             stylesheet_cache,
             renderer,
+            current_event: None,
         }
     }
     /// Creates a new HTML element with the given tag name. Returns the node ID.
@@ -576,6 +588,85 @@ impl<R: EngineRenderer> RuntimeState<R> {
             return Err(HostErrorCode::InvalidChild);
         }
         node.remove_attribute(name);
+        Ok(())
+    }
+
+    // ── Event system ────────────────────────────────────────────────
+
+    /// Registers an event listener on a DOM node.
+    ///
+    /// Per the W3C spec, listeners are deduplicated by the triple
+    /// `(event_type, callback_id, capture)`. Adding an identical listener
+    /// is a no-op.
+    pub fn add_event_listener(
+        &mut self,
+        target_id: u32,
+        event_type: stylo_atoms::Atom,
+        callback_id: u32,
+        options: crate::events::ListenerOptions,
+    ) -> Result<(), HostErrorCode> {
+        let node = self
+            .doc
+            .get_node_mut(taffy::NodeId::from(target_id as u64))
+            .ok_or(HostErrorCode::InvalidEventTarget)?;
+
+        // W3C dedup: skip if an identical (type, callback_id, capture) exists
+        let already_exists = node.event_listeners.iter().any(|l| {
+            l.event_type == event_type
+                && l.callback_id == callback_id
+                && l.capture == options.capture
+        });
+        if already_exists {
+            return Ok(());
+        }
+
+        node.event_listeners
+            .push(crate::events::EventListenerEntry {
+                event_type,
+                callback_id,
+                capture: options.capture,
+                passive: options.passive,
+                once: options.once,
+                removed: false,
+            });
+
+        Ok(())
+    }
+
+    /// Removes an event listener from a DOM node.
+    ///
+    /// Matches by `(event_type, callback_id, capture)`. If a dispatch is
+    /// currently active, the entry is marked `removed` instead of being
+    /// deleted (the dispatch loop checks this flag before invoking).
+    pub fn remove_event_listener(
+        &mut self,
+        target_id: u32,
+        event_type: stylo_atoms::Atom,
+        callback_id: u32,
+        capture: bool,
+    ) -> Result<(), HostErrorCode> {
+        let dispatching = self.current_event.as_ref().is_some_and(|e| e.dispatch_flag);
+
+        let node = self
+            .doc
+            .get_node_mut(taffy::NodeId::from(target_id as u64))
+            .ok_or(HostErrorCode::InvalidEventTarget)?;
+
+        if let Some(entry) = node.event_listeners.iter_mut().find(|l| {
+            l.event_type == event_type && l.callback_id == callback_id && l.capture == capture
+        }) {
+            if dispatching {
+                entry.removed = true;
+            } else {
+                // Not dispatching — safe to remove immediately
+                node.event_listeners.retain(|l| {
+                    !(l.event_type == event_type
+                        && l.callback_id == callback_id
+                        && l.capture == capture)
+                });
+            }
+        }
+
         Ok(())
     }
 }
@@ -3250,5 +3341,198 @@ mod tests {
     fn test_get_node_type_invalid() {
         let state = RuntimeState::new("https://example.com".to_string());
         assert_eq!(state.get_node_type(999), Err(HostErrorCode::InvalidChild));
+    }
+
+    // ── Event system RuntimeState tests ─────────────────────────────
+
+    #[test]
+    fn test_add_event_listener_basic() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+        state.append_element(0, id).unwrap();
+
+        let result = state.add_event_listener(
+            id,
+            stylo_atoms::Atom::from("click"),
+            1,
+            crate::events::ListenerOptions {
+                capture: false,
+                passive: false,
+                once: false,
+            },
+        );
+        assert!(result.is_ok());
+
+        let node = state.doc.get_node(taffy::NodeId::from(id as u64)).unwrap();
+        assert_eq!(node.event_listeners.len(), 1);
+        assert_eq!(node.event_listeners[0].callback_id, 1);
+    }
+
+    #[test]
+    fn test_add_event_listener_dedup() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+
+        // Add same listener twice — should deduplicate
+        state
+            .add_event_listener(
+                id,
+                stylo_atoms::Atom::from("click"),
+                1,
+                crate::events::ListenerOptions {
+                    capture: false,
+                    passive: false,
+                    once: false,
+                },
+            )
+            .unwrap();
+        state
+            .add_event_listener(
+                id,
+                stylo_atoms::Atom::from("click"),
+                1,
+                crate::events::ListenerOptions {
+                    capture: false,
+                    passive: false,
+                    once: false,
+                },
+            )
+            .unwrap();
+
+        let node = state.doc.get_node(taffy::NodeId::from(id as u64)).unwrap();
+        assert_eq!(node.event_listeners.len(), 1);
+    }
+
+    #[test]
+    fn test_add_event_listener_different_capture_is_not_dedup() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+
+        state
+            .add_event_listener(
+                id,
+                stylo_atoms::Atom::from("click"),
+                1,
+                crate::events::ListenerOptions {
+                    capture: false,
+                    passive: false,
+                    once: false,
+                },
+            )
+            .unwrap();
+        state
+            .add_event_listener(
+                id,
+                stylo_atoms::Atom::from("click"),
+                1,
+                crate::events::ListenerOptions {
+                    capture: true,
+                    passive: false,
+                    once: false,
+                },
+            )
+            .unwrap();
+
+        let node = state.doc.get_node(taffy::NodeId::from(id as u64)).unwrap();
+        assert_eq!(node.event_listeners.len(), 2);
+    }
+
+    #[test]
+    fn test_add_event_listener_invalid_target() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let result = state.add_event_listener(
+            999,
+            stylo_atoms::Atom::from("click"),
+            1,
+            crate::events::ListenerOptions {
+                capture: false,
+                passive: false,
+                once: false,
+            },
+        );
+        assert_eq!(result, Err(HostErrorCode::InvalidEventTarget));
+    }
+
+    #[test]
+    fn test_remove_event_listener_basic() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+
+        state
+            .add_event_listener(
+                id,
+                stylo_atoms::Atom::from("click"),
+                1,
+                crate::events::ListenerOptions {
+                    capture: false,
+                    passive: false,
+                    once: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            state
+                .doc
+                .get_node(taffy::NodeId::from(id as u64))
+                .unwrap()
+                .event_listeners
+                .len(),
+            1
+        );
+
+        state
+            .remove_event_listener(id, stylo_atoms::Atom::from("click"), 1, false)
+            .unwrap();
+        assert_eq!(
+            state
+                .doc
+                .get_node(taffy::NodeId::from(id as u64))
+                .unwrap()
+                .event_listeners
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_remove_event_listener_invalid_target() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let result = state.remove_event_listener(999, stylo_atoms::Atom::from("click"), 1, false);
+        assert_eq!(result, Err(HostErrorCode::InvalidEventTarget));
+    }
+
+    #[test]
+    fn test_remove_event_listener_nonexistent_is_ok() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+        // Removing a listener that doesn't exist is a no-op per W3C spec
+        let result = state.remove_event_listener(id, stylo_atoms::Atom::from("click"), 1, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_current_event_initially_none() {
+        let state = RuntimeState::new("https://example.com".to_string());
+        assert!(state.current_event.is_none());
+    }
+
+    #[test]
+    fn test_host_error_code_event_variants() {
+        assert_eq!(HostErrorCode::InvalidEventTarget.as_i32(), -6);
+        assert_eq!(HostErrorCode::NoActiveEvent.as_i32(), -7);
+        assert_eq!(HostErrorCode::EventAlreadyDispatching.as_i32(), -8);
+
+        assert_eq!(
+            HostErrorCode::InvalidEventTarget.message(),
+            "invalid event target id"
+        );
+        assert_eq!(
+            HostErrorCode::NoActiveEvent.message(),
+            "no event is currently being dispatched"
+        );
+        assert_eq!(
+            HostErrorCode::EventAlreadyDispatching.message(),
+            "an event is already being dispatched"
+        );
     }
 }
