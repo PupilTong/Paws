@@ -96,7 +96,13 @@ impl<S: Default + Send + 'static> taffy::TraversePartialTree for Document<S> {
     fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId {
         let node = self.node(parent_node_id);
         if let Some(sr_id) = node.shadow_root_id {
-            self.flatten_shadow_children(sr_id)[child_index]
+            let flat = self.flatten_shadow_children(sr_id);
+            debug_assert!(
+                child_index < flat.len(),
+                "child_index {child_index} out of bounds for flat tree len {}",
+                flat.len()
+            );
+            flat[child_index]
         } else {
             node.children[child_index]
         }

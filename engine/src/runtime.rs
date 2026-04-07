@@ -733,7 +733,10 @@ impl<R: EngineRenderer> RuntimeState<R> {
         );
 
         // Store on the shadow root node
-        let sr_mut = self.doc.get_node_mut(sr_node_id).unwrap();
+        let sr_mut = self
+            .doc
+            .get_node_mut(sr_node_id)
+            .expect("shadow root validated above");
         sr_mut.shadow_cascade_data = Some(Box::new(cascade_data));
 
         // Mark ancestors dirty for re-resolution

@@ -195,7 +195,10 @@ impl<S: Default + Send + 'static> Document<S> {
 
         // Create the shadow root node
         let sr_id = self.create_node(NodeType::ShadowRoot);
-        let sr = self.nodes.get_mut(u64::from(sr_id) as usize).unwrap();
+        let sr = self
+            .nodes
+            .get_mut(u64::from(sr_id) as usize)
+            .expect("shadow root just created");
         sr.parent = Some(host_id);
         sr.shadow_mode = Some(mode);
         if host_in_doc {
@@ -203,7 +206,10 @@ impl<S: Default + Send + 'static> Document<S> {
         }
 
         // Link host → shadow root
-        let host_mut = self.nodes.get_mut(u64::from(host_id) as usize).unwrap();
+        let host_mut = self
+            .nodes
+            .get_mut(u64::from(host_id) as usize)
+            .expect("host validated above");
         host_mut.shadow_root_id = Some(sr_id);
         host_mut.set_dirty_descendants();
 
