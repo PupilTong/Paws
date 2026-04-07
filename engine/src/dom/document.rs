@@ -1,4 +1,4 @@
-use crate::dom::element::{NodeFlags, NodeType, PawsElement};
+use crate::dom::element::{NodeFlags, NodeType, PawsElement, ShadowRootMode};
 use crate::layout::text::TextLayoutContext;
 use markup5ever::QualName;
 use slab::Slab;
@@ -15,6 +15,8 @@ pub(crate) enum DomError {
     CycleDetected,
     /// The child node already has a different parent. Detach it first.
     ChildAlreadyHasParent,
+    /// The element already has a shadow root attached.
+    ShadowRootAlreadyExists,
 }
 
 impl std::fmt::Display for DomError {
@@ -24,6 +26,7 @@ impl std::fmt::Display for DomError {
             DomError::InvalidChild => write!(f, "invalid child id"),
             DomError::CycleDetected => write!(f, "append would create a cycle"),
             DomError::ChildAlreadyHasParent => write!(f, "child already has a parent"),
+            DomError::ShadowRootAlreadyExists => write!(f, "element already has a shadow root"),
         }
     }
 }
@@ -169,6 +172,50 @@ impl<S: Default + Send + 'static> Document<S> {
         id
     }
 
+    /// Creates a shadow root for the given host element.
+    ///
+    /// The shadow root node is stored in the slab but is **not** added to the
+    /// host's `children` vec. It is only reachable via `host.shadow_root_id`.
+    /// The shadow root's `parent` field points to the host for
+    /// [`TShadowRoot::host()`] traversal.
+    pub(crate) fn create_shadow_root(
+        &mut self,
+        host_id: taffy::NodeId,
+        mode: ShadowRootMode,
+    ) -> Result<taffy::NodeId, DomError> {
+        // Validate host exists and is an element
+        let host = self.get_node(host_id).ok_or(DomError::InvalidParent)?;
+        if host.node_type != NodeType::Element {
+            return Err(DomError::InvalidParent);
+        }
+        if host.shadow_root_id.is_some() {
+            return Err(DomError::ShadowRootAlreadyExists);
+        }
+        let host_in_doc = host.flags.contains(NodeFlags::IS_IN_DOCUMENT);
+
+        // Create the shadow root node
+        let sr_id = self.create_node(NodeType::ShadowRoot);
+        let sr = self
+            .nodes
+            .get_mut(u64::from(sr_id) as usize)
+            .expect("shadow root just created");
+        sr.parent = Some(host_id);
+        sr.shadow_mode = Some(mode);
+        if host_in_doc {
+            sr.flags.insert(NodeFlags::IS_IN_DOCUMENT);
+        }
+
+        // Link host → shadow root
+        let host_mut = self
+            .nodes
+            .get_mut(u64::from(host_id) as usize)
+            .expect("host validated above");
+        host_mut.shadow_root_id = Some(sr_id);
+        host_mut.set_dirty_descendants();
+
+        Ok(sr_id)
+    }
+
     pub(crate) fn append_child(
         &mut self,
         parent_id: taffy::NodeId,
@@ -228,6 +275,7 @@ impl<S: Default + Send + 'static> Document<S> {
     }
 
     /// Recursively iterates over a node and its descendants in DFS order.
+    /// Also traverses into any attached shadow roots.
     fn traverse_nodes_dfs_mut(
         &mut self,
         node_id: taffy::NodeId,
@@ -237,16 +285,23 @@ impl<S: Default + Send + 'static> Document<S> {
         while let Some(id) = stack.pop() {
             if let Some(node) = self.get_node_mut(id) {
                 stack.extend(node.children.iter().copied());
+                if let Some(sr_id) = node.shadow_root_id {
+                    stack.push(sr_id);
+                }
                 f(node);
             }
         }
     }
 
+    #[allow(dead_code)]
     fn traverse_nodes_dfs(&self, node_id: taffy::NodeId, mut f: impl FnMut(&PawsElement<S>)) {
         let mut stack = vec![node_id];
         while let Some(id) = stack.pop() {
             if let Some(node) = self.get_node(id) {
                 stack.extend(node.children.iter().copied());
+                if let Some(sr_id) = node.shadow_root_id {
+                    stack.push(sr_id);
+                }
                 f(node);
             }
         }
@@ -563,8 +618,19 @@ impl<S: Default + Send + 'static> Document<S> {
         self.detach_node(id);
 
         // Recursively collect all descendants (including `id` itself) and remove them.
+        // Also traverses into shadow trees attached to any descendant.
         let mut to_remove = Vec::new();
-        self.traverse_nodes_dfs(id, |node| to_remove.push(node.id));
+        let mut stack = vec![id];
+        while let Some(nid) = stack.pop() {
+            if let Some(node) = self.get_node(nid) {
+                to_remove.push(nid);
+                stack.extend(node.children.iter().copied());
+                // Also traverse into shadow root if present
+                if let Some(sr_id) = node.shadow_root_id {
+                    stack.push(sr_id);
+                }
+            }
+        }
 
         for node_id in to_remove {
             let index = u64::from(node_id) as usize;
@@ -619,11 +685,23 @@ impl<S: Default + Send + 'static> Document<S> {
         while let Some(id) = queue.pop_front() {
             if let Some(node) = self.get_node(id) {
                 if node.is_element() {
-                    let parent_style = node
-                        .parent
-                        .and_then(|pid| self.get_node(pid))
-                        .and_then(|p| p.computed_values.as_ref())
-                        .cloned();
+                    // Resolve the style parent: if the DOM parent is a ShadowRoot,
+                    // inherit from the host element (the ShadowRoot's parent) instead.
+                    let parent_style = {
+                        let mut style_parent_id = node.parent;
+                        if let Some(pid) = node.parent {
+                            if let Some(p) = self.get_node(pid) {
+                                if p.node_type == NodeType::ShadowRoot {
+                                    style_parent_id = p.parent; // host element
+                                }
+                            }
+                        }
+                        style_parent_id
+                            .and_then(|pid| self.get_node(pid))
+                            .and_then(|p| p.computed_values.as_ref())
+                            .cloned()
+                    };
+
                     let computed = crate::style::compute_style_for_node(
                         self,
                         style_context,
@@ -636,7 +714,22 @@ impl<S: Default + Send + 'static> Document<S> {
                     for &child_id in &children {
                         queue.push_back(child_id);
                     }
+
+                    // Also enter the shadow tree if this element is a shadow host.
+                    // Run slot assignment first so the flat tree is available for layout.
+                    if let Some(sr_id) = self.get_node(id).and_then(|n| n.shadow_root_id) {
+                        self.assign_slots(id);
+                        if let Some(sr) = self.get_node(sr_id) {
+                            let sr_children: Vec<taffy::NodeId> = sr.children.clone();
+                            for &child_id in &sr_children {
+                                queue.push_back(child_id);
+                            }
+                        }
+                    }
+
                     // Determine if this element creates a stacking context.
+                    // Re-borrow node since we may have mutated during assign_slots.
+                    let node = self.get_node(id).unwrap();
                     let parent_display_inside = node
                         .parent
                         .and_then(|pid| self.get_node(pid))
@@ -667,18 +760,29 @@ impl<S: Default + Send + 'static> Document<S> {
                 } else if node.is_text_node() {
                     // Text nodes inherit parent styles and get a default
                     // taffy::Style so layout can measure them as leaf nodes.
-                    let parent_cv = node
-                        .parent
-                        .and_then(|pid| self.get_node(pid))
-                        .and_then(|p| p.computed_values.as_ref())
-                        .cloned();
+                    // If the DOM parent is a ShadowRoot, inherit from the host.
+                    let parent_cv = {
+                        let mut style_parent_id = node.parent;
+                        if let Some(pid) = node.parent {
+                            if let Some(p) = self.get_node(pid) {
+                                if p.node_type == NodeType::ShadowRoot {
+                                    style_parent_id = p.parent;
+                                }
+                            }
+                        }
+                        style_parent_id
+                            .and_then(|pid| self.get_node(pid))
+                            .and_then(|p| p.computed_values.as_ref())
+                            .cloned()
+                    };
                     if let Some(mut_node) = self.get_node_mut(id) {
                         mut_node.taffy_style = Some(taffy::Style::default());
                         mut_node.computed_values = parent_cv;
                         mut_node.unset_dirty_descendants();
                     }
                 } else {
-                    // Non-element, non-text nodes: still enqueue children for traversal
+                    // Non-element, non-text nodes (Document, ShadowRoot):
+                    // enqueue children for traversal.
                     let children: Vec<taffy::NodeId> =
                         self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
                     for &child_id in &children {
@@ -690,6 +794,82 @@ impl<S: Default + Send + 'static> Document<S> {
                     }
                 }
             }
+        }
+    }
+
+    /// Assigns light DOM children of a shadow host to `<slot>` elements
+    /// in its shadow tree (named slot assignment algorithm per WHATWG DOM spec).
+    pub(crate) fn assign_slots(&mut self, host_id: taffy::NodeId) {
+        let sr_id = match self.get_node(host_id).and_then(|n| n.shadow_root_id) {
+            Some(id) => id,
+            None => return,
+        };
+
+        // Collect all <slot> elements in the shadow tree (DFS, tree order).
+        let mut slots = Vec::new();
+        let mut stack: Vec<taffy::NodeId> = self
+            .get_node(sr_id)
+            .map_or(Vec::new(), |sr| sr.children.iter().copied().rev().collect());
+        while let Some(nid) = stack.pop() {
+            if let Some(node) = self.get_node(nid) {
+                if node.is_slot_element() {
+                    slots.push(nid);
+                }
+                // Push children in reverse so we visit in tree order
+                for &child_id in node.children.iter().rev() {
+                    stack.push(child_id);
+                }
+            }
+        }
+
+        // Clear previous slot assignments.
+        for &slot_id in &slots {
+            if let Some(slot) = self.get_node_mut(slot_id) {
+                slot.assigned_nodes.clear();
+            }
+        }
+        let host_children: Vec<taffy::NodeId> = self
+            .get_node(host_id)
+            .map_or(Vec::new(), |h| h.children.clone());
+        for &child_id in &host_children {
+            if let Some(child) = self.get_node_mut(child_id) {
+                child.assigned_slot_id = None;
+            }
+        }
+
+        // Build a snapshot of slot names for matching.
+        let slot_names: Vec<(taffy::NodeId, String)> = slots
+            .iter()
+            .map(|&sid| {
+                let name = self
+                    .get_node(sid)
+                    .and_then(|s| s.get_attribute("name"))
+                    .unwrap_or("")
+                    .to_string();
+                (sid, name)
+            })
+            .collect();
+
+        // Assign each host child to the first matching slot (named assignment).
+        for &child_id in &host_children {
+            let child_slot_attr = self
+                .get_node(child_id)
+                .and_then(|c| c.get_attribute("slot"))
+                .unwrap_or("")
+                .to_string();
+
+            // Find the first slot whose name matches the child's slot attribute.
+            if let Some(&(slot_id, _)) =
+                slot_names.iter().find(|(_, name)| *name == child_slot_attr)
+            {
+                if let Some(slot) = self.get_node_mut(slot_id) {
+                    slot.assigned_nodes.push(child_id);
+                }
+                if let Some(child) = self.get_node_mut(child_id) {
+                    child.assigned_slot_id = Some(slot_id);
+                }
+            }
+            // If no matching slot, the child is unslotted (not rendered).
         }
     }
 }

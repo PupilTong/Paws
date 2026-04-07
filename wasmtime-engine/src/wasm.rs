@@ -1279,6 +1279,98 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         )
         .expect("link __event_timestamp");
 
+    // ── Shadow DOM ──────────────────────────────────────────────────
+
+    linker
+        .func_wrap(
+            "env",
+            "__attach_shadow",
+            |mut caller: Caller<'_, RuntimeState<R>>, host_id: i32, mode_ptr: i32| -> Result<i32> {
+                if host_id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidParent, "negative host id");
+                    return Ok(code);
+                }
+                let mode = match read_cstr(&mut caller, mode_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                caller.data_mut().clear_error();
+                match caller.data_mut().attach_shadow(host_id as u32, &mode) {
+                    Ok(id) => Ok(id as i32),
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __attach_shadow");
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_shadow_root",
+            |mut caller: Caller<'_, RuntimeState<R>>, host_id: i32| -> Result<i32> {
+                if host_id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative id");
+                    return Ok(code);
+                }
+                caller.data_mut().clear_error();
+                match caller.data().get_shadow_root(host_id as u32) {
+                    Some(id) => Ok(id as i32),
+                    None => Ok(-1),
+                }
+            },
+        )
+        .expect("link __get_shadow_root");
+
+    linker
+        .func_wrap(
+            "env",
+            "__add_shadow_stylesheet",
+            |mut caller: Caller<'_, RuntimeState<R>>,
+             shadow_root_id: i32,
+             css_ptr: i32|
+             -> Result<i32> {
+                if shadow_root_id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative shadow root id");
+                    return Ok(code);
+                }
+                let css = match read_cstr(&mut caller, css_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                caller.data_mut().clear_error();
+                match caller
+                    .data_mut()
+                    .add_shadow_stylesheet(shadow_root_id as u32, css)
+                {
+                    Ok(()) => Ok(0),
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __add_shadow_stylesheet");
+
     linker
 }
 

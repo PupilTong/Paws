@@ -43,6 +43,6 @@ impl<'a, S: Default + Send + 'static> TShadowRoot for &'a PawsElement<S> {
     where
         Self: 'b,
     {
-        None
+        self.shadow_cascade_data.as_deref()
     }
 }

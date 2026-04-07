@@ -32,6 +32,15 @@ pub(crate) enum NodeType {
     ShadowRoot,
 }
 
+/// Shadow root encapsulation mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShadowRootMode {
+    /// `element.shadowRoot` returns the ShadowRoot.
+    Open,
+    /// `element.shadowRoot` returns `null`.
+    Closed,
+}
+
 /// A node in the Paws DOM tree, stored in a slab arena.
 ///
 /// Integrates with Stylo for CSS style computation via
@@ -65,6 +74,20 @@ pub struct PawsElement<S: Default + Send + 'static = ()> {
     pub(crate) classes: HashSet<Atom>,
     pub(crate) style_attribute: Option<Arc<Locked<PropertyDeclarationBlock>>>,
     pub(crate) shadow_root_id: Option<taffy::NodeId>,
+
+    /// For ShadowRoot nodes: the encapsulation mode (open/closed).
+    pub(crate) shadow_mode: Option<ShadowRootMode>,
+
+    /// For ShadowRoot nodes: per-shadow cascade data for scoped stylesheets.
+    /// Stylo's `TShadowRoot::style_data()` returns a reference to this.
+    pub(crate) shadow_cascade_data: Option<Box<style::stylist::CascadeData>>,
+
+    /// For `<slot>` elements: the IDs of light DOM nodes assigned to this slot.
+    /// Populated during slot assignment in [`Document::assign_slots`].
+    pub(crate) assigned_nodes: Vec<taffy::NodeId>,
+
+    /// For light DOM children of a shadow host: which `<slot>` this node is assigned to.
+    pub(crate) assigned_slot_id: Option<taffy::NodeId>,
 
     // Text data
     pub(crate) text_content: Option<String>,
@@ -140,6 +163,10 @@ impl<S: Default + Send + 'static> PawsElement<S> {
             classes: HashSet::new(),
             style_attribute: None,
             shadow_root_id: None,
+            shadow_mode: None,
+            shadow_cascade_data: None,
+            assigned_nodes: Vec::new(),
+            assigned_slot_id: None,
             text_content: None,
 
             stylo_element_data: UnsafeCell::new(None),
@@ -225,6 +252,14 @@ impl<S: Default + Send + 'static> PawsElement<S> {
 
     pub fn is_text_node(&self) -> bool {
         self.node_type == NodeType::Text
+    }
+
+    /// Returns `true` if this element is an HTML `<slot>` element.
+    pub(crate) fn is_slot_element(&self) -> bool {
+        self.name
+            .as_ref()
+            .map(|n| n.local.as_ref() == "slot")
+            .unwrap_or(false)
     }
 
     pub(crate) fn set_dirty_descendants(&self) {

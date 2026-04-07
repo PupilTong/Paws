@@ -46,15 +46,24 @@ pub fn compute_layout_in_place<S: Default + Send + 'static>(
 
 // ─── ChildIter ───────────────────────────────────────────────────────
 
-/// Zero-allocation iterator over a node's children for Taffy layout traversal.
+/// Iterator over a node's children for Taffy layout traversal.
 ///
-/// Wraps a slice iterator directly — no Vec allocation per traversal call.
-pub struct ChildIter<'a>(std::slice::Iter<'a, NodeId>);
+/// Uses a slice iterator for regular nodes (zero allocation) and an
+/// owned vec iterator for shadow hosts (flat tree with slot replacement).
+pub enum ChildIter<'a> {
+    /// Zero-allocation slice iterator for regular DOM nodes.
+    Slice(std::slice::Iter<'a, NodeId>),
+    /// Owned iterator for shadow host flat tree children.
+    Owned(std::vec::IntoIter<NodeId>),
+}
 
 impl Iterator for ChildIter<'_> {
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().copied()
+        match self {
+            ChildIter::Slice(iter) => iter.next().copied(),
+            ChildIter::Owned(iter) => iter.next(),
+        }
     }
 }
 
@@ -63,19 +72,65 @@ impl Iterator for ChildIter<'_> {
 impl<S: Default + Send + 'static> taffy::TraversePartialTree for Document<S> {
     type ChildIter<'a> = ChildIter<'a>;
 
-    #[inline]
     fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
-        ChildIter(self.node(parent_node_id).children.iter())
+        let node = self.node(parent_node_id);
+        if let Some(sr_id) = node.shadow_root_id {
+            // Shadow host: build flat tree children from the shadow root,
+            // replacing <slot> elements with their assigned light DOM children.
+            let flat = self.flatten_shadow_children(sr_id);
+            ChildIter::Owned(flat.into_iter())
+        } else {
+            ChildIter::Slice(node.children.iter())
+        }
     }
 
-    #[inline]
     fn child_count(&self, parent_node_id: NodeId) -> usize {
-        self.node(parent_node_id).children.len()
+        let node = self.node(parent_node_id);
+        if let Some(sr_id) = node.shadow_root_id {
+            self.flatten_shadow_children(sr_id).len()
+        } else {
+            node.children.len()
+        }
     }
 
-    #[inline]
     fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId {
-        self.node(parent_node_id).children[child_index]
+        let node = self.node(parent_node_id);
+        if let Some(sr_id) = node.shadow_root_id {
+            let flat = self.flatten_shadow_children(sr_id);
+            debug_assert!(
+                child_index < flat.len(),
+                "child_index {child_index} out of bounds for flat tree len {}",
+                flat.len()
+            );
+            flat[child_index]
+        } else {
+            node.children[child_index]
+        }
+    }
+}
+
+impl<S: Default + Send + 'static> Document<S> {
+    /// Builds the flat tree children for a shadow root, replacing `<slot>`
+    /// elements with their assigned light DOM children (or the slot's own
+    /// children as fallback content).
+    fn flatten_shadow_children(&self, sr_id: NodeId) -> Vec<NodeId> {
+        let sr = self.node(sr_id);
+        let mut result = Vec::with_capacity(sr.children.len());
+        for &child_id in &sr.children {
+            let child = self.node(child_id);
+            if child.is_slot_element() {
+                if child.assigned_nodes.is_empty() {
+                    // Fallback: use the slot's own children
+                    result.extend_from_slice(&child.children);
+                } else {
+                    // Distribute assigned light DOM children
+                    result.extend_from_slice(&child.assigned_nodes);
+                }
+            } else {
+                result.push(child_id);
+            }
+        }
+        result
     }
 }
 
@@ -120,7 +175,12 @@ impl<S: Default + Send + 'static> taffy::LayoutPartialTree for Document<S> {
                 .expect("node must have taffy_style");
             let display = style.display;
             let is_text = node.node_type == NodeType::Text;
-            let has_children = !node.children.is_empty();
+            // Shadow hosts may have no direct children but have shadow tree children.
+            let has_children = if node.shadow_root_id.is_some() {
+                doc.child_count(node_id) > 0
+            } else {
+                !node.children.is_empty()
+            };
 
             if display == Display::None {
                 return compute_hidden_layout(doc, node_id);

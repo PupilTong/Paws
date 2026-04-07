@@ -96,6 +96,13 @@ impl<'a, S: Default + Send + 'static> TNode for &'a PawsElement<S> {
     }
 
     fn traversal_parent(&self) -> Option<Self::ConcreteElement> {
-        self.parent_element()
+        let parent = self.parent_node()?;
+        if parent.node_type == NodeType::ShadowRoot {
+            // Shadow root's parent is the host element — use it as the
+            // style traversal parent so inheritance crosses the boundary.
+            parent.parent_node().and_then(|n| n.as_element())
+        } else {
+            parent.as_element()
+        }
     }
 }
