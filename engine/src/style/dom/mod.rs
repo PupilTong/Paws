@@ -9,14 +9,15 @@ mod node;
 mod selector;
 
 use crate::dom::PawsElement;
+use crate::runtime::RenderState;
 
 /// Iterator over the children of a `PawsElement`, yielding `&PawsElement` references.
-pub struct ChildrenIterator<'a, S: Default + Send + 'static = ()> {
+pub struct ChildrenIterator<'a, S: RenderState = ()> {
     node: &'a PawsElement<S>,
     index: usize,
 }
 
-impl<'a, S: Default + Send + 'static> Iterator for ChildrenIterator<'a, S> {
+impl<'a, S: RenderState> Iterator for ChildrenIterator<'a, S> {
     type Item = &'a PawsElement<S>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.node.children.len() {

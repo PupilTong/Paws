@@ -1,11 +1,12 @@
 //! `TDocument` and `TShadowRoot` implementations for `&PawsElement`.
 
+use crate::runtime::RenderState;
 use style::dom::{TDocument, TNode, TShadowRoot};
 use style::shared_lock::SharedRwLock;
 
 use crate::dom::PawsElement;
 
-impl<'a, S: Default + Send + 'static> TDocument for &'a PawsElement<S> {
+impl<'a, S: RenderState> TDocument for &'a PawsElement<S> {
     type ConcreteNode = &'a PawsElement<S>;
 
     fn as_node(&self) -> Self::ConcreteNode {
@@ -29,7 +30,7 @@ impl<'a, S: Default + Send + 'static> TDocument for &'a PawsElement<S> {
     }
 }
 
-impl<'a, S: Default + Send + 'static> TShadowRoot for &'a PawsElement<S> {
+impl<'a, S: RenderState> TShadowRoot for &'a PawsElement<S> {
     type ConcreteNode = &'a PawsElement<S>;
 
     fn as_node(&self) -> Self::ConcreteNode {

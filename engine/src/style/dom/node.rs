@@ -1,10 +1,11 @@
 //! `NodeInfo` and `TNode` implementations for `&PawsElement`.
 
+use crate::runtime::RenderState;
 use style::dom::{NodeInfo, OpaqueNode, TNode};
 
 use crate::dom::{NodeFlags, NodeType, PawsElement};
 
-impl<S: Default + Send + 'static> NodeInfo for &PawsElement<S> {
+impl<S: RenderState> NodeInfo for &PawsElement<S> {
     fn is_element(&self) -> bool {
         self.node_type == NodeType::Element
     }
@@ -14,7 +15,7 @@ impl<S: Default + Send + 'static> NodeInfo for &PawsElement<S> {
     }
 }
 
-impl<'a, S: Default + Send + 'static> TNode for &'a PawsElement<S> {
+impl<'a, S: RenderState> TNode for &'a PawsElement<S> {
     type ConcreteElement = &'a PawsElement<S>;
     type ConcreteDocument = &'a PawsElement<S>;
     type ConcreteShadowRoot = &'a PawsElement<S>;

@@ -84,7 +84,7 @@ pub(crate) fn gap_ir_to_stylo(
 /// Extracts a keyword string from a single-value token list.
 pub(crate) fn ir_keyword(values: &[ArchivedCssToken]) -> Option<&str> {
     match values {
-        [ArchivedCssToken::Ident(ref kw)] => Some(kw.as_str()),
+        [ArchivedCssToken::Ident(ref keyword)] => Some(keyword.as_str()),
         _ => None,
     }
 }

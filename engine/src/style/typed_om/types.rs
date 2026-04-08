@@ -51,8 +51,8 @@ pub struct CSSUnitValue {
 // ─── Value Conversion ────────────────────────────────────────────────
 
 impl From<TypedValue> for CSSStyleValue {
-    fn from(tv: TypedValue) -> Self {
-        match tv {
+    fn from(typed_value: TypedValue) -> Self {
+        match typed_value {
             TypedValue::Keyword(s) => CSSStyleValue::Keyword(CSSKeywordValue { value: s }),
             TypedValue::Numeric(NumericValue::Unit(uv)) => CSSStyleValue::Unit(CSSUnitValue {
                 value: uv.value,
@@ -95,7 +95,7 @@ impl fmt::Display for CSSUnitValue {
 impl fmt::Display for CSSStyleValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CSSStyleValue::Keyword(kw) => write!(f, "{}", kw.value),
+            CSSStyleValue::Keyword(keyword) => write!(f, "{}", keyword.value),
             CSSStyleValue::Unit(u) => write!(f, "{u}"),
             CSSStyleValue::Sum(units) => {
                 for (i, u) in units.iter().enumerate() {

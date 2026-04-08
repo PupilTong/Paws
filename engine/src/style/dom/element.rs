@@ -1,5 +1,6 @@
 //! `TElement` implementation for `&PawsElement`.
 
+use crate::runtime::RenderState;
 use style::context::SharedStyleContext;
 use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
 use style::dom::{LayoutIterator, TElement};
@@ -22,7 +23,7 @@ use crate::dom::PawsElement;
 
 use super::ChildrenIterator;
 
-impl<'a, S: Default + Send + 'static> TElement for &'a PawsElement<S> {
+impl<'a, S: RenderState> TElement for &'a PawsElement<S> {
     type ConcreteNode = &'a PawsElement<S>;
     type TraversalChildrenIterator = ChildrenIterator<'a, S>;
 

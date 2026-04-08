@@ -1,5 +1,6 @@
 use crate::dom::element::{NodeFlags, NodeType, PawsElement, ShadowRootMode};
 use crate::layout::text::TextLayoutContext;
+use crate::runtime::RenderState;
 use markup5ever::QualName;
 use slab::Slab;
 use style::shared_lock::SharedRwLock;
@@ -44,7 +45,7 @@ impl std::error::Error for DomError {}
 ///
 /// The type parameter `S` is the per-node render state for the
 /// [`EngineRenderer`](crate::EngineRenderer) backend. Tests use `()`.
-pub struct Document<S: Default + Send + 'static = ()> {
+pub struct Document<S: RenderState = ()> {
     /// A slab-backed tree of nodes
     pub(crate) nodes: Box<Slab<PawsElement<S>>>,
 
@@ -74,7 +75,7 @@ pub struct Document<S: Default + Send + 'static = ()> {
     pub(crate) removed_render_states: Vec<(taffy::NodeId, S)>,
 }
 
-impl<S: Default + Send + 'static> Document<S> {
+impl<S: RenderState> Document<S> {
     pub(crate) fn new(guard: SharedRwLock, url: url::Url) -> Self {
         let mut nodes = Box::new(Slab::new());
         let slab_ptr = nodes.as_mut() as *mut Slab<PawsElement<S>>;
@@ -194,15 +195,15 @@ impl<S: Default + Send + 'static> Document<S> {
         let host_in_doc = host.flags.contains(NodeFlags::IS_IN_DOCUMENT);
 
         // Create the shadow root node
-        let sr_id = self.create_node(NodeType::ShadowRoot);
-        let sr = self
+        let shadow_root_id = self.create_node(NodeType::ShadowRoot);
+        let shadow_root = self
             .nodes
-            .get_mut(u64::from(sr_id) as usize)
+            .get_mut(u64::from(shadow_root_id) as usize)
             .expect("shadow root just created");
-        sr.parent = Some(host_id);
-        sr.shadow_mode = Some(mode);
+        shadow_root.parent = Some(host_id);
+        shadow_root.shadow_mode = Some(mode);
         if host_in_doc {
-            sr.flags.insert(NodeFlags::IS_IN_DOCUMENT);
+            shadow_root.flags.insert(NodeFlags::IS_IN_DOCUMENT);
         }
 
         // Link host → shadow root
@@ -210,10 +211,10 @@ impl<S: Default + Send + 'static> Document<S> {
             .nodes
             .get_mut(u64::from(host_id) as usize)
             .expect("host validated above");
-        host_mut.shadow_root_id = Some(sr_id);
+        host_mut.shadow_root_id = Some(shadow_root_id);
         host_mut.set_dirty_descendants();
 
-        Ok(sr_id)
+        Ok(shadow_root_id)
     }
 
     pub(crate) fn append_child(
@@ -285,8 +286,8 @@ impl<S: Default + Send + 'static> Document<S> {
         while let Some(id) = stack.pop() {
             if let Some(node) = self.get_node_mut(id) {
                 stack.extend(node.children.iter().copied());
-                if let Some(sr_id) = node.shadow_root_id {
-                    stack.push(sr_id);
+                if let Some(shadow_root_id) = node.shadow_root_id {
+                    stack.push(shadow_root_id);
                 }
                 f(node);
             }
@@ -299,8 +300,8 @@ impl<S: Default + Send + 'static> Document<S> {
         while let Some(id) = stack.pop() {
             if let Some(node) = self.get_node(id) {
                 stack.extend(node.children.iter().copied());
-                if let Some(sr_id) = node.shadow_root_id {
-                    stack.push(sr_id);
+                if let Some(shadow_root_id) = node.shadow_root_id {
+                    stack.push(shadow_root_id);
                 }
                 f(node);
             }
@@ -626,8 +627,8 @@ impl<S: Default + Send + 'static> Document<S> {
                 to_remove.push(nid);
                 stack.extend(node.children.iter().copied());
                 // Also traverse into shadow root if present
-                if let Some(sr_id) = node.shadow_root_id {
-                    stack.push(sr_id);
+                if let Some(shadow_root_id) = node.shadow_root_id {
+                    stack.push(shadow_root_id);
                 }
             }
         }
@@ -717,11 +718,11 @@ impl<S: Default + Send + 'static> Document<S> {
 
                     // Also enter the shadow tree if this element is a shadow host.
                     // Run slot assignment first so the flat tree is available for layout.
-                    if let Some(sr_id) = self.get_node(id).and_then(|n| n.shadow_root_id) {
+                    if let Some(shadow_root_id) = self.get_node(id).and_then(|n| n.shadow_root_id) {
                         self.assign_slots(id);
-                        if let Some(sr) = self.get_node(sr_id) {
-                            let sr_children: Vec<taffy::NodeId> = sr.children.clone();
-                            for &child_id in &sr_children {
+                        if let Some(shadow_root) = self.get_node(shadow_root_id) {
+                            let shadow_children: Vec<taffy::NodeId> = shadow_root.children.clone();
+                            for &child_id in &shadow_children {
                                 queue.push_back(child_id);
                             }
                         }
@@ -745,7 +746,7 @@ impl<S: Default + Send + 'static> Document<S> {
                         style::values::specified::box_::DisplayInside::Flex
                             | style::values::specified::box_::DisplayInside::Grid
                     );
-                    let is_sc = crate::layout::stacking::creates_stacking_context(
+                    let is_stacking_context = crate::layout::stacking::creates_stacking_context(
                         &computed,
                         is_root,
                         is_flex_or_grid_item,
@@ -754,7 +755,7 @@ impl<S: Default + Send + 'static> Document<S> {
                     if let Some(mut_node) = self.get_node_mut(id) {
                         mut_node.taffy_style = Some(crate::style::to_taffy_style(&computed));
                         mut_node.computed_values = Some(computed);
-                        mut_node.creates_stacking_context = is_sc;
+                        mut_node.creates_stacking_context = is_stacking_context;
                         mut_node.unset_dirty_descendants();
                     }
                 } else if node.is_text_node() {
@@ -800,7 +801,7 @@ impl<S: Default + Send + 'static> Document<S> {
     /// Assigns light DOM children of a shadow host to `<slot>` elements
     /// in its shadow tree (named slot assignment algorithm per WHATWG DOM spec).
     pub(crate) fn assign_slots(&mut self, host_id: taffy::NodeId) {
-        let sr_id = match self.get_node(host_id).and_then(|n| n.shadow_root_id) {
+        let shadow_root_id = match self.get_node(host_id).and_then(|n| n.shadow_root_id) {
             Some(id) => id,
             None => return,
         };
@@ -808,8 +809,10 @@ impl<S: Default + Send + 'static> Document<S> {
         // Collect all <slot> elements in the shadow tree (DFS, tree order).
         let mut slots = Vec::new();
         let mut stack: Vec<taffy::NodeId> = self
-            .get_node(sr_id)
-            .map_or(Vec::new(), |sr| sr.children.iter().copied().rev().collect());
+            .get_node(shadow_root_id)
+            .map_or(Vec::new(), |shadow_root| {
+                shadow_root.children.iter().copied().rev().collect()
+            });
         while let Some(nid) = stack.pop() {
             if let Some(node) = self.get_node(nid) {
                 if node.is_slot_element() {

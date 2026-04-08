@@ -48,6 +48,18 @@ pub struct HostError {
     pub(crate) message: String,
 }
 
+/// Marker trait for per-node render state stored on each [`PawsElement`](crate::dom::element::PawsElement).
+///
+/// Render state is platform-specific owned data (GPU handles, view snapshots, etc.)
+/// that must be:
+/// - [`Default`]: zero-cost initialization when nodes are created
+/// - [`Send`]: safe to share across Stylo's parallel style threads
+/// - `'static`: fully owned with no borrowed references
+///
+/// iOS uses `IosNodeState`, tests use `()`.
+pub trait RenderState: Default + Send + 'static {}
+impl<T: Default + Send + 'static> RenderState for T {}
+
 /// Trait for backends that process committed document state.
 ///
 /// Each platform defines its own per-node render state via [`NodeState`](Self::NodeState).
@@ -59,7 +71,7 @@ pub trait EngineRenderer: Send + 'static {
     ///
     /// iOS stores `IosNodeState` (ViewKind + prev-frame snapshot),
     /// Android can define its own. Tests use `()` (zero-cost).
-    type NodeState: Default + Send + 'static;
+    type NodeState: RenderState;
 
     /// Called after style resolution and layout are complete.
     ///
@@ -675,11 +687,11 @@ impl<R: EngineRenderer> RuntimeState<R> {
             "closed" => ShadowRootMode::Closed,
             _ => return Err(HostErrorCode::InvalidParent),
         };
-        let sr_id = self
+        let shadow_root_id = self
             .doc
             .create_shadow_root(taffy::NodeId::from(host_id as u64), shadow_mode)
             .map_err(dom_error_to_host)?;
-        Ok(u64::from(sr_id) as u32)
+        Ok(u64::from(shadow_root_id) as u32)
     }
 
     /// Returns the shadow root ID for the given host element, or `None`.
@@ -698,12 +710,12 @@ impl<R: EngineRenderer> RuntimeState<R> {
         shadow_root_id: u32,
         css: String,
     ) -> Result<(), HostErrorCode> {
-        let sr_node_id = taffy::NodeId::from(shadow_root_id as u64);
-        let sr = self
+        let shadow_node_id = taffy::NodeId::from(shadow_root_id as u64);
+        let shadow_root = self
             .doc
-            .get_node(sr_node_id)
+            .get_node(shadow_node_id)
             .ok_or(HostErrorCode::InvalidChild)?;
-        if sr.node_type != crate::dom::element::NodeType::ShadowRoot {
+        if shadow_root.node_type != crate::dom::element::NodeType::ShadowRoot {
             return Err(HostErrorCode::InvalidChild);
         }
 
@@ -733,14 +745,14 @@ impl<R: EngineRenderer> RuntimeState<R> {
         );
 
         // Store on the shadow root node
-        let sr_mut = self
+        let shadow_root_mut = self
             .doc
-            .get_node_mut(sr_node_id)
+            .get_node_mut(shadow_node_id)
             .expect("shadow root validated above");
-        sr_mut.shadow_cascade_data = Some(Box::new(cascade_data));
+        shadow_root_mut.shadow_cascade_data = Some(Box::new(cascade_data));
 
         // Mark ancestors dirty for re-resolution
-        sr_mut.mark_ancestors_dirty();
+        shadow_root_mut.mark_ancestors_dirty();
 
         Ok(())
     }
@@ -3238,8 +3250,8 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
-        assert!(sr > 0);
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
+        assert!(shadow_root > 0);
 
         // Verify shadow_root_id is set on host
         let host_node = state
@@ -3248,11 +3260,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             host_node.shadow_root_id,
-            Some(taffy::NodeId::from(sr as u64))
+            Some(taffy::NodeId::from(shadow_root as u64))
         );
 
         // Verify get_shadow_root returns the same ID
-        assert_eq!(state.get_shadow_root(host), Some(sr));
+        assert_eq!(state.get_shadow_root(host), Some(shadow_root));
     }
 
     #[test]
@@ -3271,10 +3283,13 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "closed").unwrap();
-        let sr_node = state.doc.get_node(taffy::NodeId::from(sr as u64)).unwrap();
+        let shadow_root = state.attach_shadow(host, "closed").unwrap();
+        let shadow_root_node = state
+            .doc
+            .get_node(taffy::NodeId::from(shadow_root as u64))
+            .unwrap();
         assert_eq!(
-            sr_node.shadow_mode,
+            shadow_root_node.shadow_mode,
             Some(crate::dom::element::ShadowRootMode::Closed)
         );
     }
@@ -3667,11 +3682,11 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
 
         // Add a child to the shadow root
         let inner = state.create_element("span".to_string());
-        state.append_element(sr, inner).unwrap();
+        state.append_element(shadow_root, inner).unwrap();
 
         // Commit should succeed — shadow tree children should be styled
         state.commit();
@@ -3692,9 +3707,9 @@ mod tests {
             .set_inline_style(host, "font-size".to_string(), "24px".to_string())
             .unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
         let inner = state.create_element("span".to_string());
-        state.append_element(sr, inner).unwrap();
+        state.append_element(shadow_root, inner).unwrap();
 
         state.commit();
 
@@ -3714,11 +3729,11 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
 
         // Add styled child to shadow tree
         let inner = state.create_element("div".to_string());
-        state.append_element(sr, inner).unwrap();
+        state.append_element(shadow_root, inner).unwrap();
         state
             .set_inline_style(inner, "width".to_string(), "100px".to_string())
             .unwrap();
@@ -3753,9 +3768,9 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
         let inner = state.create_element("span".to_string());
-        state.append_element(sr, inner).unwrap();
+        state.append_element(shadow_root, inner).unwrap();
 
         // Destroy the host — should also remove shadow root and its children
         state.destroy_element(host).unwrap();
@@ -3764,7 +3779,10 @@ mod tests {
             .doc
             .get_node(taffy::NodeId::from(host as u64))
             .is_none());
-        assert!(state.doc.get_node(taffy::NodeId::from(sr as u64)).is_none());
+        assert!(state
+            .doc
+            .get_node(taffy::NodeId::from(shadow_root as u64))
+            .is_none());
         assert!(state
             .doc
             .get_node(taffy::NodeId::from(inner as u64))
@@ -3777,11 +3795,11 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
 
         // Create a default <slot> in the shadow tree
         let slot = state.create_element("slot".to_string());
-        state.append_element(sr, slot).unwrap();
+        state.append_element(shadow_root, slot).unwrap();
 
         // Add a light DOM child to the host
         let light_child = state.create_element("span".to_string());
@@ -3821,17 +3839,17 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
 
         // Create named slots in the shadow tree
         let header_slot = state.create_element("slot".to_string());
-        state.append_element(sr, header_slot).unwrap();
+        state.append_element(shadow_root, header_slot).unwrap();
         state
             .set_attribute(header_slot, "name".to_string(), "header".to_string())
             .unwrap();
 
         let content_slot = state.create_element("slot".to_string());
-        state.append_element(sr, content_slot).unwrap();
+        state.append_element(shadow_root, content_slot).unwrap();
         state
             .set_attribute(content_slot, "name".to_string(), "content".to_string())
             .unwrap();
@@ -3873,11 +3891,11 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
 
         // Create a slot with fallback content
         let slot = state.create_element("slot".to_string());
-        state.append_element(sr, slot).unwrap();
+        state.append_element(shadow_root, slot).unwrap();
 
         let fallback = state.create_element("em".to_string());
         state.append_element(slot, fallback).unwrap();
@@ -3912,9 +3930,9 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
         let inner = state.create_element("span".to_string());
-        state.append_element(sr, inner).unwrap();
+        state.append_element(shadow_root, inner).unwrap();
 
         state.commit();
 
@@ -3926,7 +3944,7 @@ mod tests {
             .unwrap();
         let shadow = TElement::containing_shadow(&inner_ref);
         assert!(shadow.is_some());
-        assert_eq!(shadow.unwrap().id, taffy::NodeId::from(sr as u64));
+        assert_eq!(shadow.unwrap().id, taffy::NodeId::from(shadow_root as u64));
 
         // Check containing_shadow_host returns the host
         let host_elem =
@@ -3950,17 +3968,23 @@ mod tests {
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
-        let sr = state.attach_shadow(host, "open").unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
         let inner = state.create_element("span".to_string());
-        state.append_element(sr, inner).unwrap();
+        state.append_element(shadow_root, inner).unwrap();
 
         // Add shadow-scoped stylesheet
         state
-            .add_shadow_stylesheet(sr, "span { width: 42px; height: 42px; }".to_string())
+            .add_shadow_stylesheet(
+                shadow_root,
+                "span { width: 42px; height: 42px; }".to_string(),
+            )
             .unwrap();
 
         // Verify the CascadeData was stored
-        let sr_node = state.doc.get_node(taffy::NodeId::from(sr as u64)).unwrap();
-        assert!(sr_node.shadow_cascade_data.is_some());
+        let shadow_root_node = state
+            .doc
+            .get_node(taffy::NodeId::from(shadow_root as u64))
+            .unwrap();
+        assert!(shadow_root_node.shadow_cascade_data.is_some());
     }
 }

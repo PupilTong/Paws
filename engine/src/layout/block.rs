@@ -4,6 +4,7 @@
 //! pattern). Layout data (cache, unrounded/final layouts) lives on
 //! [`PawsElement`] for persistence across passes (future CSS Containment).
 
+use crate::runtime::RenderState;
 use style::values::computed::length::CSSPixelLength;
 use style::values::computed::length_percentage::CalcLengthPercentage;
 use style::values::specified::font::FONT_MEDIUM_PX;
@@ -28,10 +29,7 @@ use taffy::{
 /// API — use [`compute_layout`] only if you need a detached `LayoutBox` tree.
 ///
 /// Returns `true` if layout was computed, `false` if the root node has no style.
-pub fn compute_layout_in_place<S: Default + Send + 'static>(
-    doc: &mut Document<S>,
-    root_id: NodeId,
-) -> bool {
+pub fn compute_layout_in_place<S: RenderState>(doc: &mut Document<S>, root_id: NodeId) -> bool {
     if doc
         .get_node(root_id)
         .and_then(|n| n.taffy_style.as_ref())
@@ -69,15 +67,15 @@ impl Iterator for ChildIter<'_> {
 
 // ─── TraversePartialTree ─────────────────────────────────────────────
 
-impl<S: Default + Send + 'static> taffy::TraversePartialTree for Document<S> {
+impl<S: RenderState> taffy::TraversePartialTree for Document<S> {
     type ChildIter<'a> = ChildIter<'a>;
 
     fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
         let node = self.node(parent_node_id);
-        if let Some(sr_id) = node.shadow_root_id {
+        if let Some(shadow_root_id) = node.shadow_root_id {
             // Shadow host: build flat tree children from the shadow root,
             // replacing <slot> elements with their assigned light DOM children.
-            let flat = self.flatten_shadow_children(sr_id);
+            let flat = self.flatten_shadow_children(shadow_root_id);
             ChildIter::Owned(flat.into_iter())
         } else {
             ChildIter::Slice(node.children.iter())
@@ -86,8 +84,8 @@ impl<S: Default + Send + 'static> taffy::TraversePartialTree for Document<S> {
 
     fn child_count(&self, parent_node_id: NodeId) -> usize {
         let node = self.node(parent_node_id);
-        if let Some(sr_id) = node.shadow_root_id {
-            self.flatten_shadow_children(sr_id).len()
+        if let Some(shadow_root_id) = node.shadow_root_id {
+            self.flatten_shadow_children(shadow_root_id).len()
         } else {
             node.children.len()
         }
@@ -95,8 +93,8 @@ impl<S: Default + Send + 'static> taffy::TraversePartialTree for Document<S> {
 
     fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId {
         let node = self.node(parent_node_id);
-        if let Some(sr_id) = node.shadow_root_id {
-            let flat = self.flatten_shadow_children(sr_id);
+        if let Some(shadow_root_id) = node.shadow_root_id {
+            let flat = self.flatten_shadow_children(shadow_root_id);
             debug_assert!(
                 child_index < flat.len(),
                 "child_index {child_index} out of bounds for flat tree len {}",
@@ -109,14 +107,14 @@ impl<S: Default + Send + 'static> taffy::TraversePartialTree for Document<S> {
     }
 }
 
-impl<S: Default + Send + 'static> Document<S> {
+impl<S: RenderState> Document<S> {
     /// Builds the flat tree children for a shadow root, replacing `<slot>`
     /// elements with their assigned light DOM children (or the slot's own
     /// children as fallback content).
-    fn flatten_shadow_children(&self, sr_id: NodeId) -> Vec<NodeId> {
-        let sr = self.node(sr_id);
-        let mut result = Vec::with_capacity(sr.children.len());
-        for &child_id in &sr.children {
+    fn flatten_shadow_children(&self, shadow_root_id: NodeId) -> Vec<NodeId> {
+        let shadow_root = self.node(shadow_root_id);
+        let mut result = Vec::with_capacity(shadow_root.children.len());
+        for &child_id in &shadow_root.children {
             let child = self.node(child_id);
             if child.is_slot_element() {
                 if child.assigned_nodes.is_empty() {
@@ -136,11 +134,11 @@ impl<S: Default + Send + 'static> Document<S> {
 
 // ─── TraverseTree (marker) ───────────────────────────────────────────
 
-impl<S: Default + Send + 'static> taffy::TraverseTree for Document<S> {}
+impl<S: RenderState> taffy::TraverseTree for Document<S> {}
 
 // ─── LayoutPartialTree ───────────────────────────────────────────────
 
-impl<S: Default + Send + 'static> taffy::LayoutPartialTree for Document<S> {
+impl<S: RenderState> taffy::LayoutPartialTree for Document<S> {
     type CoreContainerStyle<'a> = &'a taffy::Style;
 
     type CustomIdent = String;
@@ -209,7 +207,7 @@ impl<S: Default + Send + 'static> taffy::LayoutPartialTree for Document<S> {
 }
 
 /// Computes layout for a text leaf node using the Parley text layout context.
-fn compute_text_leaf<S: Default + Send + 'static>(
+fn compute_text_leaf<S: RenderState>(
     doc: &mut Document<S>,
     node_id: NodeId,
     inputs: LayoutInput,
@@ -218,11 +216,15 @@ fn compute_text_leaf<S: Default + Send + 'static>(
     let (font_size, font_weight) = node
         .computed_values
         .as_ref()
-        .map(|cv| {
-            let fs = cv.clone_font_size().computed_size().px();
-            let fs = if fs > 0.0 { fs } else { FONT_MEDIUM_PX };
-            let fw = cv.clone_font_weight().value();
-            (fs, fw)
+        .map(|computed_values| {
+            let font_size = computed_values.clone_font_size().computed_size().px();
+            let font_size = if font_size > 0.0 {
+                font_size
+            } else {
+                FONT_MEDIUM_PX
+            };
+            let font_weight = computed_values.clone_font_weight().value();
+            (font_size, font_weight)
         })
         .unwrap_or((FONT_MEDIUM_PX, 400.0));
     let text = node.text_content.as_deref().unwrap_or("");
@@ -256,7 +258,7 @@ fn compute_text_leaf<S: Default + Send + 'static>(
 
 // ─── CacheTree ───────────────────────────────────────────────────────
 
-impl<S: Default + Send + 'static> CacheTree for Document<S> {
+impl<S: RenderState> CacheTree for Document<S> {
     fn cache_get(
         &self,
         node_id: NodeId,
@@ -292,7 +294,7 @@ impl<S: Default + Send + 'static> CacheTree for Document<S> {
 
 // ─── LayoutFlexboxContainer ──────────────────────────────────────────
 
-impl<S: Default + Send + 'static> taffy::LayoutFlexboxContainer for Document<S> {
+impl<S: RenderState> taffy::LayoutFlexboxContainer for Document<S> {
     type FlexboxContainerStyle<'a> = &'a taffy::Style;
 
     type FlexboxItemStyle<'a> = &'a taffy::Style;
@@ -314,7 +316,7 @@ impl<S: Default + Send + 'static> taffy::LayoutFlexboxContainer for Document<S> 
 
 // ─── LayoutGridContainer ─────────────────────────────────────────────
 
-impl<S: Default + Send + 'static> taffy::LayoutGridContainer for Document<S> {
+impl<S: RenderState> taffy::LayoutGridContainer for Document<S> {
     type GridContainerStyle<'a> = &'a taffy::Style;
 
     type GridItemStyle<'a> = &'a taffy::Style;
@@ -336,7 +338,7 @@ impl<S: Default + Send + 'static> taffy::LayoutGridContainer for Document<S> {
 
 // ─── LayoutBlockContainer ────────────────────────────────────────────
 
-impl<S: Default + Send + 'static> taffy::LayoutBlockContainer for Document<S> {
+impl<S: RenderState> taffy::LayoutBlockContainer for Document<S> {
     type BlockContainerStyle<'a> = &'a taffy::Style;
 
     type BlockItemStyle<'a> = &'a taffy::Style;
@@ -358,7 +360,7 @@ impl<S: Default + Send + 'static> taffy::LayoutBlockContainer for Document<S> {
 
 // ─── RoundTree ───────────────────────────────────────────────────────
 
-impl<S: Default + Send + 'static> taffy::RoundTree for Document<S> {
+impl<S: RenderState> taffy::RoundTree for Document<S> {
     fn get_unrounded_layout(&self, node_id: NodeId) -> Layout {
         self.node(node_id).unrounded_layout
     }

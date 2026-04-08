@@ -1,5 +1,6 @@
 //! `selectors::Element` and `AttributeProvider` implementations for `&PawsElement`.
 
+use crate::runtime::RenderState;
 use style::dom::{AttributeProvider, NodeInfo, TDocument, TElement, TNode};
 use style::selector_parser::SelectorImpl;
 use style::values::AtomString;
@@ -11,7 +12,7 @@ use selectors::matching::ElementSelectorFlags;
 
 use crate::dom::{NodeType, PawsElement};
 
-impl<S: Default + Send + 'static> selectors::Element for &PawsElement<S> {
+impl<S: RenderState> selectors::Element for &PawsElement<S> {
     type Impl = SelectorImpl;
 
     fn opaque(&self) -> selectors::OpaqueElement {
@@ -217,7 +218,7 @@ impl<S: Default + Send + 'static> selectors::Element for &PawsElement<S> {
     }
 }
 
-impl<S: Default + Send + 'static> AttributeProvider for &PawsElement<S> {
+impl<S: RenderState> AttributeProvider for &PawsElement<S> {
     fn get_attr(&self, name: &LocalName, _namespace: &Namespace) -> Option<String> {
         let key = Atom::from(name.0.as_ref());
         self.attrs.get(&key).cloned()

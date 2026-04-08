@@ -1,3 +1,4 @@
+use crate::runtime::RenderState;
 use selectors::matching::{
     MatchingContext, MatchingForInvalidation, MatchingMode, NeedsSelectorFlags, QuirksMode,
 };
@@ -96,7 +97,7 @@ fn build_device() -> Device {
 /// Parses only the new property value (not the entire block) and merges it
 /// into the existing `PropertyDeclarationBlock`, avoiding the overhead of
 /// serializing and re-parsing the full style attribute.
-pub(crate) fn update_inline_style<S: Default + Send + 'static>(
+pub(crate) fn update_inline_style<S: RenderState>(
     context: &StyleContext,
     element: &mut PawsElement<S>,
     name: &str,
@@ -145,7 +146,7 @@ pub(crate) fn update_inline_style<S: Default + Send + 'static>(
     element.style_attribute = Some(Arc::new(lock.wrap(block)));
 }
 
-pub(crate) fn compute_style_for_node<S: Default + Send + 'static>(
+pub(crate) fn compute_style_for_node<S: RenderState>(
     _doc: &crate::dom::Document<S>,
     style_context: &StyleContext,
     node: &PawsElement<S>,
