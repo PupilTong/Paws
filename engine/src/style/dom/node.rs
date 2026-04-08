@@ -86,10 +86,7 @@ impl<'a, S: RenderState> TNode for &'a PawsElement<S> {
 
     fn opaque(&self) -> OpaqueNode {
         let ptr: *const PawsElement<S> = *self;
-        // SAFETY: OpaqueNode is a newtype around usize, used as an opaque identity token
-        // by Stylo. We transmute a valid pointer-as-usize into OpaqueNode. The value is
-        // only used for identity comparison, never dereferenced back to a pointer by Stylo.
-        unsafe { std::mem::transmute(ptr as usize) }
+        OpaqueNode(ptr as usize)
     }
 
     fn debug_id(self) -> usize {
