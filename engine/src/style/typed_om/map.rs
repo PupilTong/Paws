@@ -1,5 +1,6 @@
 //! `StylePropertyMapReadOnly` — live handle to computed CSS properties.
 
+use crate::runtime::RenderState;
 use style::properties::{property_counts, LonghandId, PropertyId};
 use stylo_traits::CssStringWriter;
 
@@ -55,8 +56,8 @@ impl StylePropertyMapReadOnly {
     ) -> Option<CSSStyleValue> {
         let longhand_id = resolve_longhand(property)?;
         doc.ensure_styles_resolved(ctx);
-        let cv = doc.get_node(self.element_id)?.computed_values.as_ref()?;
-        Some(extract_property(cv, longhand_id))
+        let computed_values = doc.get_node(self.element_id)?.computed_values.as_ref()?;
+        Some(extract_property(computed_values, longhand_id))
     }
 
     /// Returns all computed values for a CSS property.
@@ -102,17 +103,17 @@ impl StylePropertyMapReadOnly {
     /// then vendor-prefixed (e.g. `-webkit-*`).
     ///
     /// Triggers style resolution if the tree is dirty.
-    pub fn to_vec<S: Default + Send + 'static>(
+    pub fn to_vec<S: RenderState>(
         &self,
         doc: &mut Document<S>,
         ctx: &StyleContext,
     ) -> Vec<(String, CSSStyleValue)> {
         doc.ensure_styles_resolved(ctx);
-        let cv = match doc
+        let computed_values = match doc
             .get_node(self.element_id)
             .and_then(|n| n.computed_values.as_ref())
         {
-            Some(cv) => cv.clone(),
+            Some(computed_values) => computed_values.clone(),
             None => return Vec::new(),
         };
 
@@ -120,7 +121,7 @@ impl StylePropertyMapReadOnly {
         for i in 0..property_counts::LONGHANDS {
             let id = longhand_id_from_index(i);
             let name = id.name();
-            let value = extract_property(&cv, id);
+            let value = extract_property(&computed_values, id);
             entries.push((name.to_owned(), value));
         }
 
@@ -155,17 +156,17 @@ fn longhand_id_from_index(i: usize) -> LonghandId {
 /// Falls back to `computed_or_resolved_value()` → CSS string for properties
 /// whose computed types don't yet implement `ToTyped`.
 pub(crate) fn extract_property(
-    cv: &style::properties::ComputedValues,
+    computed_values: &style::properties::ComputedValues,
     id: LonghandId,
 ) -> CSSStyleValue {
     // Primary: direct typed extraction
-    if let Some(tv) = cv.computed_typed_value(id) {
-        return tv.into();
+    if let Some(typed_value) = computed_values.computed_typed_value(id) {
+        return typed_value.into();
     }
 
     // Fallback: serialize to CSS string
     let mut css_string = CssStringWriter::new();
-    let _ = cv.computed_or_resolved_value(id, None, &mut css_string);
+    let _ = computed_values.computed_or_resolved_value(id, None, &mut css_string);
     CSSStyleValue::Unparsed(css_string)
 }
 

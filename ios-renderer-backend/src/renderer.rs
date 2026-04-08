@@ -10,6 +10,7 @@
 //! logic. It is a per-node property-level dirty check.
 
 use engine::dom::Document;
+use engine::RenderState;
 use style::values::specified::box_::Overflow;
 use style::values::specified::font::FONT_MEDIUM_PX;
 
@@ -276,10 +277,7 @@ fn emit_full_node(node_id: u64, state: &IosNodeState, ops: &mut OpBuffer) {
 // ── Helper functions ────────────────────────────────────────────────────
 
 /// Determines the UIKit object kind for a layout node.
-fn determine_kind<S: Default + Send + 'static>(
-    node: &engine::dom::PawsElement<S>,
-    is_root: bool,
-) -> ViewKind {
+fn determine_kind<S: RenderState>(node: &engine::dom::PawsElement<S>, is_root: bool) -> ViewKind {
     if node.is_text_node() {
         return ViewKind::Text;
     }
@@ -302,7 +300,7 @@ fn determine_kind<S: Default + Send + 'static>(
 }
 
 /// Returns `true` if the node's overflow requires clipping.
-fn has_clip_overflow<S: Default + Send + 'static>(node: &engine::dom::PawsElement<S>) -> bool {
+fn has_clip_overflow<S: RenderState>(node: &engine::dom::PawsElement<S>) -> bool {
     node.get_computed_values()
         .map(|cv| {
             let ox = cv.clone_overflow_x();
@@ -316,7 +314,7 @@ fn has_clip_overflow<S: Default + Send + 'static>(node: &engine::dom::PawsElemen
 /// Extracts the background color from computed values as an RGBA tuple.
 ///
 /// Returns `None` for transparent backgrounds (alpha ≈ 0) or non-absolute colors.
-fn extract_background_color<S: Default + Send + 'static>(
+fn extract_background_color<S: RenderState>(
     node: &engine::dom::PawsElement<S>,
 ) -> Option<(f32, f32, f32, f32)> {
     use style::values::computed::Color;
@@ -339,9 +337,7 @@ fn extract_background_color<S: Default + Send + 'static>(
 }
 
 /// Extracts font size and weight from computed values.
-fn extract_font_properties<S: Default + Send + 'static>(
-    node: &engine::dom::PawsElement<S>,
-) -> (f32, f32) {
+fn extract_font_properties<S: RenderState>(node: &engine::dom::PawsElement<S>) -> (f32, f32) {
     node.get_computed_values()
         .map(|cv| {
             let fs = cv.clone_font_size().computed_size().px();
@@ -356,7 +352,7 @@ fn extract_font_properties<S: Default + Send + 'static>(
 ///
 /// `clone_color()` returns an `AbsoluteColor` (the CSS `color` property
 /// is always resolved to an absolute value).
-fn extract_text_color<S: Default + Send + 'static>(
+fn extract_text_color<S: RenderState>(
     node: &engine::dom::PawsElement<S>,
 ) -> Option<(f32, f32, f32, f32)> {
     let cv = node.get_computed_values()?;
@@ -370,10 +366,7 @@ fn extract_text_color<S: Default + Send + 'static>(
 }
 
 /// Computes the scroll content size from a node's children.
-fn compute_content_size<S: Default + Send + 'static>(
-    doc: &Document<S>,
-    node_id: engine::NodeId,
-) -> (f32, f32) {
+fn compute_content_size<S: RenderState>(doc: &Document<S>, node_id: engine::NodeId) -> (f32, f32) {
     doc.get_node(node_id)
         .unwrap()
         .children

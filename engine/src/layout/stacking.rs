@@ -6,6 +6,7 @@
 //! [`paint_order_children`] returns a node's children sorted in correct
 //! paint order.
 
+use crate::runtime::RenderState;
 use style::properties::ComputedValues;
 
 use crate::dom::document::Document;
@@ -21,7 +22,7 @@ use crate::dom::PawsElement;
 ///
 /// Reference: <https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_positioned_layout/Stacking_context>
 pub(crate) fn creates_stacking_context(
-    cv: &ComputedValues,
+    computed_values: &ComputedValues,
     is_root: bool,
     is_flex_or_grid_item: bool,
 ) -> bool {
@@ -32,8 +33,8 @@ pub(crate) fn creates_stacking_context(
         return true;
     }
 
-    let position = cv.clone_position();
-    let z_index = cv.clone_z_index();
+    let position = computed_values.clone_position();
+    let z_index = computed_values.clone_z_index();
     let has_z_index = !matches!(z_index, ZIndex::Auto);
 
     // position: fixed | sticky always create a stacking context.
@@ -52,29 +53,32 @@ pub(crate) fn creates_stacking_context(
     }
 
     // opacity < 1  (clone_opacity() returns f32 directly)
-    if cv.clone_opacity() < 1.0 {
+    if computed_values.clone_opacity() < 1.0 {
         return true;
     }
 
     // transform is not none
-    if !cv.clone_transform().0.is_empty() {
+    if !computed_values.clone_transform().0.is_empty() {
         return true;
     }
 
     // filter is not none
-    if !cv.clone_filter().0.is_empty() {
+    if !computed_values.clone_filter().0.is_empty() {
         return true;
     }
 
     // backdrop-filter is not none
-    if !cv.clone_backdrop_filter().0.is_empty() {
+    if !computed_values.clone_backdrop_filter().0.is_empty() {
         return true;
     }
 
     // perspective is not none
     {
         use style::values::generics::box_::GenericPerspective;
-        if !matches!(cv.clone_perspective(), GenericPerspective::None) {
+        if !matches!(
+            computed_values.clone_perspective(),
+            GenericPerspective::None
+        ) {
             return true;
         }
     }
@@ -82,7 +86,7 @@ pub(crate) fn creates_stacking_context(
     // clip-path is not none
     {
         use style::values::computed::basic_shape::ClipPath;
-        if !matches!(cv.clone_clip_path(), ClipPath::None) {
+        if !matches!(computed_values.clone_clip_path(), ClipPath::None) {
             return true;
         }
     }
@@ -90,7 +94,7 @@ pub(crate) fn creates_stacking_context(
     // mix-blend-mode is not normal
     {
         use style::properties::longhands::mix_blend_mode::computed_value::T as MixBlendMode;
-        if !matches!(cv.clone_mix_blend_mode(), MixBlendMode::Normal) {
+        if !matches!(computed_values.clone_mix_blend_mode(), MixBlendMode::Normal) {
             return true;
         }
     }
@@ -98,7 +102,7 @@ pub(crate) fn creates_stacking_context(
     // isolation: isolate
     {
         use style::properties::longhands::isolation::computed_value::T as Isolation;
-        if matches!(cv.clone_isolation(), Isolation::Isolate) {
+        if matches!(computed_values.clone_isolation(), Isolation::Isolate) {
             return true;
         }
     }
@@ -106,21 +110,21 @@ pub(crate) fn creates_stacking_context(
     // contain: layout | paint (or strict/content which include these)
     {
         use style::values::specified::box_::Contain;
-        let contain = cv.clone_contain();
+        let contain = computed_values.clone_contain();
         if contain.contains(Contain::LAYOUT) || contain.contains(Contain::PAINT) {
             return true;
         }
     }
 
     // container-type is not normal
-    if !cv.clone_container_type().is_normal() {
+    if !computed_values.clone_container_type().is_normal() {
         return true;
     }
 
     // will-change creating a stacking context
     {
         use style::values::specified::box_::WillChangeBits;
-        if cv
+        if computed_values
             .clone_will_change()
             .bits
             .contains(WillChangeBits::STACKING_CONTEXT_UNCONDITIONAL)
@@ -141,25 +145,25 @@ pub(crate) fn creates_stacking_context(
 /// - `1`: non-positioned in-flow (block + inline)
 /// - `2`: positioned with z-index auto/0, SC with z-index 0
 /// - `3`: stacking context with positive z-index
-fn paint_layer<S: Default + Send + 'static>(node: &PawsElement<S>) -> i8 {
+fn paint_layer<S: RenderState>(node: &PawsElement<S>) -> i8 {
     use style::properties::longhands::position::computed_value::T as Position;
 
-    let z = node.z_index().unwrap_or(0);
+    let z_index = node.z_index().unwrap_or(0);
 
-    if node.creates_stacking_context && z < 0 {
+    if node.creates_stacking_context && z_index < 0 {
         return 0;
     }
 
     let is_positioned = node
         .computed_values
         .as_ref()
-        .is_some_and(|cv| !matches!(cv.clone_position(), Position::Static));
+        .is_some_and(|computed| !matches!(computed.clone_position(), Position::Static));
 
     if !is_positioned && !node.creates_stacking_context {
         return 1;
     }
 
-    if z == 0 {
+    if z_index == 0 {
         return 2;
     }
 
@@ -174,7 +178,7 @@ fn paint_layer<S: Default + Send + 'static>(node: &PawsElement<S>) -> i8 {
 /// in DOM order with a simple z-index sort (current behavior preserved).
 ///
 /// Only styled children are returned.
-pub fn paint_order_children<S: Default + Send + 'static>(
+pub fn paint_order_children<S: RenderState>(
     doc: &Document<S>,
     node_id: taffy::NodeId,
 ) -> Vec<taffy::NodeId> {
@@ -197,11 +201,14 @@ pub fn paint_order_children<S: Default + Send + 'static>(
     if node.creates_stacking_context {
         // Full CSS2.1 Appendix E paint-order sort (stable for DOM-order tiebreak).
         children.sort_by(|&a, &b| {
-            let na = doc.get_node(a).unwrap();
-            let nb = doc.get_node(b).unwrap();
-            paint_layer(na)
-                .cmp(&paint_layer(nb))
-                .then_with(|| na.z_index().unwrap_or(0).cmp(&nb.z_index().unwrap_or(0)))
+            let node_a = doc.get_node(a).unwrap();
+            let node_b = doc.get_node(b).unwrap();
+            paint_layer(node_a).cmp(&paint_layer(node_b)).then_with(|| {
+                node_a
+                    .z_index()
+                    .unwrap_or(0)
+                    .cmp(&node_b.z_index().unwrap_or(0))
+            })
         });
     } else {
         // Non-SC node: simple z-index sort (preserves previous behavior).

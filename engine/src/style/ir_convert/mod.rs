@@ -142,56 +142,70 @@ fn convert_declaration(
 ) -> Option<PropertyDeclaration> {
     // ── Typed IR fast path ───────────────────────────────────────
     match value {
-        ArchivedPropertyValueIR::Display(ref d) => {
-            return Some(PropertyDeclaration::Display(display_ir_to_stylo(d)));
+        ArchivedPropertyValueIR::Display(ref display) => {
+            return Some(PropertyDeclaration::Display(display_ir_to_stylo(display)));
         }
-        ArchivedPropertyValueIR::BoxSizing(ref bs) => {
-            return Some(PropertyDeclaration::BoxSizing(box_sizing_ir_to_stylo(bs)));
-        }
-        ArchivedPropertyValueIR::Position(ref p) => {
-            return Some(PropertyDeclaration::Position(position_ir_to_stylo(p)));
-        }
-        ArchivedPropertyValueIR::Float(ref f) => {
-            return Some(PropertyDeclaration::Float(float_ir_to_stylo(f)));
-        }
-        ArchivedPropertyValueIR::Clear(ref c) => {
-            return Some(PropertyDeclaration::Clear(clear_ir_to_stylo(c)));
-        }
-        ArchivedPropertyValueIR::Visibility(ref v) => {
-            return Some(PropertyDeclaration::Visibility(visibility_ir_to_stylo(v)));
-        }
-        ArchivedPropertyValueIR::ObjectFit(ref of) => {
-            return Some(PropertyDeclaration::ObjectFit(object_fit_ir_to_stylo(of)));
-        }
-        ArchivedPropertyValueIR::FlexDirection(ref fd) => {
-            return Some(PropertyDeclaration::FlexDirection(
-                flex_direction_ir_to_stylo(fd),
-            ));
-        }
-        ArchivedPropertyValueIR::FlexWrap(ref fw) => {
-            return Some(PropertyDeclaration::FlexWrap(flex_wrap_ir_to_stylo(fw)));
-        }
-        ArchivedPropertyValueIR::FlexGrow(ref n) => {
-            return Some(PropertyDeclaration::FlexGrow(nn_number_ir_to_stylo(n)));
-        }
-        ArchivedPropertyValueIR::FlexShrink(ref n) => {
-            return Some(PropertyDeclaration::FlexShrink(nn_number_ir_to_stylo(n)));
-        }
-        ArchivedPropertyValueIR::FlexBasis(ref fb) => {
-            return Some(PropertyDeclaration::FlexBasis(Box::new(
-                flex_basis_ir_to_stylo(fb),
+        ArchivedPropertyValueIR::BoxSizing(ref box_sizing) => {
+            return Some(PropertyDeclaration::BoxSizing(box_sizing_ir_to_stylo(
+                box_sizing,
             )));
         }
-        ArchivedPropertyValueIR::Order(ref i) => {
-            return Some(PropertyDeclaration::Order(numeric::integer_ir_to_stylo(i)));
+        ArchivedPropertyValueIR::Position(ref position) => {
+            return Some(PropertyDeclaration::Position(position_ir_to_stylo(
+                position,
+            )));
         }
-        ArchivedPropertyValueIR::ZIndex(ref z) => {
-            return Some(PropertyDeclaration::ZIndex(z_index_ir_to_stylo(z)));
+        ArchivedPropertyValueIR::Float(ref float) => {
+            return Some(PropertyDeclaration::Float(float_ir_to_stylo(float)));
+        }
+        ArchivedPropertyValueIR::Clear(ref clear) => {
+            return Some(PropertyDeclaration::Clear(clear_ir_to_stylo(clear)));
+        }
+        ArchivedPropertyValueIR::Visibility(ref visibility) => {
+            return Some(PropertyDeclaration::Visibility(visibility_ir_to_stylo(
+                visibility,
+            )));
+        }
+        ArchivedPropertyValueIR::ObjectFit(ref object_fit) => {
+            return Some(PropertyDeclaration::ObjectFit(object_fit_ir_to_stylo(
+                object_fit,
+            )));
+        }
+        ArchivedPropertyValueIR::FlexDirection(ref flex_direction) => {
+            return Some(PropertyDeclaration::FlexDirection(
+                flex_direction_ir_to_stylo(flex_direction),
+            ));
+        }
+        ArchivedPropertyValueIR::FlexWrap(ref flex_wrap) => {
+            return Some(PropertyDeclaration::FlexWrap(flex_wrap_ir_to_stylo(
+                flex_wrap,
+            )));
+        }
+        ArchivedPropertyValueIR::FlexGrow(ref grow) => {
+            return Some(PropertyDeclaration::FlexGrow(nn_number_ir_to_stylo(grow)));
+        }
+        ArchivedPropertyValueIR::FlexShrink(ref shrink) => {
+            return Some(PropertyDeclaration::FlexShrink(nn_number_ir_to_stylo(
+                shrink,
+            )));
+        }
+        ArchivedPropertyValueIR::FlexBasis(ref flex_basis) => {
+            return Some(PropertyDeclaration::FlexBasis(Box::new(
+                flex_basis_ir_to_stylo(flex_basis),
+            )));
+        }
+        ArchivedPropertyValueIR::Order(ref order) => {
+            return Some(PropertyDeclaration::Order(numeric::integer_ir_to_stylo(
+                order,
+            )));
+        }
+        ArchivedPropertyValueIR::ZIndex(ref z_index) => {
+            return Some(PropertyDeclaration::ZIndex(z_index_ir_to_stylo(z_index)));
         }
 
         // Typed values that need property-name dispatch
-        ArchivedPropertyValueIR::Size(ref s) => {
-            let stylo_size = size_ir_to_stylo(s);
+        ArchivedPropertyValueIR::Size(ref size) => {
+            let stylo_size = size_ir_to_stylo(size);
             return match name {
                 ArchivedCssPropertyName::Width => Some(PropertyDeclaration::Width(stylo_size)),
                 ArchivedCssPropertyName::Height => Some(PropertyDeclaration::Height(stylo_size)),
@@ -204,8 +218,8 @@ fn convert_declaration(
                 _ => None,
             };
         }
-        ArchivedPropertyValueIR::MaxSize(ref s) => {
-            let stylo_max = max_size_ir_to_stylo(s);
+        ArchivedPropertyValueIR::MaxSize(ref max_size) => {
+            let stylo_max = max_size_ir_to_stylo(max_size);
             return match name {
                 ArchivedCssPropertyName::MaxWidth => Some(PropertyDeclaration::MaxWidth(stylo_max)),
                 ArchivedCssPropertyName::MaxHeight => {
@@ -214,8 +228,8 @@ fn convert_declaration(
                 _ => None,
             };
         }
-        ArchivedPropertyValueIR::Margin(ref m) => {
-            let stylo_margin = margin_ir_to_stylo(m);
+        ArchivedPropertyValueIR::Margin(ref margin) => {
+            let stylo_margin = margin_ir_to_stylo(margin);
             return match name {
                 ArchivedCssPropertyName::MarginTop => {
                     Some(PropertyDeclaration::MarginTop(stylo_margin))
@@ -232,8 +246,8 @@ fn convert_declaration(
                 _ => None,
             };
         }
-        ArchivedPropertyValueIR::Padding(ref lp) => {
-            let stylo_padding = nn_lp_ir_to_stylo(lp);
+        ArchivedPropertyValueIR::Padding(ref padding) => {
+            let stylo_padding = nn_lp_ir_to_stylo(padding);
             return match name {
                 ArchivedCssPropertyName::PaddingTop => {
                     Some(PropertyDeclaration::PaddingTop(stylo_padding))
@@ -250,20 +264,20 @@ fn convert_declaration(
                 _ => None,
             };
         }
-        ArchivedPropertyValueIR::BorderStyle(ref bs) => {
-            let stylo_bs = border_style_ir_to_stylo(bs);
+        ArchivedPropertyValueIR::BorderStyle(ref border_style) => {
+            let stylo_border_style = border_style_ir_to_stylo(border_style);
             return match name {
                 ArchivedCssPropertyName::BorderTopStyle => {
-                    Some(PropertyDeclaration::BorderTopStyle(stylo_bs))
+                    Some(PropertyDeclaration::BorderTopStyle(stylo_border_style))
                 }
                 ArchivedCssPropertyName::BorderRightStyle => {
-                    Some(PropertyDeclaration::BorderRightStyle(stylo_bs))
+                    Some(PropertyDeclaration::BorderRightStyle(stylo_border_style))
                 }
                 ArchivedCssPropertyName::BorderBottomStyle => {
-                    Some(PropertyDeclaration::BorderBottomStyle(stylo_bs))
+                    Some(PropertyDeclaration::BorderBottomStyle(stylo_border_style))
                 }
                 ArchivedCssPropertyName::BorderLeftStyle => {
-                    Some(PropertyDeclaration::BorderLeftStyle(stylo_bs))
+                    Some(PropertyDeclaration::BorderLeftStyle(stylo_border_style))
                 }
                 _ => None,
             };

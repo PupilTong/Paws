@@ -1,3 +1,4 @@
+use crate::runtime::RenderState;
 use atomic_refcell::AtomicRefCell;
 use bitflags::bitflags;
 use markup5ever::QualName;
@@ -49,7 +50,7 @@ pub(crate) enum ShadowRootMode {
 /// The type parameter `S` is the per-node render state for the
 /// [`EngineRenderer`](crate::EngineRenderer) backend. Each platform
 /// defines its own `S` (e.g. `IosNodeState`). Tests use `()`.
-pub struct PawsElement<S: Default + Send + 'static = ()> {
+pub struct PawsElement<S: RenderState = ()> {
     /// Raw pointer to the slab containing this node.
     /// Only accessed via the safe `tree()` accessor or within the `engine` crate.
     pub(crate) tree: *mut Slab<PawsElement<S>>,
@@ -142,7 +143,7 @@ pub struct PawsElement<S: Default + Send + 'static = ()> {
     pub event_listeners: Vec<crate::events::EventListenerEntry>,
 }
 
-impl<S: Default + Send + 'static> PawsElement<S> {
+impl<S: RenderState> PawsElement<S> {
     pub(crate) fn new(
         tree: *mut Slab<PawsElement<S>>,
         id: taffy::NodeId,
@@ -335,20 +336,20 @@ impl<S: Default + Send + 'static> PawsElement<S> {
 }
 
 // Implement equality and hash based on ID (reference identity)
-impl<S: Default + Send + 'static> PartialEq for PawsElement<S> {
+impl<S: RenderState> PartialEq for PawsElement<S> {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
-impl<S: Default + Send + 'static> Eq for PawsElement<S> {}
+impl<S: RenderState> Eq for PawsElement<S> {}
 
-impl<S: Default + Send + 'static> std::hash::Hash for PawsElement<S> {
+impl<S: RenderState> std::hash::Hash for PawsElement<S> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
 
-impl<S: Default + Send + 'static> std::fmt::Debug for PawsElement<S> {
+impl<S: RenderState> std::fmt::Debug for PawsElement<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PawsElement")
             .field("id", &self.id)

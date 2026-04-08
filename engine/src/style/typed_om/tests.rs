@@ -13,8 +13,8 @@ fn make_runtime() -> RuntimeState {
 
 #[test]
 fn test_from_typed_value_keyword() {
-    let tv = TypedValue::Keyword("block".to_string());
-    let result: CSSStyleValue = tv.into();
+    let typed_value = TypedValue::Keyword("block".to_string());
+    let result: CSSStyleValue = typed_value.into();
     assert_eq!(
         result,
         CSSStyleValue::Keyword(CSSKeywordValue {
@@ -25,11 +25,11 @@ fn test_from_typed_value_keyword() {
 
 #[test]
 fn test_from_typed_value_unit() {
-    let tv = TypedValue::Numeric(NumericValue::Unit(UnitValue {
+    let typed_value = TypedValue::Numeric(NumericValue::Unit(UnitValue {
         value: 16.0,
         unit: "px".to_string(),
     }));
-    let result: CSSStyleValue = tv.into();
+    let result: CSSStyleValue = typed_value.into();
     assert_eq!(
         result,
         CSSStyleValue::Unit(CSSUnitValue {
@@ -42,7 +42,7 @@ fn test_from_typed_value_unit() {
 #[test]
 fn test_from_typed_value_sum() {
     use thin_vec::thin_vec;
-    let tv = TypedValue::Numeric(NumericValue::Sum(MathSum {
+    let typed_value = TypedValue::Numeric(NumericValue::Sum(MathSum {
         values: thin_vec![
             NumericValue::Unit(UnitValue {
                 value: 10.0,
@@ -54,7 +54,7 @@ fn test_from_typed_value_sum() {
             }),
         ],
     }));
-    let result: CSSStyleValue = tv.into();
+    let result: CSSStyleValue = typed_value.into();
     assert_eq!(
         result,
         CSSStyleValue::Sum(vec![
@@ -94,19 +94,19 @@ fn test_resolve_longhand_invalid() {
 #[test]
 fn test_computed_style_map_display() {
     let mut state = make_runtime();
-    let el = state.create_element("div".to_string());
-    state.append_element(0, el).unwrap();
+    let element = state.create_element("div".to_string());
+    state.append_element(0, element).unwrap();
     state
-        .set_inline_style(el, "display".to_string(), "flex".to_string())
+        .set_inline_style(element, "display".to_string(), "flex".to_string())
         .unwrap();
 
-    let map = state.computed_style_map(el).unwrap();
+    let map = state.computed_style_map(element).unwrap();
     let value = map.get("display", &mut state.doc, &state.style_context);
 
     // Display goes through either TypedValue::Keyword or Unparsed fallback
     // depending on Stylo's ToTyped coverage.
     match &value {
-        Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "flex"),
+        Some(CSSStyleValue::Keyword(keyword)) => assert_eq!(keyword.value, "flex"),
         Some(CSSStyleValue::Unparsed(s)) => assert_eq!(s, "flex"),
         other => panic!("Expected flex keyword or unparsed, got: {other:?}"),
     }
@@ -115,13 +115,13 @@ fn test_computed_style_map_display() {
 #[test]
 fn test_computed_style_map_width_px() {
     let mut state = make_runtime();
-    let el = state.create_element("div".to_string());
-    state.append_element(0, el).unwrap();
+    let element = state.create_element("div".to_string());
+    state.append_element(0, element).unwrap();
     state
-        .set_inline_style(el, "width".to_string(), "100px".to_string())
+        .set_inline_style(element, "width".to_string(), "100px".to_string())
         .unwrap();
 
-    let map = state.computed_style_map(el).unwrap();
+    let map = state.computed_style_map(element).unwrap();
     let value = map.get("width", &mut state.doc, &state.style_context);
 
     // Width may come through as Unit or Unparsed depending on ToTyped coverage
@@ -138,13 +138,13 @@ fn test_computed_style_map_width_px() {
 #[test]
 fn test_computed_style_map_width_percent() {
     let mut state = make_runtime();
-    let el = state.create_element("div".to_string());
-    state.append_element(0, el).unwrap();
+    let element = state.create_element("div".to_string());
+    state.append_element(0, element).unwrap();
     state
-        .set_inline_style(el, "width".to_string(), "100%".to_string())
+        .set_inline_style(element, "width".to_string(), "100%".to_string())
         .unwrap();
 
-    let map = state.computed_style_map(el).unwrap();
+    let map = state.computed_style_map(element).unwrap();
     let value = map.get("width", &mut state.doc, &state.style_context);
 
     // Computed value should preserve percentage (not resolve to px).
@@ -161,10 +161,10 @@ fn test_computed_style_map_width_percent() {
 #[test]
 fn test_behavior_parsed_stylesheet_typed_properties() {
     let mut state = make_runtime();
-    let el = state.create_element("div".to_string());
-    state.append_element(0, el).unwrap();
+    let element = state.create_element("div".to_string());
+    state.append_element(0, element).unwrap();
     state
-        .set_attribute(el, "class".to_string(), "test-box".to_string())
+        .set_attribute(element, "class".to_string(), "test-box".to_string())
         .unwrap();
 
     // Construct a typed StyleSheetIR that represents:
@@ -199,11 +199,11 @@ fn test_behavior_parsed_stylesheet_typed_properties() {
     state.add_parsed_stylesheet(&bytes);
 
     // Fetch the computed styles
-    let map = state.computed_style_map(el).unwrap();
+    let map = state.computed_style_map(element).unwrap();
 
     let display = map.get("display", &mut state.doc, &state.style_context);
     match &display {
-        Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "flex"),
+        Some(CSSStyleValue::Keyword(keyword)) => assert_eq!(keyword.value, "flex"),
         Some(CSSStyleValue::Unparsed(val)) => assert_eq!(val, "flex"),
         _ => panic!("Expected Display property to be Flex, got: {:?}", display),
     };
@@ -286,7 +286,7 @@ fn test_behavior_parsed_stylesheet_multiple_rules() {
     let map1 = state.computed_style_map(el1).unwrap();
     let display1 = map1.get("display", &mut state.doc, &state.style_context);
     match display1 {
-        Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "block"),
+        Some(CSSStyleValue::Keyword(keyword)) => assert_eq!(keyword.value, "block"),
         Some(CSSStyleValue::Unparsed(val)) => assert_eq!(val, "block"),
         _ => panic!("Expected block for box-1"),
     }
@@ -303,7 +303,7 @@ fn test_behavior_parsed_stylesheet_multiple_rules() {
     let map2 = state.computed_style_map(el2).unwrap();
     let display2 = map2.get("display", &mut state.doc, &state.style_context);
     match display2 {
-        Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "inline"),
+        Some(CSSStyleValue::Keyword(keyword)) => assert_eq!(keyword.value, "inline"),
         Some(CSSStyleValue::Unparsed(val)) => assert_eq!(val, "inline"),
         _ => panic!("Expected inline for box-2"),
     }
@@ -337,10 +337,10 @@ fn test_computed_style_map_size() {
 #[test]
 fn test_computed_style_map_to_vec_sorted() {
     let mut state = make_runtime();
-    let el = state.create_element("div".to_string());
-    state.append_element(0, el).unwrap();
+    let element = state.create_element("div".to_string());
+    state.append_element(0, element).unwrap();
 
-    let map = state.computed_style_map(el).unwrap();
+    let map = state.computed_style_map(element).unwrap();
     let entries = map.to_vec(&mut state.doc, &state.style_context);
 
     assert!(!entries.is_empty());
@@ -379,16 +379,16 @@ fn test_direct_resolve_with_inline_style() {
     // Note: uses "block" instead of "grid" because Stylo in Servo mode
     // gates grid behind `layout.grid.enabled` which defaults to false.
     let mut state = make_runtime();
-    let el = state.create_element("div".to_string());
-    state.append_element(0, el).unwrap();
+    let element = state.create_element("div".to_string());
+    state.append_element(0, element).unwrap();
     state
-        .set_inline_style(el, "display".to_string(), "block".to_string())
+        .set_inline_style(element, "display".to_string(), "block".to_string())
         .unwrap();
 
     // Verify inline style was set
     let has_style = state
         .doc
-        .get_node(taffy::NodeId::from(el as u64))
+        .get_node(taffy::NodeId::from(element as u64))
         .unwrap()
         .style_attribute
         .is_some();
@@ -400,17 +400,17 @@ fn test_direct_resolve_with_inline_style() {
     // Direct resolve
     state.doc.resolve_style(&state.style_context);
 
-    let cv = state
+    let computed_values = state
         .doc
-        .get_node(taffy::NodeId::from(el as u64))
+        .get_node(taffy::NodeId::from(element as u64))
         .unwrap()
         .computed_values
         .as_ref()
         .expect("Element should have computed_values after resolve");
 
-    let display_value = extract_property(cv, LonghandId::Display);
+    let display_value = extract_property(computed_values, LonghandId::Display);
     match &display_value {
-        CSSStyleValue::Keyword(kw) => assert_eq!(kw.value, "block"),
+        CSSStyleValue::Keyword(keyword) => assert_eq!(keyword.value, "block"),
         CSSStyleValue::Unparsed(s) => assert_eq!(s, "block"),
         other => panic!("Expected block, got: {other:?}"),
     }
@@ -419,19 +419,19 @@ fn test_direct_resolve_with_inline_style() {
 #[test]
 fn test_lazy_resolution_sees_updates() {
     let mut state = make_runtime();
-    let el = state.create_element("div".to_string());
-    state.append_element(0, el).unwrap();
+    let element = state.create_element("div".to_string());
+    state.append_element(0, element).unwrap();
 
     // Set inline style, then get via map (ensure_styles_resolved triggers resolve)
     state
-        .set_inline_style(el, "display".to_string(), "block".to_string())
+        .set_inline_style(element, "display".to_string(), "block".to_string())
         .unwrap();
 
-    let map = state.computed_style_map(el).unwrap();
+    let map = state.computed_style_map(element).unwrap();
     let value = map.get("display", &mut state.doc, &state.style_context);
 
     match &value {
-        Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "block"),
+        Some(CSSStyleValue::Keyword(keyword)) => assert_eq!(keyword.value, "block"),
         Some(CSSStyleValue::Unparsed(s)) => assert_eq!(s, "block"),
         other => panic!("Expected block keyword or unparsed, got: {other:?}"),
     }
@@ -440,29 +440,29 @@ fn test_lazy_resolution_sees_updates() {
 #[test]
 fn test_live_handle_sees_later_style_changes() {
     let mut state = make_runtime();
-    let el = state.create_element("div".to_string());
-    state.append_element(0, el).unwrap();
+    let element = state.create_element("div".to_string());
+    state.append_element(0, element).unwrap();
 
     // Create handle first
-    let map = state.computed_style_map(el).unwrap();
+    let map = state.computed_style_map(element).unwrap();
 
     // First read triggers resolve (display should be initial value)
     let initial = map.get("display", &mut state.doc, &state.style_context);
     match &initial {
-        Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "inline"),
+        Some(CSSStyleValue::Keyword(keyword)) => assert_eq!(keyword.value, "inline"),
         Some(CSSStyleValue::Unparsed(s)) => assert_eq!(s, "inline"),
         other => panic!("Expected initial display value, got: {other:?}"),
     }
 
     // Now change the style (set_inline_style marks ancestors dirty)
     state
-        .set_inline_style(el, "display".to_string(), "block".to_string())
+        .set_inline_style(element, "display".to_string(), "block".to_string())
         .unwrap();
 
     // Live handle should see the updated value after lazy re-resolution
     let updated = map.get("display", &mut state.doc, &state.style_context);
     match &updated {
-        Some(CSSStyleValue::Keyword(kw)) => assert_eq!(kw.value, "block"),
+        Some(CSSStyleValue::Keyword(keyword)) => assert_eq!(keyword.value, "block"),
         Some(CSSStyleValue::Unparsed(s)) => assert_eq!(s, "block"),
         other => panic!("Expected block after update, got: {other:?}"),
     }
@@ -477,10 +477,10 @@ fn test_invalid_element_returns_none() {
 
 #[test]
 fn test_display_formatting() {
-    let kw = CSSStyleValue::Keyword(CSSKeywordValue {
+    let keyword = CSSStyleValue::Keyword(CSSKeywordValue {
         value: "flex".to_string(),
     });
-    assert_eq!(kw.to_string(), "flex");
+    assert_eq!(keyword.to_string(), "flex");
 
     let unit = CSSStyleValue::Unit(CSSUnitValue {
         value: 16.0,
@@ -488,15 +488,15 @@ fn test_display_formatting() {
     });
     assert_eq!(unit.to_string(), "16px");
 
-    let pct = CSSStyleValue::Unit(CSSUnitValue {
+    let percent = CSSStyleValue::Unit(CSSUnitValue {
         value: 50.0,
         unit: "percent".to_string(),
     });
-    assert_eq!(pct.to_string(), "50%");
+    assert_eq!(percent.to_string(), "50%");
 
-    let num = CSSStyleValue::Unit(CSSUnitValue {
+    let number = CSSStyleValue::Unit(CSSUnitValue {
         value: 1.5,
         unit: "number".to_string(),
     });
-    assert_eq!(num.to_string(), "1.5");
+    assert_eq!(number.to_string(), "1.5");
 }

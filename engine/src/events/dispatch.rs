@@ -1,3 +1,4 @@
+use crate::runtime::RenderState;
 use stylo_atoms::Atom;
 use taffy::NodeId;
 
@@ -22,7 +23,7 @@ pub struct ListenerSnapshot {
 ///
 /// Returns `None` if any node in the ancestor chain is missing from the
 /// document. The returned `Vec` is ordered root-first: `[root, ..., parent, target]`.
-pub fn build_event_path<S: Default + Send + 'static>(
+pub fn build_event_path<S: RenderState>(
     doc: &Document<S>,
     target_id: NodeId,
 ) -> Option<Vec<NodeId>> {
@@ -47,7 +48,7 @@ pub fn build_event_path<S: Default + Send + 'static>(
 /// - `AtTarget`: both capture and non-capture listeners
 ///
 /// Skips entries where `removed` is `true`.
-pub fn collect_matching_listeners<S: Default + Send + 'static>(
+pub fn collect_matching_listeners<S: RenderState>(
     doc: &Document<S>,
     node_id: NodeId,
     event_type: &Atom,
@@ -99,7 +100,7 @@ pub fn dispatch_event_with_callback<S, F>(
     mut invoke: F,
 ) -> bool
 where
-    S: Default + Send + 'static,
+    S: RenderState,
     F: FnMut(u32, &mut Event),
 {
     // 1. Build event path
@@ -168,7 +169,7 @@ fn invoke_listeners_on_node<S, F>(
     event: &mut Event,
     invoke: &mut F,
 ) where
-    S: Default + Send + 'static,
+    S: RenderState,
     F: FnMut(u32, &mut Event),
 {
     let listeners = collect_matching_listeners(doc, node_id, &event.event_type, event.event_phase);
@@ -211,7 +212,7 @@ fn invoke_listeners_on_node<S, F>(
 }
 
 /// Removes all listener entries marked as `removed` from nodes in the path.
-fn cleanup_removed_listeners<S: Default + Send + 'static>(doc: &mut Document<S>, path: &[NodeId]) {
+fn cleanup_removed_listeners<S: RenderState>(doc: &mut Document<S>, path: &[NodeId]) {
     for &node_id in path {
         if let Some(node) = doc.get_node_mut(node_id) {
             node.event_listeners.retain(|l| !l.removed);
@@ -249,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_build_event_path() {
-        let (state, gp, parent, child) = setup_tree();
+        let (state, grandparent, parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         let path = build_event_path(&state.doc, child_nid).unwrap();
@@ -257,24 +258,34 @@ mod tests {
         // root (0) -> grandparent -> parent -> child
         assert_eq!(path.len(), 4);
         assert_eq!(path[0], NodeId::from(0u64));
-        assert_eq!(path[1], NodeId::from(gp as u64));
+        assert_eq!(path[1], NodeId::from(grandparent as u64));
         assert_eq!(path[2], NodeId::from(parent as u64));
         assert_eq!(path[3], child_nid);
     }
 
     #[test]
     fn test_capture_at_target_bubble_order() {
-        let (mut state, gp, _parent, child) = setup_tree();
+        let (mut state, grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
-        let gp_nid = NodeId::from(gp as u64);
+        let grandparent_nid = NodeId::from(grandparent as u64);
 
         // Capture listener on grandparent
         state
-            .add_event_listener(gp, Atom::from("click"), 1, opts(true, false, false))
+            .add_event_listener(
+                grandparent,
+                Atom::from("click"),
+                1,
+                opts(true, false, false),
+            )
             .unwrap();
         // Bubble listener on grandparent
         state
-            .add_event_listener(gp, Atom::from("click"), 2, opts(false, false, false))
+            .add_event_listener(
+                grandparent,
+                Atom::from("click"),
+                2,
+                opts(false, false, false),
+            )
             .unwrap();
         // At-target listener on child
         state
@@ -289,14 +300,14 @@ mod tests {
         });
 
         assert_eq!(invocations.len(), 3);
-        assert_eq!(invocations[0], (1, gp_nid, EventPhase::Capturing));
+        assert_eq!(invocations[0], (1, grandparent_nid, EventPhase::Capturing));
         assert_eq!(invocations[1], (3, child_nid, EventPhase::AtTarget));
-        assert_eq!(invocations[2], (2, gp_nid, EventPhase::Bubbling));
+        assert_eq!(invocations[2], (2, grandparent_nid, EventPhase::Bubbling));
     }
 
     #[test]
     fn test_stop_propagation_halts_bubbling() {
-        let (mut state, gp, parent, child) = setup_tree();
+        let (mut state, grandparent, parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         // Listener on parent (bubble)
@@ -305,7 +316,12 @@ mod tests {
             .unwrap();
         // Listener on grandparent (bubble) — should NOT fire
         state
-            .add_event_listener(gp, Atom::from("click"), 2, opts(false, false, false))
+            .add_event_listener(
+                grandparent,
+                Atom::from("click"),
+                2,
+                opts(false, false, false),
+            )
             .unwrap();
 
         let mut event = Event::new(Atom::from("click"), true, true, false);
@@ -324,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_stop_immediate_propagation() {
-        let (mut state, _gp, _parent, child) = setup_tree();
+        let (mut state, _grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         // Two listeners on child
@@ -358,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_prevent_default_cancelable() {
-        let (mut state, _gp, _parent, child) = setup_tree();
+        let (mut state, _grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         state
@@ -378,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_prevent_default_non_cancelable() {
-        let (mut state, _gp, _parent, child) = setup_tree();
+        let (mut state, _grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         state
@@ -398,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_once_auto_removal() {
-        let (mut state, _gp, _parent, child) = setup_tree();
+        let (mut state, _grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         state
@@ -435,12 +451,17 @@ mod tests {
 
     #[test]
     fn test_non_bubbling_event() {
-        let (mut state, gp, _parent, child) = setup_tree();
+        let (mut state, grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         // Bubble listener on grandparent — should NOT fire for non-bubbling event
         state
-            .add_event_listener(gp, Atom::from("focus"), 1, opts(false, false, false))
+            .add_event_listener(
+                grandparent,
+                Atom::from("focus"),
+                1,
+                opts(false, false, false),
+            )
             .unwrap();
         // At-target listener on child
         state
@@ -458,12 +479,17 @@ mod tests {
 
     #[test]
     fn test_capture_listener_fires_for_non_bubbling() {
-        let (mut state, gp, _parent, child) = setup_tree();
+        let (mut state, grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         // Capture listener on grandparent — SHOULD fire even for non-bubbling
         state
-            .add_event_listener(gp, Atom::from("focus"), 1, opts(true, false, false))
+            .add_event_listener(
+                grandparent,
+                Atom::from("focus"),
+                1,
+                opts(true, false, false),
+            )
             .unwrap();
         // At-target on child
         state
@@ -481,7 +507,7 @@ mod tests {
 
     #[test]
     fn test_passive_listener_flag() {
-        let (mut state, _gp, _parent, child) = setup_tree();
+        let (mut state, _grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         state
@@ -505,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_collect_listeners_phase_filtering() {
-        let (mut state, _gp, _parent, child) = setup_tree();
+        let (mut state, _grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         state
@@ -544,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_listener_dedup() {
-        let (mut state, _gp, _parent, child) = setup_tree();
+        let (mut state, _grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         // Add same listener twice — should be deduplicated
@@ -573,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_remove_listener() {
-        let (mut state, _gp, _parent, child) = setup_tree();
+        let (mut state, _grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         state
@@ -595,7 +621,7 @@ mod tests {
 
     #[test]
     fn test_dispatch_returns_true_when_not_canceled() {
-        let (mut state, _gp, _parent, child) = setup_tree();
+        let (mut state, _grandparent, _parent, child) = setup_tree();
         let child_nid = NodeId::from(child as u64);
 
         state
