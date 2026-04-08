@@ -21,12 +21,7 @@ impl<'a, S: RenderState> TDocument for &'a PawsElement<S> {
     }
 
     fn shared_lock(&self) -> &SharedRwLock {
-        // SAFETY: TDocument requires returning a reference with the lifetime of the document.
-        // Since `self` is `&'a PawsElement` and `guard` is a field of PawsElement, the
-        // reference is valid for 'a. The transmute extends the borrow lifetime to match
-        // the trait's required lifetime, which is sound because the PawsElement (and its
-        // guard) lives at least as long as the reference.
-        unsafe { std::mem::transmute(&self.guard) }
+        &self.guard
     }
 }
 

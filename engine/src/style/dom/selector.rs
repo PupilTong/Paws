@@ -16,11 +16,7 @@ impl<S: RenderState> selectors::Element for &PawsElement<S> {
     type Impl = SelectorImpl;
 
     fn opaque(&self) -> selectors::OpaqueElement {
-        let ptr: *const PawsElement<S> = *self;
-        // SAFETY: OpaqueElement is a newtype around usize used by the selectors crate as
-        // an opaque identity token. We transmute a valid pointer-as-usize. The value is
-        // only used for identity comparison within selector matching, never dereferenced.
-        unsafe { std::mem::transmute(ptr as usize) }
+        selectors::OpaqueElement::new(*self)
     }
 
     fn parent_element(&self) -> Option<Self> {
