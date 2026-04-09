@@ -199,24 +199,26 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
             "env",
             "__create_element_ns",
             |mut caller: Caller<'_, RuntimeState<R>>, ns_ptr: i32, tag_ptr: i32| -> Result<i32> {
-                let ns = match read_cstr(&mut caller, ns_ptr) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
-                    }
-                };
-                let tag = match read_cstr(&mut caller, tag_ptr) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
-                    }
-                };
+                // Reads a C-string from guest memory; on failure stores a
+                // MemoryError in the runtime state and early-returns with the
+                // stored error code. Kept as a closure-local macro so we don't
+                // repeat this 9-line boilerplate for every pointer argument.
+                macro_rules! try_read_cstr {
+                    ($ptr:expr) => {
+                        match read_cstr(&mut caller, $ptr) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                let code = caller
+                                    .data_mut()
+                                    .set_error(HostErrorCode::MemoryError, err.to_string());
+                                return Ok(code);
+                            }
+                        }
+                    };
+                }
+
+                let ns = try_read_cstr!(ns_ptr);
+                let tag = try_read_cstr!(tag_ptr);
                 caller.data_mut().clear_error();
                 let id = caller.data_mut().create_element_ns(ns, tag);
                 Ok(id as i32)

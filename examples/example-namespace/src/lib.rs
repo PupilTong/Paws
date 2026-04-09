@@ -3,6 +3,14 @@
 //! Creates an SVG root, a child SVG element, and a MathML element, then reads
 //! back the namespace URIs to verify the host stored them correctly. All of
 //! these are appended to the document root.
+//!
+//! Also exercises the following error and edge-case paths so the FFI wrappers
+//! and the host-side linker branches are fully covered:
+//!   * `get_namespace_uri` on a text node → `Ok(None)`
+//!   * `get_namespace_uri` on an invalid (out-of-range) id → `Err`
+//!   * `get_namespace_uri` on a negative id → host-side `id < 0` guard
+//!   * `get_namespace_uri` with a too-small buffer → needed length returned
+//!     without writing
 
 #![no_std]
 
@@ -31,6 +39,10 @@ pub extern "C" fn run() -> i32 {
         // Create a regular HTML element for comparison
         let div_id = create_element("div")?;
         append_element(0, div_id)?;
+
+        // Create a text node for the `Ok(None)` / "no namespace" path
+        let text_id = create_text_node("hello")?;
+        append_element(0, text_id)?;
 
         // Read back namespace URIs via get_namespace_uri
         let mut buf = [0u8; 128];
@@ -69,6 +81,31 @@ pub extern "C" fn run() -> i32 {
         match get_namespace_uri(div_id, &mut buf)? {
             Some(_) => { /* ok — any HTML namespace is fine */ }
             None => return Err(-106),
+        }
+
+        // Text node has no QualName → host returns None → wrapper returns Ok(None)
+        match get_namespace_uri(text_id, &mut buf) {
+            Ok(None) => { /* ok */ }
+            _ => return Err(-107),
+        }
+
+        // Invalid (out-of-range) node id → host returns InvalidChild → wrapper Err
+        match get_namespace_uri(9999, &mut buf) {
+            Err(_) => { /* ok */ }
+            Ok(_) => return Err(-108),
+        }
+
+        // Negative node id → host-side `if id < 0` early guard → wrapper Err
+        match get_namespace_uri(-1, &mut buf) {
+            Err(_) => { /* ok */ }
+            Ok(_) => return Err(-109),
+        }
+
+        // Too-small buffer → host returns needed length without writing
+        let mut small = [0u8; 4];
+        match get_namespace_uri(svg_id, &mut small)? {
+            Some(len) if len == SVG_NS.len() => { /* ok — length returned, buffer untouched */ }
+            _ => return Err(-110),
         }
 
         Ok(0)
