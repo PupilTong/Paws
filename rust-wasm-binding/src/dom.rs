@@ -78,6 +78,7 @@ pub trait NodeOps: Sized {
     /// to another system (e.g. a parent wrapper is about to destroy the
     /// whole subtree, and you don't want this child's Drop to attempt a
     /// second destroy).
+    #[inline]
     fn into_raw(self) -> i32 {
         let id = self.id();
         core::mem::forget(self);
@@ -91,41 +92,49 @@ pub trait NodeOps: Sized {
     /// The returned id is owned by this node — do NOT wrap it in an owning
     /// type; use [`Element::from_raw`] + [`NodeOps::into_raw`] if you need
     /// method access for a short window.
+    #[inline]
     fn first_child(&self) -> Option<i32> {
         get_first_child(self.id())
     }
 
     /// Returns the last child's raw id, or `None`.
+    #[inline]
     fn last_child(&self) -> Option<i32> {
         get_last_child(self.id())
     }
 
     /// Returns the next sibling's raw id, or `None`.
+    #[inline]
     fn next_sibling(&self) -> Option<i32> {
         get_next_sibling(self.id())
     }
 
     /// Returns the previous sibling's raw id, or `None`.
+    #[inline]
     fn previous_sibling(&self) -> Option<i32> {
         get_previous_sibling(self.id())
     }
 
     /// Returns the parent element id, or `None`.
+    #[inline]
     fn parent_element(&self) -> Option<i32> {
         get_parent_element(self.id())
     }
 
     /// Returns the parent node id (any node type), or `None`.
+    #[inline]
     fn parent_node(&self) -> Option<i32> {
         get_parent_node(self.id())
     }
 
     /// Returns whether this node is currently attached to the document tree.
+    #[inline]
     fn is_connected(&self) -> Result<bool, i32> {
         is_connected(self.id())
     }
 
     /// Returns this node's DOM `nodeType`, or `None` if the node no longer exists.
+    #[inline]
     fn node_type(&self) -> Option<i32> {
         get_node_type(self.id())
     }
@@ -137,21 +146,25 @@ pub trait NodeOps: Sized {
     /// Mirrors the web-sys signature — the child is borrowed, not consumed,
     /// so the caller continues to own the wrapper (the slab entry is aliased
     /// via this parent until the parent's Drop destroys the subtree).
+    #[inline]
     fn append_child<N: NodeOps>(&self, child: &N) -> Result<(), i32> {
         append_element(self.id(), child.id())
     }
 
     /// Appends multiple children in a single host call.
+    #[inline]
     fn append_children(&self, children: &[i32]) -> Result<(), i32> {
         append_elements(self.id(), children)
     }
 
     /// Removes `child` from this node without destroying it.
+    #[inline]
     fn remove_child<N: NodeOps>(&self, child: &N) -> Result<(), i32> {
         remove_child(self.id(), child.id())
     }
 
     /// Replaces `old_child` with `new_child` under this node.
+    #[inline]
     fn replace_child<New: NodeOps, Old: NodeOps>(
         &self,
         new_child: &New,
@@ -161,6 +174,7 @@ pub trait NodeOps: Sized {
     }
 
     /// Inserts `new_child` before `ref_child` under this node.
+    #[inline]
     fn insert_before<New: NodeOps, Ref: NodeOps>(
         &self,
         new_child: &New,
@@ -172,12 +186,14 @@ pub trait NodeOps: Sized {
     /// Inserts `new_child` at the end of this node's children. This is a
     /// convenience form of [`NodeOps::insert_before`] with `ref_child = -1`
     /// (the sentinel the host understands as "append at end").
+    #[inline]
     fn insert_at_end<N: NodeOps>(&self, new_child: &N) -> Result<(), i32> {
         insert_before(self.id(), new_child.id(), -1)
     }
 
     /// Sets this node's text value (valid on Text and Comment nodes; a no-op
     /// on elements per the DOM spec).
+    #[inline]
     fn set_node_value(&self, value: &str) -> Result<(), i32> {
         set_node_value(self.id(), value)
     }
@@ -185,6 +201,7 @@ pub trait NodeOps: Sized {
     // -- event listeners (inherited by all NodeOps impls) -------------------
 
     /// Registers an event listener on this node.
+    #[inline]
     fn add_event_listener(
         &self,
         event_type: &str,
@@ -195,6 +212,7 @@ pub trait NodeOps: Sized {
     }
 
     /// Removes an event listener from this node.
+    #[inline]
     fn remove_event_listener(
         &self,
         event_type: &str,
@@ -205,6 +223,7 @@ pub trait NodeOps: Sized {
     }
 
     /// Dispatches an event on this node.
+    #[inline]
     fn dispatch_event(
         &self,
         event_type: &str,
@@ -229,22 +248,26 @@ pub trait ElementOps: NodeOps {
     // -- attributes ---------------------------------------------------------
 
     /// Sets a DOM attribute on this element.
+    #[inline]
     fn set_attribute(&self, name: &str, value: &str) -> Result<(), i32> {
         set_attribute(self.id(), name, value)
     }
 
     /// Returns whether this element has the named attribute.
+    #[inline]
     fn has_attribute(&self, name: &str) -> Result<bool, i32> {
         has_attribute(self.id(), name)
     }
 
     /// Reads an attribute value into `buf`. See the standalone
     /// [`crate::get_attribute`] for the length semantics.
+    #[inline]
     fn get_attribute(&self, name: &str, buf: &mut [u8]) -> Result<Option<usize>, i32> {
         get_attribute(self.id(), name, buf)
     }
 
     /// Removes the named attribute from this element.
+    #[inline]
     fn remove_attribute(&self, name: &str) -> Result<(), i32> {
         remove_attribute(self.id(), name)
     }
@@ -252,6 +275,7 @@ pub trait ElementOps: NodeOps {
     // -- inline style -------------------------------------------------------
 
     /// Sets an inline CSS property.
+    #[inline]
     fn set_inline_style(&self, name: &str, value: &str) -> Result<(), i32> {
         set_inline_style(self.id(), name, value)
     }
@@ -260,6 +284,7 @@ pub trait ElementOps: NodeOps {
 
     /// Reads the namespace URI into `buf`. See the standalone
     /// [`crate::get_namespace_uri`] for length semantics.
+    #[inline]
     fn get_namespace_uri(&self, buf: &mut [u8]) -> Result<Option<usize>, i32> {
         get_namespace_uri(self.id(), buf)
     }
@@ -269,6 +294,7 @@ pub trait ElementOps: NodeOps {
     ///
     /// Returns an owning [`Element`] wrapping the new id — the clone is a
     /// fresh subtree, owned by the caller.
+    #[inline]
     fn clone_node(&self, deep: bool) -> Result<Element, i32> {
         let new_id = clone_node(self.id(), deep)?;
         // SAFETY: `clone_node` returns a fresh, caller-owned slab id on
@@ -283,16 +309,19 @@ pub trait ElementOps: NodeOps {
     ///
     /// The returned id is NOT wrapped because a shadow root has a different
     /// ownership model — it is owned by its host element, not by the caller.
+    #[inline]
     fn attach_shadow(&self, mode: &str) -> Result<i32, i32> {
         attach_shadow(self.id(), mode)
     }
 
     /// Returns this element's shadow root id, or `None`.
+    #[inline]
     fn shadow_root(&self) -> Option<i32> {
         get_shadow_root(self.id())
     }
 
     /// Adds a stylesheet scoped to a shadow root owned by this element.
+    #[inline]
     fn add_shadow_stylesheet(&self, shadow_root_id: i32, css: &str) -> Result<(), i32> {
         add_shadow_stylesheet(shadow_root_id, css)
     }
@@ -317,12 +346,14 @@ pub struct Element {
 
 impl Element {
     /// Creates a new element with the given tag name.
+    #[inline]
     pub fn new(tag: &str) -> Result<Self, i32> {
         let id = create_element(tag)?;
         Ok(Self { id })
     }
 
     /// Creates a new element with a namespace URI (SVG, MathML, etc.).
+    #[inline]
     pub fn new_ns(namespace: &str, tag: &str) -> Result<Self, i32> {
         let id = create_element_ns(namespace, tag)?;
         Ok(Self { id })
@@ -342,6 +373,7 @@ impl Element {
     ///
     /// Pair with [`NodeOps::into_raw`] to hand off ownership between FFI
     /// boundaries without running Drop.
+    #[inline]
     pub unsafe fn from_raw(id: i32) -> Self {
         Self { id }
     }
@@ -380,6 +412,7 @@ pub struct Text {
 
 impl Text {
     /// Creates a new text node with the given content.
+    #[inline]
     pub fn new(text: &str) -> Result<Self, i32> {
         let id = create_text_node(text)?;
         Ok(Self { id })
@@ -391,6 +424,7 @@ impl Text {
     ///
     /// Same invariants as [`Element::from_raw`], plus the id must refer to a
     /// text node (node type [`NODE_TYPE_TEXT`]).
+    #[inline]
     pub unsafe fn from_raw(id: i32) -> Self {
         Self { id }
     }
@@ -427,6 +461,7 @@ pub struct PawsInputElement {
 
 impl PawsInputElement {
     /// Creates a new `<input>` element.
+    #[inline]
     pub fn new() -> Result<Self, i32> {
         let id = create_element("input")?;
         Ok(Self { id })
@@ -437,6 +472,7 @@ impl PawsInputElement {
     /// # Safety
     ///
     /// See [`Element::from_raw`]. The id must refer to an `<input>` element.
+    #[inline]
     pub unsafe fn from_raw(id: i32) -> Self {
         Self { id }
     }
@@ -445,6 +481,7 @@ impl PawsInputElement {
     ///
     /// Note: the host may treat this as an attribute or as a live `.value`
     /// property; today it routes through [`set_attribute`].
+    #[inline]
     pub fn set_value(&self, value: &str) -> Result<(), i32> {
         set_attribute(self.id, "value", value)
     }
@@ -452,6 +489,7 @@ impl PawsInputElement {
     /// Sets the `checked` attribute for `<input type="checkbox">` and
     /// `<input type="radio">`. Uses attribute-presence semantics: `true`
     /// sets `checked=""`, `false` removes the attribute.
+    #[inline]
     pub fn set_checked(&self, checked: bool) -> Result<(), i32> {
         if checked {
             set_attribute(self.id, "checked", "")
@@ -493,6 +531,7 @@ pub struct PawsTextAreaElement {
 
 impl PawsTextAreaElement {
     /// Creates a new `<textarea>` element.
+    #[inline]
     pub fn new() -> Result<Self, i32> {
         let id = create_element("textarea")?;
         Ok(Self { id })
@@ -503,16 +542,19 @@ impl PawsTextAreaElement {
     /// # Safety
     ///
     /// See [`Element::from_raw`]. The id must refer to a `<textarea>`.
+    #[inline]
     pub unsafe fn from_raw(id: i32) -> Self {
         Self { id }
     }
 
     /// Sets the live value of the textarea (current content).
+    #[inline]
     pub fn set_value(&self, value: &str) -> Result<(), i32> {
         set_attribute(self.id, "value", value)
     }
 
     /// Sets the default value — what the textarea resets to on form reset.
+    #[inline]
     pub fn set_default_value(&self, value: &str) -> Result<(), i32> {
         set_attribute(self.id, "defaultValue", value)
     }
