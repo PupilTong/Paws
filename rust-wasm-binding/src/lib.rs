@@ -27,6 +27,8 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 #[link(wasm_import_module = "env")]
 extern "C" {
     fn __create_element(name_ptr: *const u8) -> i32;
+    fn __create_element_ns(ns_ptr: *const u8, tag_ptr: *const u8) -> i32;
+    fn __get_namespace_uri(id: i32, buf_ptr: *mut u8, buf_len: i32) -> i32;
     fn __create_text_node(text_ptr: *const u8) -> i32;
     fn __set_inline_style(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
     fn __set_attribute(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
@@ -185,6 +187,41 @@ pub fn create_element(name: &str) -> Result<i32, i32> {
         Err(id)
     } else {
         Ok(id)
+    }
+}
+
+/// Creates a new DOM element with the given namespace URI and tag name.
+///
+/// Returns the element's numeric ID on success, or a negative host error code.
+pub fn create_element_ns(namespace: &str, tag: &str) -> Result<i32, i32> {
+    let ns_ptr = write_cstr(namespace);
+    let tag_ptr = write_cstr(tag);
+    // SAFETY: Both pointers point to null-terminated strings in WASM linear memory.
+    // The host reads from these memory regions during the call.
+    let id = unsafe { __create_element_ns(ns_ptr, tag_ptr) };
+    if id < 0 {
+        Err(id)
+    } else {
+        Ok(id)
+    }
+}
+
+/// Returns the namespace URI of the given element.
+///
+/// Returns `Ok(Some(len))` with the namespace written to `buf` if it fits,
+/// `Ok(Some(len))` with `len > buf.len()` if the buffer is too small (namespace
+/// not written), `Ok(None)` if the element has no namespace, or `Err(code)` on
+/// error.
+pub fn get_namespace_uri(id: i32, buf: &mut [u8]) -> Result<Option<usize>, i32> {
+    // SAFETY: `buf` is a valid mutable slice in WASM linear memory.
+    // The host writes into this region during the call.
+    let result = unsafe { __get_namespace_uri(id, buf.as_mut_ptr(), buf.len() as i32) };
+    if result == -1 {
+        Ok(None)
+    } else if result < -1 {
+        Err(result)
+    } else {
+        Ok(Some(result as usize))
     }
 }
 

@@ -1,2 +1,6 @@
 ignore:
   - "examples/**"
+  # rust-wasm-binding is a no_std WASM-only FFI binding; its code only runs
+  # inside wasmtime-executed guest modules and cannot be instrumented by
+  # cargo llvm-cov (which runs host-target tests).
+  - "rust-wasm-binding/**"

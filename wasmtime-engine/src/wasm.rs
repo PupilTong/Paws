@@ -197,6 +197,81 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
     linker
         .func_wrap(
             "env",
+            "__create_element_ns",
+            |mut caller: Caller<'_, RuntimeState<R>>, ns_ptr: i32, tag_ptr: i32| -> Result<i32> {
+                // Reads a C-string from guest memory; on failure stores a
+                // MemoryError in the runtime state and early-returns with the
+                // stored error code. Kept as a closure-local macro so we don't
+                // repeat this 9-line boilerplate for every pointer argument.
+                macro_rules! try_read_cstr {
+                    ($ptr:expr) => {
+                        match read_cstr(&mut caller, $ptr) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                let code = caller
+                                    .data_mut()
+                                    .set_error(HostErrorCode::MemoryError, err.to_string());
+                                return Ok(code);
+                            }
+                        }
+                    };
+                }
+
+                let ns = try_read_cstr!(ns_ptr);
+                let tag = try_read_cstr!(tag_ptr);
+                caller.data_mut().clear_error();
+                let id = caller.data_mut().create_element_ns(ns, tag);
+                Ok(id as i32)
+            },
+        )
+        .expect("link __create_element_ns");
+
+    linker
+        .func_wrap(
+            "env",
+            "__get_namespace_uri",
+            |mut caller: Caller<'_, RuntimeState<R>>,
+             id: i32,
+             buf_ptr: i32,
+             buf_len: i32|
+             -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                match caller.data().get_namespace_uri(id as u32) {
+                    Ok(Some(ns)) => {
+                        let bytes = ns.as_bytes();
+                        let needed = bytes.len() as i32;
+                        if buf_len >= needed {
+                            if let Err(err) = write_to_memory(&mut caller, buf_ptr, bytes) {
+                                let code = caller
+                                    .data_mut()
+                                    .set_error(HostErrorCode::MemoryError, err.to_string());
+                                return Ok(code);
+                            }
+                        }
+                        caller.data_mut().clear_error();
+                        Ok(needed)
+                    }
+                    Ok(None) => {
+                        caller.data_mut().clear_error();
+                        Ok(-1)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __get_namespace_uri");
+
+    linker
+        .func_wrap(
+            "env",
             "__create_text_node",
             |mut caller: Caller<'_, RuntimeState<R>>, text_ptr: i32| -> Result<i32> {
                 let text = match read_cstr(&mut caller, text_ptr) {

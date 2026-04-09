@@ -215,6 +215,60 @@ fn test_commit_full_pipeline() {
 }
 
 // -----------------------------------------------------------------------
+// namespace: exercises __create_element_ns and __get_namespace_uri
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_namespace_dom_structure_and_uris() {
+    let state = run_example("example_namespace");
+
+    // Example creates: svg(1) with circle(2), math(3), div(4)
+    let svg = state
+        .doc
+        .get_node(NodeId::from(1_u64))
+        .expect("svg should exist");
+    assert!(svg.is_element());
+
+    let circle = state
+        .doc
+        .get_node(NodeId::from(2_u64))
+        .expect("circle should exist");
+    assert!(circle.is_element());
+    assert_eq!(circle.parent, Some(NodeId::from(1_u64)));
+
+    let math = state
+        .doc
+        .get_node(NodeId::from(3_u64))
+        .expect("math should exist");
+    assert!(math.is_element());
+
+    let div = state
+        .doc
+        .get_node(NodeId::from(4_u64))
+        .expect("div should exist");
+    assert!(div.is_element());
+
+    // Namespace URIs are verified via the public RuntimeState API
+    assert_eq!(
+        state.get_namespace_uri(1).unwrap().as_deref(),
+        Some("http://www.w3.org/2000/svg")
+    );
+    assert_eq!(
+        state.get_namespace_uri(2).unwrap().as_deref(),
+        Some("http://www.w3.org/2000/svg")
+    );
+    assert_eq!(
+        state.get_namespace_uri(3).unwrap().as_deref(),
+        Some("http://www.w3.org/1998/Math/MathML")
+    );
+    // Regular HTML div created via create_element() uses the HTML namespace
+    assert_eq!(
+        state.get_namespace_uri(4).unwrap().as_deref(),
+        Some("http://www.w3.org/1999/xhtml")
+    );
+}
+
+// -----------------------------------------------------------------------
 // Additional: verify all examples run without error
 // -----------------------------------------------------------------------
 
@@ -229,6 +283,7 @@ fn test_all_examples_run_successfully() {
         "example_attributes",
         "example_destroy_rebuild",
         "example_commit_full",
+        "example_namespace",
     ];
 
     for name in examples {

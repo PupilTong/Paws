@@ -1,4 +1,4 @@
-use markup5ever::{LocalName, QualName};
+use markup5ever::{LocalName, Namespace, QualName};
 
 use crate::dom::{Document, DomError};
 use crate::style::StyleContext;
@@ -147,6 +147,29 @@ impl<R: EngineRenderer> RuntimeState<R> {
         let name = QualName::new(None, markup5ever::ns!(html), LocalName::from(tag));
         let id: u64 = self.doc.create_element(name).into();
         id as u32
+    }
+
+    /// Creates a new element with the given namespace URI and tag name.
+    /// Returns the node ID.
+    pub fn create_element_ns(&mut self, namespace: String, tag: String) -> u32 {
+        let ns = Namespace::from(namespace);
+        let name = QualName::new(None, ns, LocalName::from(tag));
+        let id: u64 = self.doc.create_element(name).into();
+        id as u32
+    }
+
+    /// Returns the namespace URI of the given element, or `None` if the
+    /// element has no namespace or the node is not an element.
+    pub fn get_namespace_uri(&self, id: u32) -> Result<Option<String>, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        Ok(node
+            .name
+            .as_ref()
+            .map(|qname| qname.ns.to_string())
+            .filter(|s| !s.is_empty()))
     }
 
     /// Creates a new text node with the given content. Returns the node ID.
@@ -804,6 +827,79 @@ mod tests {
         let node = state.doc.get_node(taffy::NodeId::from(id as u64)).unwrap();
         assert!(node.is_text_node());
         assert_eq!(node.text_content.as_deref().unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_create_element_ns_svg() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id =
+            state.create_element_ns("http://www.w3.org/2000/svg".to_string(), "svg".to_string());
+        let node = state.doc.get_node(taffy::NodeId::from(id as u64)).unwrap();
+        assert!(node.is_element());
+        let qname = node.name.as_ref().unwrap();
+        assert_eq!(qname.local.as_ref(), "svg");
+        assert_eq!(qname.ns.as_ref(), "http://www.w3.org/2000/svg");
+    }
+
+    #[test]
+    fn test_create_element_ns_mathml() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element_ns(
+            "http://www.w3.org/1998/Math/MathML".to_string(),
+            "math".to_string(),
+        );
+        let node = state.doc.get_node(taffy::NodeId::from(id as u64)).unwrap();
+        assert!(node.is_element());
+        let qname = node.name.as_ref().unwrap();
+        assert_eq!(qname.local.as_ref(), "math");
+        assert_eq!(qname.ns.as_ref(), "http://www.w3.org/1998/Math/MathML");
+    }
+
+    #[test]
+    fn test_get_namespace_uri_svg() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element_ns(
+            "http://www.w3.org/2000/svg".to_string(),
+            "circle".to_string(),
+        );
+        let ns = state.get_namespace_uri(id).unwrap();
+        assert_eq!(ns.as_deref(), Some("http://www.w3.org/2000/svg"));
+    }
+
+    #[test]
+    fn test_get_namespace_uri_html_default() {
+        // HTML elements created via create_element() use the HTML namespace,
+        // which is a non-empty atom.
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element("div".to_string());
+        let ns = state.get_namespace_uri(id).unwrap();
+        assert_eq!(ns.as_deref(), Some("http://www.w3.org/1999/xhtml"));
+    }
+
+    #[test]
+    fn test_get_namespace_uri_empty_returns_none() {
+        // When create_element_ns is called with an empty namespace string,
+        // get_namespace_uri should return None (filter on is_empty).
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_element_ns(String::new(), "custom".to_string());
+        let ns = state.get_namespace_uri(id).unwrap();
+        assert_eq!(ns, None);
+    }
+
+    #[test]
+    fn test_get_namespace_uri_invalid_node() {
+        let state = RuntimeState::new("https://example.com".to_string());
+        let result = state.get_namespace_uri(9999);
+        assert_eq!(result, Err(HostErrorCode::InvalidChild));
+    }
+
+    #[test]
+    fn test_get_namespace_uri_text_node_returns_none() {
+        // Text nodes have no `name` field, so get_namespace_uri returns None.
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let id = state.create_text_node("hello".to_string());
+        let ns = state.get_namespace_uri(id).unwrap();
+        assert_eq!(ns, None);
     }
 
     #[test]
