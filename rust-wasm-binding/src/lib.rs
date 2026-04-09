@@ -14,7 +14,7 @@ pub use view_macros::css;
 // Panic handler for no_std WASM targets
 // ---------------------------------------------------------------------------
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "panic-handler"))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
