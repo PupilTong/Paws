@@ -775,6 +775,16 @@ pub fn add_shadow_stylesheet(shadow_root_id: i32, css: &str) -> Result<(), i32> 
 }
 
 // ---------------------------------------------------------------------------
+// RAII DOM wrapper types (mirrors web-sys naming)
+// ---------------------------------------------------------------------------
+
+mod dom;
+pub use dom::{
+    Element, ElementOps, NodeOps, PawsInputElement, PawsTextAreaElement, Text, NODE_TYPE_COMMENT,
+    NODE_TYPE_DOCUMENT, NODE_TYPE_DOCUMENT_FRAGMENT, NODE_TYPE_ELEMENT, NODE_TYPE_TEXT,
+};
+
+// ---------------------------------------------------------------------------
 // Tests (run on host, not wasm — only test the macro / IR round-trip)
 // ---------------------------------------------------------------------------
 
