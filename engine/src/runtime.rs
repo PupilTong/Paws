@@ -1,4 +1,4 @@
-use markup5ever::{LocalName, QualName};
+use markup5ever::{LocalName, Namespace, QualName};
 
 use crate::dom::{Document, DomError};
 use crate::style::StyleContext;
@@ -147,6 +147,29 @@ impl<R: EngineRenderer> RuntimeState<R> {
         let name = QualName::new(None, markup5ever::ns!(html), LocalName::from(tag));
         let id: u64 = self.doc.create_element(name).into();
         id as u32
+    }
+
+    /// Creates a new element with the given namespace URI and tag name.
+    /// Returns the node ID.
+    pub fn create_element_ns(&mut self, namespace: String, tag: String) -> u32 {
+        let ns = Namespace::from(namespace);
+        let name = QualName::new(None, ns, LocalName::from(tag));
+        let id: u64 = self.doc.create_element(name).into();
+        id as u32
+    }
+
+    /// Returns the namespace URI of the given element, or `None` if the
+    /// element has no namespace or the node is not an element.
+    pub fn get_namespace_uri(&self, id: u32) -> Result<Option<String>, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        Ok(node
+            .name
+            .as_ref()
+            .map(|qname| qname.ns.to_string())
+            .filter(|s| !s.is_empty()))
     }
 
     /// Creates a new text node with the given content. Returns the node ID.
