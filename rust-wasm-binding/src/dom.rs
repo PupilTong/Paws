@@ -340,6 +340,7 @@ pub trait ElementOps: NodeOps {
 /// Construct with [`Element::new`] (HTML), [`Element::new_ns`] (namespaced),
 /// or [`Element::from_raw`] (FFI edges).
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct Element {
     id: i32,
 }
@@ -406,6 +407,7 @@ impl Drop for Element {
 /// so attribute/style methods are unavailable at compile time — text nodes
 /// don't have attributes.
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct Text {
     id: i32,
 }
@@ -455,6 +457,7 @@ impl Drop for Text {
 /// set_attribute, set_inline_style, ...) and adds input-specific convenience
 /// methods ([`set_value`](Self::set_value), [`set_checked`](Self::set_checked)).
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct PawsInputElement {
     id: i32,
 }
@@ -525,6 +528,7 @@ impl Drop for PawsInputElement {
 /// ([`set_value`](Self::set_value),
 /// [`set_default_value`](Self::set_default_value)).
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct PawsTextAreaElement {
     id: i32,
 }
