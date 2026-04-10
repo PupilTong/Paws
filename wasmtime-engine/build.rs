@@ -13,6 +13,7 @@ const EXAMPLES: &[&str] = &[
     "example-destroy-rebuild",
     "example-commit-full",
     "example-namespace",
+    "example-event-dispatch",
 ];
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
