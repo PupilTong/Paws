@@ -681,9 +681,10 @@ const MAX_LISTENERS: usize = 256;
 
 /// Static listener table mapping callback IDs to function pointers.
 ///
-/// The table is fixed-size for `#![no_std]` compatibility. Applications
-/// needing closures with captured state should use global variables.
-type ListenerSlots = [Option<fn()>; MAX_LISTENERS];
+/// Each callback receives its own `callback_id` as an `i32` argument,
+/// allowing a single function pointer to serve as a multiplexing
+/// dispatcher that looks up per-registration state in a side table.
+type ListenerSlots = [Option<fn(i32)>; MAX_LISTENERS];
 
 struct ListenerTable {
     table: UnsafeCell<ListenerSlots>,
@@ -702,12 +703,15 @@ static LISTENERS: ListenerTable = ListenerTable {
 
 /// Registers a function pointer as an event listener callback.
 ///
+/// The callback receives its own `callback_id` as an argument so that a
+/// single function can serve as a dispatcher for many registrations.
+///
 /// Returns the `callback_id` to pass to [`add_event_listener`].
 ///
 /// # Panics
 ///
 /// Panics if the listener table is full (`MAX_LISTENERS` reached).
-pub fn register_listener(callback: fn()) -> u32 {
+pub fn register_listener(callback: fn(i32)) -> u32 {
     // SAFETY: Single-threaded WASM execution — no concurrent access to the
     // listener table. We obtain raw pointers from UnsafeCell and perform
     // bounded writes within the table.
@@ -722,11 +726,27 @@ pub fn register_listener(callback: fn()) -> u32 {
     }
 }
 
+/// Removes a previously registered listener, freeing its table slot.
+///
+/// After this call the `callback_id` is invalid and must not be passed
+/// to [`add_event_listener`]. The slot is NOT reused by future
+/// [`register_listener`] calls (IDs are monotonically increasing).
+pub fn unregister_listener(id: u32) {
+    // SAFETY: Single-threaded WASM execution — no concurrent access.
+    unsafe {
+        let table = &mut *LISTENERS.table.get();
+        if let Some(slot) = table.get_mut(id as usize) {
+            *slot = None;
+        }
+    }
+}
+
 /// WASM export called by the host during event dispatch to invoke a listener.
 ///
 /// The host calls this function for each matching listener during the
 /// three-phase dispatch algorithm. The `callback_id` maps to a function
-/// pointer registered via [`register_listener`].
+/// pointer registered via [`register_listener`] and is passed through
+/// to the callback as its sole argument.
 #[export_name = "__paws_invoke_listener"]
 pub extern "C" fn paws_invoke_listener(callback_id: i32) {
     // SAFETY: Single-threaded WASM execution — no concurrent access to the
@@ -734,7 +754,7 @@ pub extern "C" fn paws_invoke_listener(callback_id: i32) {
     unsafe {
         let table = &*LISTENERS.table.get();
         if let Some(Some(callback)) = table.get(callback_id as usize) {
-            callback();
+            callback(callback_id);
         }
     }
 }
