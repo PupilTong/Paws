@@ -269,6 +269,39 @@ fn test_namespace_dom_structure_and_uris() {
 }
 
 // -----------------------------------------------------------------------
+// event-dispatch: tests full host ↔ guest event pipeline
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_event_dispatch_callback_fires() {
+    let state = run_example("example_event_dispatch");
+
+    // The example creates div(1) > button(2), registers a click listener,
+    // dispatches a click, and the listener creates span(3) as a sibling.
+    let parent = state
+        .doc
+        .get_node(NodeId::from(1_u64))
+        .expect("parent div should exist");
+    assert!(parent.is_element());
+
+    // Parent should have two children: button and the span created by the
+    // event handler.
+    assert_eq!(
+        parent.children.len(),
+        2,
+        "parent should have button + span after event dispatch"
+    );
+
+    // The span (created by the callback) should be the second child.
+    let span = state
+        .doc
+        .get_node(parent.children[1])
+        .expect("span created by event handler should exist");
+    assert!(span.is_element());
+    assert_eq!(span.parent, Some(NodeId::from(1_u64)));
+}
+
+// -----------------------------------------------------------------------
 // Additional: verify all examples run without error
 // -----------------------------------------------------------------------
 
@@ -284,6 +317,7 @@ fn test_all_examples_run_successfully() {
         "example_destroy_rebuild",
         "example_commit_full",
         "example_namespace",
+        "example_event_dispatch",
     ];
 
     for name in examples {
