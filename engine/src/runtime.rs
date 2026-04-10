@@ -434,19 +434,24 @@ impl<R: EngineRenderer> RuntimeState<R> {
     }
 
     /// Inserts a new child before a reference child under a given parent.
+    /// If `ref_child` is `None`, appends the new child at the end.
     pub fn insert_before(
         &mut self,
         parent: u32,
         new_child: u32,
-        ref_child: u32,
+        ref_child: Option<u32>,
     ) -> Result<(), HostErrorCode> {
-        self.doc
-            .insert_before(
-                taffy::NodeId::from(parent as u64),
-                taffy::NodeId::from(new_child as u64),
-                taffy::NodeId::from(ref_child as u64),
-            )
-            .map_err(dom_error_to_host)
+        match ref_child {
+            Some(rc) => self
+                .doc
+                .insert_before(
+                    taffy::NodeId::from(parent as u64),
+                    taffy::NodeId::from(new_child as u64),
+                    taffy::NodeId::from(rc as u64),
+                )
+                .map_err(dom_error_to_host),
+            None => self.append_element(parent, new_child),
+        }
     }
 
     /// Clones a DOM node. If `deep` is true, all descendants are cloned recursively.
@@ -3231,7 +3236,7 @@ mod tests {
         state.append_element(parent, b).unwrap();
 
         // Insert x before b → order should be [a, x, b]
-        state.insert_before(parent, x, b).unwrap();
+        state.insert_before(parent, x, Some(b)).unwrap();
 
         let p = state
             .doc
@@ -3251,7 +3256,7 @@ mod tests {
         state.append_element(parent, a).unwrap();
 
         // Insert x before a → order should be [x, a]
-        state.insert_before(parent, x, a).unwrap();
+        state.insert_before(parent, x, Some(a)).unwrap();
 
         let p = state
             .doc
@@ -3275,7 +3280,7 @@ mod tests {
         // [a, b, c]
 
         // Move a before c → [b, a, c]
-        state.insert_before(parent, a, c).unwrap();
+        state.insert_before(parent, a, Some(c)).unwrap();
 
         let p = state
             .doc
@@ -3296,7 +3301,7 @@ mod tests {
         state.append_element(parent, b).unwrap();
 
         // Insert a before a → no-op, order stays [a, b]
-        state.insert_before(parent, a, a).unwrap();
+        state.insert_before(parent, a, Some(a)).unwrap();
 
         let p = state
             .doc
@@ -3321,19 +3326,19 @@ mod tests {
 
         // ref_child not a child of parent
         assert_eq!(
-            state.insert_before(parent, new_node, other_child),
+            state.insert_before(parent, new_node, Some(other_child)),
             Err(HostErrorCode::InvalidChild)
         );
 
         // Cycle detection
         assert_eq!(
-            state.insert_before(parent, parent, child),
+            state.insert_before(parent, parent, Some(child)),
             Err(HostErrorCode::CycleDetected)
         );
 
         // new_child has different parent
         assert_eq!(
-            state.insert_before(parent, other_child, child),
+            state.insert_before(parent, other_child, Some(child)),
             Err(HostErrorCode::ChildAlreadyHasParent)
         );
     }
@@ -3404,7 +3409,7 @@ mod tests {
         state.append_element(parent, child).unwrap();
 
         // Insert new_node before child — should propagate IS_IN_DOCUMENT
-        state.insert_before(parent, new_node, child).unwrap();
+        state.insert_before(parent, new_node, Some(child)).unwrap();
 
         assert!(state
             .doc
