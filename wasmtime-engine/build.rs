@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::{env, fs};
 
-/// Example crate names to build for E2E tests.
+/// Examples under `Paws/examples/` — each is its own mini-workspace.
 const EXAMPLES: &[&str] = &[
     "example-basic-element",
     "example-styled-element",
@@ -16,16 +16,28 @@ const EXAMPLES: &[&str] = &[
     "example-event-dispatch",
 ];
 
+/// Examples under `Paws/yew/examples/` — part of the yew workspace.
+/// These produce WASM binaries inside `yew/target/` instead of their
+/// own `target/` directory. Built for `wasm32-wasip1` (not the
+/// `-threads` variant) because wasi-libc's pthread-based TLS in the
+/// `-threads` target requires a wasi-threads host implementation that
+/// we don't yet provide. The non-threads variant uses static TLS and
+/// the same `rust-wasm-binding` FFI.
+const YEW_EXAMPLES: &[&str] = &["example-yew-counter"];
+const YEW_WASM_TARGET: &str = "wasm32-wasip1";
+
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let workspace_root = manifest_dir.parent().expect("workspace root");
     let examples_dir = workspace_root.join("examples");
+    let yew_examples_dir = workspace_root.join("yew").join("examples");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // Rerun if example sources or the binding crate change
     println!("cargo:rerun-if-changed={}", examples_dir.display());
+    println!("cargo:rerun-if-changed={}", yew_examples_dir.display());
     println!(
         "cargo:rerun-if-changed={}",
         workspace_root
@@ -34,9 +46,9 @@ fn main() {
             .display()
     );
 
-    // Build each example crate for the WASM target
     let mut wasm_paths: Vec<(String, PathBuf)> = Vec::new();
 
+    // Build standalone examples (each has its own target/ directory)
     for name in EXAMPLES {
         let crate_dir = examples_dir.join(name);
         if !crate_dir.exists() {
@@ -54,7 +66,6 @@ fn main() {
 
         assert!(status.success(), "cargo build failed for {name}");
 
-        // The cdylib output file name: hyphens → underscores
         let wasm_filename = format!("{}.wasm", name.replace('-', "_"));
         let wasm_src = crate_dir
             .join("target")
@@ -68,7 +79,59 @@ fn main() {
             wasm_src.display()
         );
 
-        // Copy to OUT_DIR so tests can include_bytes! them
+        let wasm_dst = out_dir.join(&wasm_filename);
+        fs::copy(&wasm_src, &wasm_dst).unwrap_or_else(|e| {
+            panic!(
+                "failed to copy {} → {}: {e}",
+                wasm_src.display(),
+                wasm_dst.display()
+            )
+        });
+
+        wasm_paths.push((name.replace('-', "_"), wasm_dst));
+    }
+
+    // Build yew examples (part of the yew workspace, output in yew/target/).
+    // Skip gracefully if the yew submodule isn't checked out (e.g. in CI
+    // without --recurse-submodules).
+    for name in YEW_EXAMPLES {
+        let crate_dir = yew_examples_dir.join(name);
+        if !crate_dir.exists() {
+            eprintln!(
+                "cargo:warning=skipping yew example {name}: \
+                 {crate_dir:?} not found (submodule not checked out?)"
+            );
+            continue;
+        }
+
+        let status = Command::new("cargo")
+            .arg("build")
+            .arg("--target")
+            .arg(YEW_WASM_TARGET)
+            .arg("--release")
+            .arg("-p")
+            .arg(name)
+            .current_dir(&crate_dir)
+            .status()
+            .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
+
+        assert!(status.success(), "cargo build failed for {name}");
+
+        // yew workspace examples produce output in yew/target/
+        let wasm_filename = format!("{}.wasm", name.replace('-', "_"));
+        let wasm_src = workspace_root
+            .join("yew")
+            .join("target")
+            .join(YEW_WASM_TARGET)
+            .join("release")
+            .join(&wasm_filename);
+
+        assert!(
+            wasm_src.exists(),
+            "expected wasm output not found: {}",
+            wasm_src.display()
+        );
+
         let wasm_dst = out_dir.join(&wasm_filename);
         fs::copy(&wasm_src, &wasm_dst).unwrap_or_else(|e| {
             panic!(

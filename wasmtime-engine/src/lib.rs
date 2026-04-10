@@ -79,6 +79,14 @@ pub fn run_wasm<R: EngineRenderer>(
 
     let result = (|| -> wasmtime::Result<()> {
         let instance = linker.instantiate(&mut store, &module)?;
+
+        // WASI reactor modules (cdylib with std) export `_initialize` to
+        // set up the C runtime (TLS, constructors, etc.). Call it before
+        // any guest code that uses `thread_local!` or other std facilities.
+        if let Ok(init) = instance.get_typed_func::<(), ()>(&mut store, "_initialize") {
+            init.call(&mut store, ())?;
+        }
+
         let run = instance.get_typed_func::<(), i32>(&mut store, func_name)?;
         run.call(&mut store, ())?;
         Ok(())
