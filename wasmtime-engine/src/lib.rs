@@ -15,6 +15,7 @@ use wasmtime::{Engine as WasmEngine, MemoryType, Module, SharedMemory, Store};
 pub fn create_engine() -> WasmEngine {
     let mut config = wasmtime::Config::new();
     config.wasm_threads(true);
+    config.shared_memory(true);
     #[cfg(target_os = "ios")]
     config.target("pulley64").expect("set pulley64 target");
     WasmEngine::new(&config).expect("create wasmtime engine")
@@ -35,7 +36,7 @@ pub struct RunWasmError<R: EngineRenderer = ()> {
     /// The `RuntimeState` recovered from the wasmtime `Store`.
     pub state: RuntimeState<R>,
     /// The underlying error.
-    pub error: anyhow::Error,
+    pub error: wasmtime::Error,
 }
 
 impl<R: EngineRenderer> std::fmt::Debug for RunWasmError<R> {
@@ -66,7 +67,7 @@ pub fn run_wasm<R: EngineRenderer>(
 
     // Modules compiled with wasm32-wasip1-threads import shared memory
     // from "env::memory". Provide it via the linker before instantiation.
-    if let Err(e) = (|| -> anyhow::Result<()> {
+    if let Err(e) = (|| -> wasmtime::Result<()> {
         let mem_ty = MemoryType::shared(17, 16384);
         let shared_mem = SharedMemory::new(&engine, mem_ty)?;
         linker.define(&mut store, "env", "memory", shared_mem)?;
@@ -76,7 +77,7 @@ pub fn run_wasm<R: EngineRenderer>(
         return Err(Box::new(RunWasmError { state, error: e }));
     }
 
-    let result = (|| -> anyhow::Result<()> {
+    let result = (|| -> wasmtime::Result<()> {
         let instance = linker.instantiate(&mut store, &module)?;
         let run = instance.get_typed_func::<(), i32>(&mut store, func_name)?;
         run.call(&mut store, ())?;

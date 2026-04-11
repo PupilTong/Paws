@@ -1,5 +1,4 @@
-use anyhow::{anyhow, Result};
-use wasmtime::{Caller, Engine as WasmEngine, Linker};
+use wasmtime::{format_err, Caller, Engine as WasmEngine, Linker, Result};
 
 use engine::{EngineRenderer, HostErrorCode, RuntimeState};
 
@@ -16,7 +15,7 @@ fn with_memory_data<R: EngineRenderer, T>(
 ) -> Result<T> {
     let export = caller
         .get_export("memory")
-        .ok_or_else(|| anyhow!("missing memory export"))?;
+        .ok_or_else(|| format_err!("missing memory export"))?;
 
     // Try regular Memory first (WAT / non-threaded modules).
     if let Some(memory) = export.clone().into_memory() {
@@ -34,7 +33,7 @@ fn with_memory_data<R: EngineRenderer, T>(
         return f(data);
     }
 
-    Err(anyhow!("memory export is neither Memory nor SharedMemory"))
+    Err(format_err!("memory export is neither Memory nor SharedMemory"))
 }
 
 /// Reads a null-terminated C string starting at `ptr` in WASM linear memory.
@@ -50,13 +49,13 @@ pub fn read_cstr<R: EngineRenderer>(
 
     with_memory_data(caller, |data| {
         if start >= data.len() {
-            return Err(anyhow!("pointer out of bounds"));
+            return Err(format_err!("pointer out of bounds"));
         }
         match data[start..].iter().position(|&b| b == 0) {
             Some(null_pos) => std::str::from_utf8(&data[start..start + null_pos])
                 .map(|s| s.to_string())
-                .map_err(|_| anyhow!("invalid utf-8 string")),
-            None => Err(anyhow!("unterminated string")),
+                .map_err(|_| format_err!("invalid utf-8 string")),
+            None => Err(format_err!("unterminated string")),
         }
     })
 }
@@ -72,20 +71,20 @@ fn read_i32_slice<R: EngineRenderer>(
     len: i32,
 ) -> Result<Vec<u32>> {
     if ptr < 0 || len < 0 {
-        return Err(anyhow!("pointer or length out of bounds"));
+        return Err(format_err!("pointer or length out of bounds"));
     }
     let start = ptr as usize;
     let count = len as usize;
     let byte_len = count
         .checked_mul(std::mem::size_of::<i32>())
-        .ok_or_else(|| anyhow!("length overflow"))?;
+        .ok_or_else(|| format_err!("length overflow"))?;
     let end = start
         .checked_add(byte_len)
-        .ok_or_else(|| anyhow!("length overflow"))?;
+        .ok_or_else(|| format_err!("length overflow"))?;
 
     with_memory_data(caller, |data| {
         if end > data.len() {
-            return Err(anyhow!("pointer out of bounds"));
+            return Err(format_err!("pointer out of bounds"));
         }
         let mut values = Vec::with_capacity(count);
         for i in 0..count {
@@ -93,7 +92,7 @@ fn read_i32_slice<R: EngineRenderer>(
             let bytes = [data[off], data[off + 1], data[off + 2], data[off + 3]];
             let value = i32::from_le_bytes(bytes);
             if value < 0 {
-                return Err(anyhow!("negative child id"));
+                return Err(format_err!("negative child id"));
             }
             values.push(value as u32);
         }
@@ -113,16 +112,16 @@ fn write_to_memory<R: EngineRenderer>(
     let start = ptr as usize;
     let end = start
         .checked_add(data.len())
-        .ok_or_else(|| anyhow!("length overflow"))?;
+        .ok_or_else(|| format_err!("length overflow"))?;
 
     let export = caller
         .get_export("memory")
-        .ok_or_else(|| anyhow!("missing memory export"))?;
+        .ok_or_else(|| format_err!("missing memory export"))?;
 
     if let Some(memory) = export.clone().into_memory() {
         let mem = memory.data_mut(&mut *caller);
         if end > mem.len() {
-            return Err(anyhow!("pointer out of bounds"));
+            return Err(format_err!("pointer out of bounds"));
         }
         mem[start..end].copy_from_slice(data);
         return Ok(());
@@ -131,7 +130,7 @@ fn write_to_memory<R: EngineRenderer>(
     if let Some(shared) = export.into_shared_memory() {
         let raw = shared.data();
         if end > raw.len() {
-            return Err(anyhow!("pointer out of bounds"));
+            return Err(format_err!("pointer out of bounds"));
         }
         // SAFETY: Single-threaded WASM execution — no concurrent writes during
         // host function calls.
@@ -142,7 +141,7 @@ fn write_to_memory<R: EngineRenderer>(
         return Ok(());
     }
 
-    Err(anyhow!("memory export is neither Memory nor SharedMemory"))
+    Err(format_err!("memory export is neither Memory nor SharedMemory"))
 }
 
 /// Reads a raw byte region from WASM linear memory.
@@ -155,17 +154,17 @@ fn read_byte_vec<R: EngineRenderer>(
     len: i32,
 ) -> Result<Vec<u8>> {
     if ptr < 0 || len < 0 {
-        return Err(anyhow!("pointer or length out of bounds"));
+        return Err(format_err!("pointer or length out of bounds"));
     }
     let start = ptr as usize;
     let byte_len = len as usize;
     let end = start
         .checked_add(byte_len)
-        .ok_or_else(|| anyhow!("length overflow"))?;
+        .ok_or_else(|| format_err!("length overflow"))?;
 
     with_memory_data(caller, |data| {
         if end > data.len() {
-            return Err(anyhow!("pointer out of bounds"));
+            return Err(format_err!("pointer out of bounds"));
         }
         Ok(data[start..end].to_vec())
     })
