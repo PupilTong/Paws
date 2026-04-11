@@ -33,7 +33,9 @@ fn with_memory_data<R: EngineRenderer, T>(
         return f(data);
     }
 
-    Err(format_err!("memory export is neither Memory nor SharedMemory"))
+    Err(format_err!(
+        "memory export is neither Memory nor SharedMemory"
+    ))
 }
 
 /// Reads a null-terminated C string starting at `ptr` in WASM linear memory.
@@ -141,7 +143,9 @@ fn write_to_memory<R: EngineRenderer>(
         return Ok(());
     }
 
-    Err(format_err!("memory export is neither Memory nor SharedMemory"))
+    Err(format_err!(
+        "memory export is neither Memory nor SharedMemory"
+    ))
 }
 
 /// Reads a raw byte region from WASM linear memory.
