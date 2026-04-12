@@ -907,16 +907,27 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
              new_child: i32,
              ref_child: i32|
              -> Result<i32> {
-                if parent < 0 || new_child < 0 || ref_child < 0 {
+                if parent < 0 || new_child < 0 {
                     let code = caller
                         .data_mut()
                         .set_error(HostErrorCode::InvalidChild, "negative element id");
                     return Ok(code);
                 }
+                // ref_child == -1 means "append at end" (no reference child).
+                let ref_child_opt = if ref_child == -1 {
+                    None
+                } else if ref_child < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative ref_child id");
+                    return Ok(code);
+                } else {
+                    Some(ref_child as u32)
+                };
                 match caller.data_mut().insert_before(
                     parent as u32,
                     new_child as u32,
-                    ref_child as u32,
+                    ref_child_opt,
                 ) {
                     Ok(()) => {
                         caller.data_mut().clear_error();
@@ -1448,6 +1459,163 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
             },
         )
         .expect("link __add_shadow_stylesheet");
+
+    // -----------------------------------------------------------------------
+    // WASI preview1 stubs — minimal shims so `std`-linked WASM guests
+    // (e.g. yew) can use thread_local!, HashMap, and panic output.
+    // -----------------------------------------------------------------------
+
+    // `random_get` — HashMap seed randomisation via getrandom.
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "random_get",
+            |mut caller: Caller<'_, RuntimeState<R>>, buf_ptr: i32, buf_len: i32| -> Result<i32> {
+                with_memory_data(&mut caller, |data| {
+                    let start = buf_ptr as usize;
+                    let end = start + buf_len as usize;
+                    if end <= data.len() {
+                        // Deterministic fill — not crypto-safe, sufficient for
+                        // hash seeding.
+                        // SAFETY: with_memory_data returns &[u8]; we need &mut.
+                        // Single-threaded WASM — no concurrent writes.
+                        let slice = unsafe {
+                            std::slice::from_raw_parts_mut(data.as_ptr() as *mut u8, data.len())
+                        };
+                        for (i, byte) in slice[start..end].iter_mut().enumerate() {
+                            *byte = (i.wrapping_mul(0x9E37_79B9) >> 24) as u8;
+                        }
+                    }
+                    Ok(0i32) // __WASI_ERRNO_SUCCESS
+                })
+            },
+        )
+        .expect("link wasi random_get");
+
+    // `environ_sizes_get` — zero environment variables.
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "environ_sizes_get",
+            |_caller: Caller<'_, RuntimeState<R>>,
+             _count_ptr: i32,
+             _buf_size_ptr: i32|
+             -> Result<i32> { Ok(0) },
+        )
+        .expect("link wasi environ_sizes_get");
+
+    // `environ_get` — no-op.
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "environ_get",
+            |_caller: Caller<'_, RuntimeState<R>>,
+             _environ: i32,
+             _environ_buf: i32|
+             -> Result<i32> { Ok(0) },
+        )
+        .expect("link wasi environ_get");
+
+    // `clock_time_get` — monotonic nanoseconds.
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "clock_time_get",
+            |mut caller: Caller<'_, RuntimeState<R>>,
+             _clock_id: i32,
+             _precision: i64,
+             time_ptr: i32|
+             -> Result<i32> {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64;
+                with_memory_data(&mut caller, |data| {
+                    let offset = time_ptr as usize;
+                    if offset + 8 <= data.len() {
+                        // SAFETY: single-threaded WASM, no concurrent writes.
+                        let slice = unsafe {
+                            std::slice::from_raw_parts_mut(data.as_ptr() as *mut u8, data.len())
+                        };
+                        slice[offset..offset + 8].copy_from_slice(&nanos.to_le_bytes());
+                    }
+                    Ok(0i32)
+                })
+            },
+        )
+        .expect("link wasi clock_time_get");
+
+    // `fd_write` — stdout/stderr for panic messages.
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "fd_write",
+            |mut caller: Caller<'_, RuntimeState<R>>,
+             fd: i32,
+             iovs_ptr: i32,
+             iovs_len: i32,
+             nwritten_ptr: i32|
+             -> Result<i32> {
+                let mut total: u32 = 0;
+                with_memory_data(&mut caller, |data| {
+                    for i in 0..iovs_len as usize {
+                        let iov = iovs_ptr as usize + i * 8;
+                        if iov + 8 > data.len() {
+                            break;
+                        }
+                        let bp =
+                            u32::from_le_bytes(data[iov..iov + 4].try_into().unwrap()) as usize;
+                        let bl =
+                            u32::from_le_bytes(data[iov + 4..iov + 8].try_into().unwrap()) as usize;
+                        if bp + bl <= data.len() && bl > 0 {
+                            let chunk = &data[bp..bp + bl];
+                            match fd {
+                                1 => {
+                                    use std::io::Write;
+                                    let _ = std::io::stdout().write_all(chunk);
+                                }
+                                2 => {
+                                    use std::io::Write;
+                                    let _ = std::io::stderr().write_all(chunk);
+                                }
+                                _ => {}
+                            }
+                            total += bl as u32;
+                        }
+                    }
+                    let np = nwritten_ptr as usize;
+                    if np + 4 <= data.len() {
+                        // SAFETY: single-threaded WASM, no concurrent writes.
+                        let slice = unsafe {
+                            std::slice::from_raw_parts_mut(data.as_ptr() as *mut u8, data.len())
+                        };
+                        slice[np..np + 4].copy_from_slice(&total.to_le_bytes());
+                    }
+                    Ok(0i32)
+                })
+            },
+        )
+        .expect("link wasi fd_write");
+
+    // `proc_exit` — terminates WASM execution.
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "proc_exit",
+            |_caller: Caller<'_, RuntimeState<R>>, code: i32| -> Result<()> {
+                Err(format_err!("WASM guest called proc_exit({code})"))
+            },
+        )
+        .expect("link wasi proc_exit");
+
+    // `sched_yield` — no-op (single-threaded host).
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "sched_yield",
+            |_caller: Caller<'_, RuntimeState<R>>| -> Result<i32> { Ok(0) },
+        )
+        .expect("link wasi sched_yield");
 
     linker
 }

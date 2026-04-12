@@ -302,6 +302,67 @@ fn test_event_dispatch_callback_fires() {
 }
 
 // -----------------------------------------------------------------------
+// yew-counter: mounts a yew component and verifies DOM structure
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_yew_counter_renders_dom() {
+    // Skip if the yew submodule wasn't checked out (CI without --recurse-submodules).
+    let path = std::panic::catch_unwind(|| example_wasm_path("example_yew_counter"));
+    let Ok(path) = path else {
+        eprintln!("skipping test_yew_counter_renders_dom: yew example not built");
+        return;
+    };
+    if !std::path::Path::new(path).exists() {
+        eprintln!("skipping test_yew_counter_renders_dom: wasm binary not found");
+        return;
+    }
+    let state = run_example("example_yew_counter");
+
+    // The yew counter component renders:
+    //   root(1) > div.counter(?) > button(?) + span(?)
+    //
+    // Element 1 is the host div created by run(). Yew mounts inside it,
+    // creating child elements for the virtual DOM tree.
+    let root = state
+        .doc
+        .get_node(NodeId::from(1_u64))
+        .expect("root div should exist");
+    assert!(root.is_element(), "root should be an element");
+    assert!(
+        !root.children.is_empty(),
+        "root should have children after yew mounts"
+    );
+
+    // Yew creates a div.counter as the first child of the root.
+    let counter_div = state
+        .doc
+        .get_node(root.children[0])
+        .expect("counter div should exist");
+    assert!(counter_div.is_element());
+
+    // The counter div should have two children: button and span.
+    assert_eq!(
+        counter_div.children.len(),
+        2,
+        "counter div should have button + span"
+    );
+
+    // Verify both children exist as elements.
+    let button = state
+        .doc
+        .get_node(counter_div.children[0])
+        .expect("button should exist");
+    assert!(button.is_element());
+
+    let span = state
+        .doc
+        .get_node(counter_div.children[1])
+        .expect("span should exist");
+    assert!(span.is_element());
+}
+
+// -----------------------------------------------------------------------
 // Additional: verify all examples run without error
 // -----------------------------------------------------------------------
 
@@ -325,5 +386,18 @@ fn test_all_examples_run_successfully() {
         let state = RuntimeState::new("https://example.com".to_string());
         let result = run_wasm(state, &wasm, "run");
         assert!(result.is_ok(), "example {name} should run without error");
+    }
+
+    // yew examples may not be available if the submodule isn't checked out.
+    if let Ok(path) = std::panic::catch_unwind(|| example_wasm_path("example_yew_counter")) {
+        if std::path::Path::new(path).exists() {
+            let wasm = std::fs::read(path).unwrap();
+            let state = RuntimeState::new("https://example.com".to_string());
+            let result = run_wasm(state, &wasm, "run");
+            assert!(
+                result.is_ok(),
+                "example_yew_counter should run without error"
+            );
+        }
     }
 }
