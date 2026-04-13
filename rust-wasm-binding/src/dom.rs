@@ -29,7 +29,7 @@ use super::{
     get_next_sibling, get_node_type, get_parent_element, get_parent_node, get_previous_sibling,
     get_shadow_root, has_attribute, insert_before, is_connected, remove_attribute, remove_child,
     remove_event_listener, replace_child, set_attribute, set_inline_style, set_node_value,
-    EventListenerOptions,
+    set_property, EventListenerOptions,
 };
 
 // ---------------------------------------------------------------------------
@@ -251,6 +251,15 @@ pub trait ElementOps: NodeOps {
     #[inline]
     fn set_attribute(&self, name: &str, value: &str) -> Result<(), i32> {
         set_attribute(self.id(), name, value)
+    }
+
+    /// Sets a DOM property on this element (e.g. `value`, `checked`).
+    ///
+    /// Properties reflect runtime state, while attributes reflect initial
+    /// HTML markup. See [`crate::set_property`] for details.
+    #[inline]
+    fn set_dom_property(&self, name: &str, value: &str) -> Result<(), i32> {
+        set_property(self.id(), name, value)
     }
 
     /// Returns whether this element has the named attribute.

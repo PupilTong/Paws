@@ -47,6 +47,84 @@ impl<R: EngineRenderer> std::fmt::Debug for RunWasmError<R> {
     }
 }
 
+/// A live WASM instance that can be called multiple times.
+///
+/// Created by [`WasmInstance::new`]. The store holds the [`RuntimeState`]
+/// and can be accessed between calls via [`state`](WasmInstance::state)
+/// and [`state_mut`](WasmInstance::state_mut).
+pub struct WasmInstance<R: EngineRenderer = ()> {
+    store: Store<RuntimeState<R>>,
+    instance: wasmtime::Instance,
+}
+
+impl<R: EngineRenderer> WasmInstance<R> {
+    /// Compiles a WASM module, instantiates it with Paws host functions,
+    /// and calls `_initialize` (if exported) to set up the C runtime.
+    ///
+    /// On error the `RuntimeState` is recovered inside the returned error.
+    pub fn new(state: RuntimeState<R>, wasm_bytes: &[u8]) -> Result<Self, Box<RunWasmError<R>>> {
+        let engine = create_engine();
+        let module = match Module::new(&engine, wasm_bytes) {
+            Ok(m) => m,
+            Err(error) => return Err(Box::new(RunWasmError { state, error })),
+        };
+        let mut linker = build_linker(&engine);
+        let mut store = Store::new(&engine, state);
+
+        // Provide shared memory for modules that import it.
+        if let Err(error) = (|| -> wasmtime::Result<()> {
+            let mem_ty = MemoryType::shared(17, 16384);
+            let shared_mem = SharedMemory::new(&engine, mem_ty)?;
+            linker.define(&mut store, "env", "memory", shared_mem)?;
+            Ok(())
+        })() {
+            let state = store.into_data();
+            return Err(Box::new(RunWasmError { state, error }));
+        }
+
+        let instance = match linker.instantiate(&mut store, &module) {
+            Ok(i) => i,
+            Err(error) => {
+                let state = store.into_data();
+                return Err(Box::new(RunWasmError { state, error }));
+            }
+        };
+
+        // WASI reactor modules export `_initialize` for C runtime setup.
+        if let Ok(init) = instance.get_typed_func::<(), ()>(&mut store, "_initialize") {
+            if let Err(error) = init.call(&mut store, ()) {
+                let state = store.into_data();
+                return Err(Box::new(RunWasmError { state, error }));
+            }
+        }
+
+        Ok(Self { store, instance })
+    }
+
+    /// Calls a named export function that takes no arguments and returns i32.
+    pub fn call(&mut self, func_name: &str) -> wasmtime::Result<i32> {
+        let func = self
+            .instance
+            .get_typed_func::<(), i32>(&mut self.store, func_name)?;
+        func.call(&mut self.store, ())
+    }
+
+    /// Access the runtime state.
+    pub fn state(&self) -> &RuntimeState<R> {
+        self.store.data()
+    }
+
+    /// Mutably access the runtime state.
+    pub fn state_mut(&mut self) -> &mut RuntimeState<R> {
+        self.store.data_mut()
+    }
+
+    /// Consume the instance and recover the runtime state.
+    pub fn into_state(self) -> RuntimeState<R> {
+        self.store.into_data()
+    }
+}
+
 /// Compiles and runs a binary WASM module against a [`RuntimeState`].
 ///
 /// The `RuntimeState` is always recovered, even on error.

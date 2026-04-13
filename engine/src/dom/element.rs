@@ -72,6 +72,10 @@ pub struct PawsElement<S: RenderState = ()> {
     pub(crate) name: Option<QualName>,
     pub(crate) id_attr: Option<Atom>,
     pub(crate) attrs: HashMap<Atom, String>,
+    /// DOM properties (e.g. `value`, `checked`, `defaultValue`).
+    /// Separate from HTML attributes: properties reflect runtime state
+    /// while attributes reflect the initial HTML markup.
+    pub(crate) properties: HashMap<String, String>,
     pub(crate) classes: HashSet<Atom>,
     pub(crate) style_attribute: Option<Arc<Locked<PropertyDeclarationBlock>>>,
     pub(crate) shadow_root_id: Option<taffy::NodeId>,
@@ -161,6 +165,7 @@ impl<S: RenderState> PawsElement<S> {
             name: None,
             id_attr: None,
             attrs: HashMap::new(),
+            properties: HashMap::new(),
             classes: HashSet::new(),
             style_attribute: None,
             shadow_root_id: None,
@@ -332,6 +337,20 @@ impl<S: RenderState> PawsElement<S> {
         if name == "class" {
             self.classes.clear();
         }
+    }
+
+    /// Sets a DOM property on this element.
+    ///
+    /// Properties are separate from attributes: `value`, `checked`, and
+    /// `defaultValue` reflect runtime state, while attributes reflect
+    /// the initial HTML markup.
+    pub(crate) fn set_property(&mut self, name: &str, value: &str) {
+        self.properties.insert(name.to_owned(), value.to_owned());
+    }
+
+    /// Gets a DOM property value.
+    pub(crate) fn get_property(&self, name: &str) -> Option<&str> {
+        self.properties.get(name).map(|s| s.as_str())
     }
 }
 
