@@ -6,7 +6,7 @@
 include!(concat!(env!("OUT_DIR"), "/wasm_examples.rs"));
 
 use engine::{CSSStyleValue, NodeId, RuntimeState};
-use wasmtime_engine::run_wasm;
+use wasmtime_engine::{run_wasm, WasmInstance};
 
 /// Loads an example WASM binary by name.
 fn load_example(name: &str) -> Vec<u8> {
@@ -360,6 +360,95 @@ fn test_yew_counter_renders_dom() {
         .get_node(counter_div.children[1])
         .expect("span should exist");
     assert!(span.is_element());
+}
+
+// -----------------------------------------------------------------------
+// yew-list: keyed list reconciliation — add/remove/reorder
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_yew_list_reconciliation() {
+    let path = std::panic::catch_unwind(|| example_wasm_path("example_yew_list"));
+    let Ok(path) = path else {
+        eprintln!("skipping test_yew_list_reconciliation: yew example not built");
+        return;
+    };
+    if !std::path::Path::new(path).exists() {
+        eprintln!("skipping test_yew_list_reconciliation: wasm binary not found");
+        return;
+    }
+
+    let wasm = load_example("example_yew_list");
+    let state = RuntimeState::new("https://example.com".to_string());
+    let mut instance = WasmInstance::new(state, &wasm).expect("instantiate yew list");
+
+    // Initial render: root(1) > ul(2) with zero children
+    assert_eq!(instance.call("run").unwrap(), 0);
+    {
+        let state = instance.state();
+        let root = state.doc.get_node(NodeId::from(1_u64)).expect("root");
+        assert!(!root.children.is_empty(), "root should have ul child");
+        let ul = state
+            .doc
+            .get_node(root.children[0])
+            .expect("ul should exist");
+        assert!(ul.children.is_empty(), "ul should start empty");
+    }
+
+    // Push A, B, C → ul should have 3 li children
+    assert_eq!(instance.call("push_abc").unwrap(), 0);
+    {
+        let state = instance.state();
+        let root = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+        let ul = state.doc.get_node(root.children[0]).unwrap();
+        assert_eq!(
+            ul.children.len(),
+            3,
+            "ul should have 3 children after push_abc"
+        );
+    }
+
+    // Remove middle (B) → ul should have 2 li children
+    assert_eq!(instance.call("remove_middle").unwrap(), 0);
+    {
+        let state = instance.state();
+        let root = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+        let ul = state.doc.get_node(root.children[0]).unwrap();
+        assert_eq!(
+            ul.children.len(),
+            2,
+            "ul should have 2 children after remove_middle"
+        );
+    }
+
+    // Reverse → ul should still have 2 children (order changes internally)
+    assert_eq!(instance.call("reverse_list").unwrap(), 0);
+    {
+        let state = instance.state();
+        let root = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+        let ul = state.doc.get_node(root.children[0]).unwrap();
+        assert_eq!(
+            ul.children.len(),
+            2,
+            "ul should still have 2 children after reverse"
+        );
+    }
+
+    // Prepend D → ul should have 3 children
+    assert_eq!(instance.call("prepend_d").unwrap(), 0);
+    {
+        let state = instance.state();
+        let root = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+        let ul = state.doc.get_node(root.children[0]).unwrap();
+        assert_eq!(
+            ul.children.len(),
+            3,
+            "ul should have 3 children after prepend_d"
+        );
+    }
+
+    // Verify item_count matches
+    assert_eq!(instance.call("item_count").unwrap(), 3);
 }
 
 // -----------------------------------------------------------------------

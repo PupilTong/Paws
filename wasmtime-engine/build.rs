@@ -23,7 +23,7 @@ const EXAMPLES: &[&str] = &[
 /// `-threads` target requires a wasi-threads host implementation that
 /// we don't yet provide. The non-threads variant uses static TLS and
 /// the same `rust-wasm-binding` FFI.
-const YEW_EXAMPLES: &[&str] = &["example-yew-counter"];
+const YEW_EXAMPLES: &[&str] = &["example-yew-counter", "example-yew-list"];
 const YEW_WASM_TARGET: &str = "wasm32-wasip1";
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
