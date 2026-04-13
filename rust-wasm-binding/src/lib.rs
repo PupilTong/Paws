@@ -32,6 +32,7 @@ extern "C" {
     fn __create_text_node(text_ptr: *const u8) -> i32;
     fn __set_inline_style(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
     fn __set_attribute(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
+    fn __set_property(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32;
     fn __append_element(parent: i32, child: i32) -> i32;
     fn __append_elements(parent: i32, ptr: *const i32, len: i32) -> i32;
     fn __destroy_element(id: i32) -> i32;
@@ -255,6 +256,20 @@ pub fn set_attribute(id: i32, name: &str, value: &str) -> Result<(), i32> {
     let value_ptr = write_cstr(value);
     // SAFETY: Both pointers are null-terminated strings in WASM linear memory.
     let code = unsafe { __set_attribute(id, name_ptr, value_ptr) };
+    check(code)
+}
+
+/// Sets a DOM property on an element (e.g. `value`, `checked`, `defaultValue`).
+///
+/// Properties are separate from attributes: `value` reflects the current
+/// runtime state (what the user typed), while the `value` *attribute*
+/// reflects the initial HTML markup. Use [`set_attribute`] for HTML
+/// attributes and this function for runtime properties.
+pub fn set_property(id: i32, name: &str, value: &str) -> Result<(), i32> {
+    let name_ptr = write_cstr(name);
+    let value_ptr = write_cstr(value);
+    // SAFETY: Both pointers are null-terminated strings in WASM linear memory.
+    let code = unsafe { __set_property(id, name_ptr, value_ptr) };
     check(code)
 }
 

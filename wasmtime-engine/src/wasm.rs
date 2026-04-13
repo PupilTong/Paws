@@ -507,6 +507,54 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
     linker
         .func_wrap(
             "env",
+            "__set_property",
+            |mut caller: Caller<'_, RuntimeState<R>>,
+             id: i32,
+             name_ptr: i32,
+             value_ptr: i32|
+             -> Result<i32> {
+                if id < 0 {
+                    let code = caller
+                        .data_mut()
+                        .set_error(HostErrorCode::InvalidChild, "negative node id");
+                    return Ok(code);
+                }
+                let name = match read_cstr(&mut caller, name_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+                let value = match read_cstr(&mut caller, value_ptr) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let code = caller
+                            .data_mut()
+                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        return Ok(code);
+                    }
+                };
+
+                match caller.data_mut().set_property(id as u32, name, value) {
+                    Ok(()) => {
+                        caller.data_mut().clear_error();
+                        Ok(0)
+                    }
+                    Err(code) => {
+                        let err_code = caller.data_mut().set_error(code, code.message());
+                        Ok(err_code)
+                    }
+                }
+            },
+        )
+        .expect("link __set_property");
+
+    linker
+        .func_wrap(
+            "env",
             "__commit",
             |mut caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
                 caller.data_mut().commit();

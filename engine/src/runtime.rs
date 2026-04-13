@@ -340,6 +340,38 @@ impl<R: EngineRenderer> RuntimeState<R> {
         }
     }
 
+    /// Sets a DOM property on an element.
+    ///
+    /// Properties are separate from attributes: `value`, `checked`, and
+    /// `defaultValue` reflect runtime state (what the user sees/interacts
+    /// with), while attributes reflect the initial HTML markup.
+    pub fn set_property(
+        &mut self,
+        id: u32,
+        name: String,
+        value: String,
+    ) -> Result<(), HostErrorCode> {
+        let node = self
+            .doc
+            .get_node_mut(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        if node.is_element() {
+            node.set_property(&name, &value);
+            Ok(())
+        } else {
+            Err(HostErrorCode::InvalidChild)
+        }
+    }
+
+    /// Gets a DOM property value from an element.
+    pub fn get_property(&self, id: u32, name: &str) -> Result<Option<String>, HostErrorCode> {
+        let node = self
+            .doc
+            .get_node(taffy::NodeId::from(id as u64))
+            .ok_or(HostErrorCode::InvalidChild)?;
+        Ok(node.get_property(name).map(|s| s.to_owned()))
+    }
+
     /// Clears the last stored error.
     pub fn clear_error(&mut self) {
         self.last_error = None;
