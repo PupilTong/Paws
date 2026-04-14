@@ -35,6 +35,13 @@ fn main() {
     let yew_examples_dir = workspace_root.join("yew").join("examples");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
+    // When PAWS_WASM_COVERAGE=1, compile guest WASM with LLVM coverage
+    // instrumentation via minicov. Requires a nightly toolchain specified
+    // via PAWS_WASM_COVERAGE_TOOLCHAIN (defaults to "nightly").
+    let coverage_enabled = env::var("PAWS_WASM_COVERAGE").is_ok();
+    let coverage_toolchain =
+        env::var("PAWS_WASM_COVERAGE_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string());
+
     // Rerun if example sources or the binding crate change
     println!("cargo:rerun-if-changed={}", examples_dir.display());
     println!("cargo:rerun-if-changed={}", yew_examples_dir.display());
@@ -45,6 +52,8 @@ fn main() {
             .join("src")
             .display()
     );
+    println!("cargo:rerun-if-env-changed=PAWS_WASM_COVERAGE");
+    println!("cargo:rerun-if-env-changed=PAWS_WASM_COVERAGE_TOOLCHAIN");
 
     let mut wasm_paths: Vec<(String, PathBuf)> = Vec::new();
 
@@ -55,12 +64,23 @@ fn main() {
             panic!("example crate not found: {}", crate_dir.display());
         }
 
-        let status = Command::new("cargo")
-            .arg("build")
+        let mut cmd = Command::new("cargo");
+        if coverage_enabled {
+            cmd.arg(format!("+{coverage_toolchain}"));
+        }
+        cmd.arg("build")
             .arg("--target")
             .arg(WASM_TARGET)
             .arg("--release")
-            .current_dir(&crate_dir)
+            .current_dir(&crate_dir);
+        if coverage_enabled {
+            cmd.arg("--features").arg("coverage");
+            cmd.env(
+                "RUSTFLAGS",
+                "-Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir",
+            );
+        }
+        let status = cmd
             .status()
             .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
 
@@ -104,14 +124,25 @@ fn main() {
             continue;
         }
 
-        let status = Command::new("cargo")
-            .arg("build")
+        let mut cmd = Command::new("cargo");
+        if coverage_enabled {
+            cmd.arg(format!("+{coverage_toolchain}"));
+        }
+        cmd.arg("build")
             .arg("--target")
             .arg(YEW_WASM_TARGET)
             .arg("--release")
             .arg("-p")
             .arg(name)
-            .current_dir(&crate_dir)
+            .current_dir(&crate_dir);
+        if coverage_enabled {
+            cmd.arg("--features").arg("coverage");
+            cmd.env(
+                "RUSTFLAGS",
+                "-Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir",
+            );
+        }
+        let status = cmd
             .status()
             .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
 

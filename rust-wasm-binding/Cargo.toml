@@ -14,9 +14,14 @@ path = "src/lib.rs"
 # `default-features = false` to avoid a duplicate `panic_impl` lang item.
 default = ["panic-handler"]
 panic-handler = []
+# Enables LLVM coverage instrumentation via minicov. Guest WASM modules
+# compiled with this feature export `__paws_dump_coverage` /
+# `__paws_coverage_ptr` so the host can extract profraw bytes after execution.
+coverage = ["minicov"]
 
 [dependencies]
 view-macros = { path = "../view-macros" }
+minicov = { version = "0.3", optional = true, default-features = false }
 
 [dev-dependencies]
 rkyv = { version = "0.8.9" }
