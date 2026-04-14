@@ -40,14 +40,34 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Generate code coverage
+      - name: Generate host code coverage
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+
+      # -----------------------------------------------------------------
+      # WASM guest coverage (minicov + llvm-tools-preview)
+      # -----------------------------------------------------------------
+      - name: Install nightly for WASM guest coverage
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-04-07
+          targets: wasm32-wasip1-threads, wasm32-wasip1
+          components: llvm-tools-preview
+
+      - name: Run E2E tests with guest coverage extraction
+        env:
+          PAWS_WASM_COVERAGE: "1"
+          PAWS_WASM_COVERAGE_TOOLCHAIN: nightly-2026-04-07
+        run: cargo test -p wasmtime-engine --test e2e_examples --features wasm-coverage
+
+      - name: Generate guest coverage report
+        run: bash scripts/wasm-coverage.sh
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
+          files: lcov.info,target/wasm-coverage/guest-lcov.info
+          flags: host,guest
           fail_ci_if_error: true
 
       - name: Install cargo-codspeed

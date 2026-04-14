@@ -1,6 +1,16 @@
 ignore:
   - "examples/**"
-  # rust-wasm-binding is a no_std WASM-only FFI binding; its code only runs
-  # inside wasmtime-executed guest modules and cannot be instrumented by
-  # cargo llvm-cov (which runs host-target tests).
-  - "rust-wasm-binding/**"
+  # rust-wasm-binding guest coverage is now captured via minicov instrumentation
+  # and reported separately (see scripts/wasm-coverage.sh).
+
+flags:
+  host:
+    paths:
+      - engine/
+      - wasmtime-engine/
+      - view-macros/
+      - paws-style-ir/
+  guest:
+    paths:
+      - rust-wasm-binding/
+      - yew/
