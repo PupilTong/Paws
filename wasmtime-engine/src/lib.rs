@@ -5,7 +5,7 @@ pub mod wasm;
 pub use wasm::{build_linker, read_cstr};
 
 use engine::{EngineRenderer, RuntimeState};
-use wasmtime::{Engine as WasmEngine, MemoryType, Module, SharedMemory, Store};
+use wasmtime::{AsContextMut, Engine as WasmEngine, MemoryType, Module, SharedMemory, Store};
 
 /// Create a [`wasmtime::Engine`] configured for the current platform.
 ///
@@ -47,6 +47,9 @@ impl<R: EngineRenderer> std::fmt::Debug for RunWasmError<R> {
     }
 }
 
+/// Result of running a WASM module with coverage extraction.
+type WasmCoverageResult<R> = Result<(RuntimeState<R>, Option<Vec<u8>>), Box<RunWasmError<R>>>;
+
 /// Compiles and runs a binary WASM module against a [`RuntimeState`].
 ///
 /// The `RuntimeState` is always recovered, even on error.
@@ -55,6 +58,29 @@ pub fn run_wasm<R: EngineRenderer>(
     wasm_bytes: &[u8],
     func_name: &str,
 ) -> Result<RuntimeState<R>, Box<RunWasmError<R>>> {
+    run_wasm_inner(state, wasm_bytes, func_name, false).map(|(state, _)| state)
+}
+
+/// Like [`run_wasm`] but also extracts LLVM coverage data from the guest.
+///
+/// If the guest was compiled with the `coverage` feature (minicov), the
+/// returned `Option<Vec<u8>>` contains the profraw bytes. Otherwise it
+/// is `None`.
+pub fn run_wasm_with_coverage<R: EngineRenderer>(
+    state: RuntimeState<R>,
+    wasm_bytes: &[u8],
+    func_name: &str,
+) -> WasmCoverageResult<R> {
+    run_wasm_inner(state, wasm_bytes, func_name, true)
+}
+
+/// Shared implementation for [`run_wasm`] and [`run_wasm_with_coverage`].
+fn run_wasm_inner<R: EngineRenderer>(
+    state: RuntimeState<R>,
+    wasm_bytes: &[u8],
+    func_name: &str,
+    extract_coverage: bool,
+) -> WasmCoverageResult<R> {
     let engine = create_engine();
     let module = match Module::new(&engine, wasm_bytes) {
         Ok(m) => m,
@@ -77,7 +103,7 @@ pub fn run_wasm<R: EngineRenderer>(
         return Err(Box::new(RunWasmError { state, error: e }));
     }
 
-    let result = (|| -> wasmtime::Result<()> {
+    let result = (|| -> wasmtime::Result<(wasmtime::Instance, ())> {
         let instance = linker.instantiate(&mut store, &module)?;
 
         // WASI reactor modules (cdylib with std) export `_initialize` to
@@ -89,13 +115,71 @@ pub fn run_wasm<R: EngineRenderer>(
 
         let run = instance.get_typed_func::<(), i32>(&mut store, func_name)?;
         run.call(&mut store, ())?;
-        Ok(())
+        Ok((instance, ()))
     })();
 
-    let state = store.into_data();
     match result {
-        Ok(()) => Ok(state),
-        Err(e) => Err(Box::new(RunWasmError { state, error: e })),
+        Ok((instance, ())) => {
+            let coverage = if extract_coverage {
+                extract_guest_coverage(&instance, &mut store)
+            } else {
+                None
+            };
+            let state = store.into_data();
+            Ok((state, coverage))
+        }
+        Err(e) => {
+            let state = store.into_data();
+            Err(Box::new(RunWasmError { state, error: e }))
+        }
+    }
+}
+
+/// Extracts profraw coverage bytes from a WASM guest instance.
+///
+/// Looks for the `__paws_dump_coverage` and `__paws_coverage_ptr` exports
+/// that `rust-wasm-binding` provides when compiled with the `coverage`
+/// feature. Returns `None` if the exports are absent or if the guest
+/// reports zero coverage bytes.
+fn extract_guest_coverage<R: EngineRenderer>(
+    instance: &wasmtime::Instance,
+    store: &mut Store<RuntimeState<R>>,
+) -> Option<Vec<u8>> {
+    let dump_function = instance
+        .get_typed_func::<(), i32>(store.as_context_mut(), "__paws_dump_coverage")
+        .ok()?;
+    let raw_length = dump_function.call(store.as_context_mut(), ()).ok()?;
+    let length = (raw_length > 0).then_some(raw_length as usize)?;
+
+    let ptr_function = instance
+        .get_typed_func::<(), i32>(store.as_context_mut(), "__paws_coverage_ptr")
+        .ok()?;
+    let raw_pointer = ptr_function.call(store.as_context_mut(), ()).ok()?;
+    let pointer = (raw_pointer > 0).then_some(raw_pointer as usize)?;
+
+    // Read bytes from WASM linear memory. Handle both regular Memory
+    // (WAT tests) and SharedMemory (wasm32-wasip1-threads modules).
+    if let Some(memory) = instance.get_memory(store.as_context_mut(), "memory") {
+        let data = memory.data(&store);
+        if pointer + length > data.len() {
+            return None;
+        }
+        Some(data[pointer..pointer + length].to_vec())
+    } else if let Some(wasmtime::Extern::SharedMemory(shared)) =
+        instance.get_export(store.as_context_mut(), "memory")
+    {
+        let data = shared.data();
+        if pointer + length > data.len() {
+            return None;
+        }
+        let source = data[pointer..pointer + length].as_ptr() as *const u8;
+        // SAFETY: Direct, non-atomic memory access to Wasmtime's SharedMemory
+        // is safe here because the guest function has already returned — no
+        // concurrent WASM execution is happening, so no concurrent writes to
+        // this memory region can occur.
+        Some(unsafe { std::slice::from_raw_parts(source, length) }.to_vec())
+    } else {
+        None
     }
 }
 

@@ -8,6 +8,9 @@
 
 #![no_std]
 
+#[cfg(feature = "coverage")]
+extern crate alloc;
+
 pub use view_macros::css;
 
 // ---------------------------------------------------------------------------
@@ -803,6 +806,70 @@ pub use dom::{
     Element, ElementOps, NodeOps, PawsInputElement, PawsTextAreaElement, Text, NODE_TYPE_COMMENT,
     NODE_TYPE_DOCUMENT, NODE_TYPE_DOCUMENT_FRAGMENT, NODE_TYPE_ELEMENT, NODE_TYPE_TEXT,
 };
+
+// ---------------------------------------------------------------------------
+// Coverage instrumentation (opt-in via `coverage` feature)
+// ---------------------------------------------------------------------------
+
+/// WASM exports for extracting LLVM coverage data from the guest.
+///
+/// When the `coverage` feature is enabled and the guest is compiled with
+/// `RUSTFLAGS="-Cinstrument-coverage -Zno-profiler-runtime"`, minicov
+/// collects profraw data at runtime. The host can call these exports after
+/// the guest `run()` function returns:
+///
+/// 1. `__paws_dump_coverage()` → serialises profraw into a buffer, returns
+///    its byte length.
+/// 2. `__paws_coverage_ptr()` → returns the pointer to that buffer in WASM
+///    linear memory so the host can read the bytes.
+#[cfg(all(feature = "coverage", target_arch = "wasm32"))]
+mod coverage_export {
+    use alloc::vec::Vec;
+    use core::cell::UnsafeCell;
+
+    struct CoverageBuffer {
+        data: UnsafeCell<Option<Vec<u8>>>,
+    }
+
+    // SAFETY: WASM is single-threaded; no concurrent access occurs.
+    unsafe impl Sync for CoverageBuffer {}
+
+    static COVERAGE_BUFFER: CoverageBuffer = CoverageBuffer {
+        data: UnsafeCell::new(None),
+    };
+
+    /// Captures LLVM coverage data and stores it in a static buffer.
+    ///
+    /// Returns the byte length of the profraw data, or 0 if capture fails.
+    #[export_name = "__paws_dump_coverage"]
+    pub extern "C" fn dump_coverage() -> i32 {
+        // SAFETY: Single-threaded WASM execution — no concurrent access.
+        unsafe {
+            let mut buffer = Vec::new();
+            if minicov::capture_coverage(&mut buffer).is_err() {
+                return 0;
+            }
+            let length = buffer.len() as i32;
+            *COVERAGE_BUFFER.data.get() = Some(buffer);
+            length
+        }
+    }
+
+    /// Returns the pointer to the profraw buffer in WASM linear memory.
+    ///
+    /// Must be called after [`dump_coverage`]. Returns 0 if no data is
+    /// available.
+    #[export_name = "__paws_coverage_ptr"]
+    pub extern "C" fn coverage_ptr() -> i32 {
+        // SAFETY: Single-threaded WASM execution — no concurrent access.
+        unsafe {
+            match &*COVERAGE_BUFFER.data.get() {
+                Some(buffer) => buffer.as_ptr() as i32,
+                None => 0,
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tests (run on host, not wasm — only test the macro / IR round-trip)
