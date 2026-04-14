@@ -41,6 +41,17 @@ fn main() {
     let coverage_enabled = env::var("PAWS_WASM_COVERAGE").is_ok();
     let coverage_toolchain =
         env::var("PAWS_WASM_COVERAGE_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string());
+    let coverage_rustflags = if coverage_enabled {
+        let existing = env::var("RUSTFLAGS").unwrap_or_default();
+        let coverage_flags = "-Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir";
+        if existing.is_empty() {
+            coverage_flags.to_string()
+        } else {
+            format!("{existing} {coverage_flags}")
+        }
+    } else {
+        String::new()
+    };
 
     // Rerun if example sources or the binding crate change
     println!("cargo:rerun-if-changed={}", examples_dir.display());
@@ -75,10 +86,7 @@ fn main() {
             .current_dir(&crate_dir);
         if coverage_enabled {
             cmd.arg("--features").arg("coverage");
-            cmd.env(
-                "RUSTFLAGS",
-                "-Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir",
-            );
+            cmd.env("RUSTFLAGS", &coverage_rustflags);
         }
         let status = cmd
             .status()
@@ -137,10 +145,7 @@ fn main() {
             .current_dir(&crate_dir);
         if coverage_enabled {
             cmd.arg("--features").arg("coverage");
-            cmd.env(
-                "RUSTFLAGS",
-                "-Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir",
-            );
+            cmd.env("RUSTFLAGS", &coverage_rustflags);
         }
         let status = cmd
             .status()

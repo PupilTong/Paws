@@ -148,18 +148,14 @@ fn extract_guest_coverage<R: EngineRenderer>(
     let dump_function = instance
         .get_typed_func::<(), i32>(store.as_context_mut(), "__paws_dump_coverage")
         .ok()?;
-    let length = dump_function.call(store.as_context_mut(), ()).ok()? as usize;
-    if length == 0 {
-        return None;
-    }
+    let raw_length = dump_function.call(store.as_context_mut(), ()).ok()?;
+    let length = (raw_length > 0).then_some(raw_length as usize)?;
 
     let ptr_function = instance
         .get_typed_func::<(), i32>(store.as_context_mut(), "__paws_coverage_ptr")
         .ok()?;
-    let pointer = ptr_function.call(store.as_context_mut(), ()).ok()? as usize;
-    if pointer == 0 {
-        return None;
-    }
+    let raw_pointer = ptr_function.call(store.as_context_mut(), ()).ok()?;
+    let pointer = (raw_pointer > 0).then_some(raw_pointer as usize)?;
 
     // Read bytes from WASM linear memory. Handle both regular Memory
     // (WAT tests) and SharedMemory (wasm32-wasip1-threads modules).
@@ -176,15 +172,12 @@ fn extract_guest_coverage<R: EngineRenderer>(
         if pointer + length > data.len() {
             return None;
         }
-        // SAFETY: We are reading coverage bytes that the guest has finished
-        // writing. No concurrent WASM execution is happening at this point
-        // (the guest function has already returned).
-        Some(
-            data[pointer..pointer + length]
-                .iter()
-                .map(|cell| unsafe { *cell.get() })
-                .collect(),
-        )
+        let source = data[pointer..pointer + length].as_ptr() as *const u8;
+        // SAFETY: Direct, non-atomic memory access to Wasmtime's SharedMemory
+        // is safe here because the guest function has already returned — no
+        // concurrent WASM execution is happening, so no concurrent writes to
+        // this memory region can occur.
+        Some(unsafe { std::slice::from_raw_parts(source, length) }.to_vec())
     } else {
         None
     }
