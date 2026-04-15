@@ -1,7 +1,20 @@
+coverage:
+  status:
+    project:
+      default:
+        # Allow up to 3% drop so adding new features (which add new
+        # uncovered code paths) doesn't block the PR. Individual patches
+        # still require good coverage via the `patch` check.
+        target: auto
+        threshold: 3%
+    patch:
+      default:
+        target: 80%
+
 ignore:
   - "examples/**"
-  # rust-wasm-binding guest coverage is now captured via minicov instrumentation
-  # and reported separately (see scripts/wasm-coverage.sh).
+  # rust-wasm-binding guest coverage is captured via minicov instrumentation
+  # and reported separately under the `guest` flag (see scripts/wasm-coverage.sh).
 
 flags:
   host:
@@ -10,7 +23,9 @@ flags:
       - wasmtime-engine/
       - view-macros/
       - paws-style-ir/
+    carryforward: true
   guest:
     paths:
       - rust-wasm-binding/
       - yew/
+    carryforward: true

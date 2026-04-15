@@ -62,12 +62,23 @@ jobs:
       - name: Generate guest coverage report
         run: bash scripts/wasm-coverage.sh
 
-      - name: Upload coverage to Codecov
+      # Upload each lcov file under its own flag so host and guest coverage
+      # are tracked independently in the Codecov dashboard. A single upload
+      # call with multiple files+flags assigns ALL flags to ALL files.
+      - name: Upload host coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info,target/wasm-coverage/guest-lcov.info
-          flags: host,guest
+          files: lcov.info
+          flags: host
+          fail_ci_if_error: true
+
+      - name: Upload guest coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/wasm-coverage/guest-lcov.info
+          flags: guest
           fail_ci_if_error: true
 
       - name: Install cargo-codspeed
