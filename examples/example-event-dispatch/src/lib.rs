@@ -7,7 +7,7 @@
 //! 4. Returns 0 if the `<span>` was created (pipeline works), non-zero
 //!    otherwise.
 
-#![no_std]
+#![cfg_attr(not(feature = "coverage"), no_std)]
 
 use rust_wasm_binding::*;
 

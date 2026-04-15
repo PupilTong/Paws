@@ -12,7 +12,7 @@
 //!   * `get_namespace_uri` with a too-small buffer → needed length returned
 //!     without writing
 
-#![no_std]
+#![cfg_attr(not(feature = "coverage"), no_std)]
 
 use rust_wasm_binding::*;
 

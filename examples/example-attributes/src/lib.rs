@@ -1,6 +1,6 @@
 //! Creates a `div` and sets `class` and `id` attributes on it.
 
-#![no_std]
+#![cfg_attr(not(feature = "coverage"), no_std)]
 
 use rust_wasm_binding::*;
 

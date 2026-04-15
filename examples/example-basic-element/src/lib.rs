@@ -1,6 +1,6 @@
 //! Creates a single `div` element and appends it to the document root.
 
-#![no_std]
+#![cfg_attr(not(feature = "coverage"), no_std)]
 
 use rust_wasm_binding::*;
 
