@@ -11,6 +11,42 @@
 #[cfg(feature = "coverage")]
 extern crate alloc;
 
+// When the `coverage` feature is active, minicov needs a global allocator.
+// The `#![no_std]` examples don't link `std`, so we provide one here that
+// delegates to wasi-libc's malloc/free (available on wasm32-wasip1 and
+// wasm32-wasip1-threads targets).
+#[cfg(all(feature = "coverage", target_arch = "wasm32"))]
+mod wasi_allocator {
+    use core::alloc::{GlobalAlloc, Layout};
+
+    extern "C" {
+        fn malloc(size: usize) -> *mut u8;
+        fn free(ptr: *mut u8);
+        fn realloc(ptr: *mut u8, size: usize) -> *mut u8;
+    }
+
+    struct WasiAlloc;
+
+    // SAFETY: Delegates to wasi-libc's malloc/free which are the standard
+    // C allocator on WASI targets. Single-threaded WASM execution means
+    // no concurrent allocation concerns.
+    unsafe impl GlobalAlloc for WasiAlloc {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            // malloc returns suitably aligned memory for any type on WASI.
+            unsafe { malloc(layout.size()) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+            unsafe { free(ptr) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, _layout: Layout, new_size: usize) -> *mut u8 {
+            unsafe { realloc(ptr, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: WasiAlloc = WasiAlloc;
+}
+
 pub use view_macros::css;
 
 // ---------------------------------------------------------------------------
