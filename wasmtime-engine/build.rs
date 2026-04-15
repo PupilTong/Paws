@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
@@ -28,6 +28,80 @@ const YEW_WASM_TARGET: &str = "wasm32-wasip1";
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
 
+/// Shared coverage configuration for guest WASM builds.
+struct CoverageConfig {
+    enabled: bool,
+    /// Optional toolchain override (e.g. `"nightly-2026-04-07"`). When
+    /// `None`, the active toolchain from `rust-toolchain.toml` is used.
+    toolchain: Option<String>,
+    /// RUSTFLAGS value to pass to child cargo processes when enabled.
+    /// Empty string when `enabled` is false.
+    rustflags: String,
+}
+
+/// Builds a single WASM guest crate and copies its `.wasm` output into
+/// `out_dir`, returning `(rust_name, copied_wasm_path)`.
+///
+/// - `crate_dir` is where `cargo` runs (the example's own workspace root).
+/// - `wasm_src_dir` is where the `.wasm` output lands. For standalone
+///   examples this is `<crate_dir>/target/<target>/release/`; for yew
+///   examples it is `<workspace>/yew/target/<target>/release/`.
+/// - `package` is `Some(name)` when the invocation needs `-p <name>`
+///   (yew's multi-package workspace), `None` otherwise.
+fn build_wasm_example(
+    name: &str,
+    crate_dir: &Path,
+    wasm_src_dir: &Path,
+    target: &str,
+    package: Option<&str>,
+    out_dir: &Path,
+    coverage: &CoverageConfig,
+) -> (String, PathBuf) {
+    let mut cmd = Command::new("cargo");
+    if let Some(toolchain) = &coverage.toolchain {
+        cmd.arg(format!("+{toolchain}"));
+    }
+    cmd.arg("build")
+        .arg("--target")
+        .arg(target)
+        .arg("--release")
+        .current_dir(crate_dir);
+    if let Some(pkg) = package {
+        cmd.arg("-p").arg(pkg);
+    }
+    if coverage.enabled {
+        cmd.arg("--features").arg("coverage");
+        // Cargo sets CARGO_ENCODED_RUSTFLAGS='' for build scripts; child
+        // cargo processes prefer it over RUSTFLAGS. Remove it so our
+        // coverage RUSTFLAGS takes effect.
+        cmd.env("RUSTFLAGS", &coverage.rustflags);
+        cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+    }
+    let status = cmd
+        .status()
+        .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
+    assert!(status.success(), "cargo build failed for {name}");
+
+    let rust_name = name.replace('-', "_");
+    let wasm_filename = format!("{rust_name}.wasm");
+    let wasm_src = wasm_src_dir.join(&wasm_filename);
+    assert!(
+        wasm_src.exists(),
+        "expected wasm output not found: {}",
+        wasm_src.display()
+    );
+
+    let wasm_dst = out_dir.join(&wasm_filename);
+    fs::copy(&wasm_src, &wasm_dst).unwrap_or_else(|e| {
+        panic!(
+            "failed to copy {} → {}: {e}",
+            wasm_src.display(),
+            wasm_dst.display()
+        )
+    });
+    (rust_name, wasm_dst)
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let workspace_root = manifest_dir.parent().expect("workspace root");
@@ -36,20 +110,13 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // When PAWS_WASM_COVERAGE=1, compile guest WASM with LLVM coverage
-    // instrumentation via minicov. Requires a nightly toolchain specified
-    // via PAWS_WASM_COVERAGE_TOOLCHAIN (defaults to "nightly").
+    // instrumentation via minicov. `-Cinstrument-coverage` embeds the
+    // `__llvm_covmap` section directly into the linked `.wasm` artifact,
+    // which `llvm-cov export` reads back to produce lcov data.
     let coverage_enabled = env::var("PAWS_WASM_COVERAGE").is_ok();
-    // Optional: override the toolchain used for coverage builds. When unset,
-    // the active toolchain (from rust-toolchain.toml) is used, which already
-    // has nightly features and WASM targets installed.
     let coverage_toolchain = env::var("PAWS_WASM_COVERAGE_TOOLCHAIN").ok();
     let coverage_rustflags = if coverage_enabled {
         let existing = env::var("RUSTFLAGS").unwrap_or_default();
-        // `-Cinstrument-coverage` embeds the `__llvm_covmap` section
-        // directly into the linked `.wasm` artifact. Because rustc and
-        // `lld` preserve the section end-to-end, we can pass the `.wasm`
-        // files straight to `llvm-cov export` — no separate object files
-        // or LLVM IR emission needed.
         let coverage_flags = "-Cinstrument-coverage -Zno-profiler-runtime";
         if existing.is_empty() {
             coverage_flags.to_string()
@@ -59,8 +126,12 @@ fn main() {
     } else {
         String::new()
     };
+    let coverage = CoverageConfig {
+        enabled: coverage_enabled,
+        toolchain: coverage_toolchain,
+        rustflags: coverage_rustflags,
+    };
 
-    // Rerun if example sources or the binding crate change
     println!("cargo:rerun-if-changed={}", examples_dir.display());
     println!("cargo:rerun-if-changed={}", yew_examples_dir.display());
     println!(
@@ -81,58 +152,26 @@ fn main() {
         if !crate_dir.exists() {
             panic!("example crate not found: {}", crate_dir.display());
         }
-
-        let mut cmd = Command::new("cargo");
-        if let Some(toolchain) = &coverage_toolchain {
-            cmd.arg(format!("+{toolchain}"));
-        }
-        cmd.arg("build")
-            .arg("--target")
-            .arg(WASM_TARGET)
-            .arg("--release")
-            .current_dir(&crate_dir);
-        if coverage_enabled {
-            cmd.arg("--features").arg("coverage");
-            // Cargo sets CARGO_ENCODED_RUSTFLAGS for build scripts, which
-            // child cargo processes prefer over RUSTFLAGS. Remove it so our
-            // RUSTFLAGS takes effect.
-            cmd.env("RUSTFLAGS", &coverage_rustflags);
-            cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
-        }
-        let status = cmd
-            .status()
-            .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
-
-        assert!(status.success(), "cargo build failed for {name}");
-
-        let wasm_filename = format!("{}.wasm", name.replace('-', "_"));
-        let wasm_src = crate_dir
-            .join("target")
-            .join(WASM_TARGET)
-            .join("release")
-            .join(&wasm_filename);
-
-        assert!(
-            wasm_src.exists(),
-            "expected wasm output not found: {}",
-            wasm_src.display()
-        );
-
-        let wasm_dst = out_dir.join(&wasm_filename);
-        fs::copy(&wasm_src, &wasm_dst).unwrap_or_else(|e| {
-            panic!(
-                "failed to copy {} → {}: {e}",
-                wasm_src.display(),
-                wasm_dst.display()
-            )
-        });
-
-        wasm_paths.push((name.replace('-', "_"), wasm_dst));
+        let wasm_src_dir = crate_dir.join("target").join(WASM_TARGET).join("release");
+        wasm_paths.push(build_wasm_example(
+            name,
+            &crate_dir,
+            &wasm_src_dir,
+            WASM_TARGET,
+            None,
+            &out_dir,
+            &coverage,
+        ));
     }
 
     // Build yew examples (part of the yew workspace, output in yew/target/).
     // Skip gracefully if the yew submodule isn't checked out (e.g. in CI
     // without --recurse-submodules).
+    let yew_wasm_src_dir = workspace_root
+        .join("yew")
+        .join("target")
+        .join(YEW_WASM_TARGET)
+        .join("release");
     for name in YEW_EXAMPLES {
         let crate_dir = yew_examples_dir.join(name);
         if !crate_dir.exists() {
@@ -142,57 +181,15 @@ fn main() {
             );
             continue;
         }
-
-        let mut cmd = Command::new("cargo");
-        if let Some(toolchain) = &coverage_toolchain {
-            cmd.arg(format!("+{toolchain}"));
-        }
-        cmd.arg("build")
-            .arg("--target")
-            .arg(YEW_WASM_TARGET)
-            .arg("--release")
-            .arg("-p")
-            .arg(name)
-            .current_dir(&crate_dir);
-        if coverage_enabled {
-            cmd.arg("--features").arg("coverage");
-            // Cargo sets CARGO_ENCODED_RUSTFLAGS for build scripts, which
-            // child cargo processes prefer over RUSTFLAGS. Remove it so our
-            // RUSTFLAGS takes effect.
-            cmd.env("RUSTFLAGS", &coverage_rustflags);
-            cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
-        }
-        let status = cmd
-            .status()
-            .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
-
-        assert!(status.success(), "cargo build failed for {name}");
-
-        // yew workspace examples produce output in yew/target/
-        let wasm_filename = format!("{}.wasm", name.replace('-', "_"));
-        let wasm_src = workspace_root
-            .join("yew")
-            .join("target")
-            .join(YEW_WASM_TARGET)
-            .join("release")
-            .join(&wasm_filename);
-
-        assert!(
-            wasm_src.exists(),
-            "expected wasm output not found: {}",
-            wasm_src.display()
-        );
-
-        let wasm_dst = out_dir.join(&wasm_filename);
-        fs::copy(&wasm_src, &wasm_dst).unwrap_or_else(|e| {
-            panic!(
-                "failed to copy {} → {}: {e}",
-                wasm_src.display(),
-                wasm_dst.display()
-            )
-        });
-
-        wasm_paths.push((name.replace('-', "_"), wasm_dst));
+        wasm_paths.push(build_wasm_example(
+            name,
+            &crate_dir,
+            &yew_wasm_src_dir,
+            YEW_WASM_TARGET,
+            Some(name),
+            &out_dir,
+            &coverage,
+        ));
     }
 
     // Generate a Rust file that maps example names to file paths

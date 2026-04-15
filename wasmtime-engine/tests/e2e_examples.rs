@@ -18,32 +18,40 @@ fn load_example(name: &str) -> Vec<u8> {
 /// When the `wasm-coverage` feature is active, uses
 /// [`wasmtime_engine::run_wasm_with_coverage`] and writes the extracted
 /// profraw bytes to `target/wasm-coverage/{name}.profraw`.
-#[cfg(not(feature = "wasm-coverage"))]
 fn run_example(name: &str) -> RuntimeState {
     let wasm = load_example(name);
     let state = RuntimeState::new("https://example.com".to_string());
-    wasmtime_engine::run_wasm(state, &wasm, "run").expect("wasm execution failed")
+    #[cfg(not(feature = "wasm-coverage"))]
+    {
+        wasmtime_engine::run_wasm(state, &wasm, "run").expect("wasm execution failed")
+    }
+    #[cfg(feature = "wasm-coverage")]
+    {
+        let (state, profraw) = wasmtime_engine::run_wasm_with_coverage(state, &wasm, "run")
+            .expect("wasm execution failed");
+        if let Some(bytes) = profraw {
+            write_profraw(name, &bytes);
+        }
+        state
+    }
 }
 
+/// Writes a profraw blob under the workspace-root `target/wasm-coverage/`.
+///
+/// Using the workspace root (not `CARGO_TARGET_DIR` or the per-crate
+/// `target/`) keeps profraw files colocated with the other coverage
+/// artifacts that `scripts/wasm-coverage.sh` expects.
 #[cfg(feature = "wasm-coverage")]
-fn run_example(name: &str) -> RuntimeState {
-    let wasm = load_example(name);
-    let state = RuntimeState::new("https://example.com".to_string());
-    let (state, profraw) = wasmtime_engine::run_wasm_with_coverage(state, &wasm, "run")
-        .expect("wasm execution failed");
-    if let Some(bytes) = profraw {
-        // Write to the workspace root's target directory, not the crate-local one.
-        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("workspace root");
-        let directory = workspace_root.join("target/wasm-coverage");
-        std::fs::create_dir_all(&directory)
-            .expect("failed to create target/wasm-coverage directory");
-        let path = directory.join(format!("{name}.profraw"));
-        std::fs::write(&path, &bytes)
-            .unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
-    }
-    state
+fn write_profraw(name: &str, bytes: &[u8]) {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root");
+    let coverage_output_dir = workspace_root.join("target/wasm-coverage");
+    std::fs::create_dir_all(&coverage_output_dir)
+        .expect("failed to create target/wasm-coverage directory");
+    let path = coverage_output_dir.join(format!("{name}.profraw"));
+    std::fs::write(&path, bytes)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
 }
 
 // -----------------------------------------------------------------------
@@ -407,7 +415,6 @@ fn test_all_examples_run_successfully() {
     ];
 
     for name in examples {
-        // Use run_example to get coverage extraction when wasm-coverage is active.
         let _state = run_example(name);
     }
 
