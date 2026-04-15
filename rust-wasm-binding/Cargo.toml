@@ -21,7 +21,7 @@ coverage = ["minicov"]
 
 [dependencies]
 view-macros = { path = "../view-macros" }
-minicov = { version = "0.3", optional = true, default-features = false }
+minicov = { version = "0.3", optional = true, default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 rkyv = { version = "0.8.9" }
