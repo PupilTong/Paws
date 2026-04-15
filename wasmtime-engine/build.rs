@@ -28,6 +28,44 @@ const YEW_WASM_TARGET: &str = "wasm32-wasip1";
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
 
+/// Runs a second `cargo rustc` pass that emits LLVM IR for the given crate.
+///
+/// The LLVM IR files (`.ll`) are needed by `llvm-cov` to generate coverage
+/// reports — `.wasm` binaries lack the `__llvm_covmap` section.
+fn emit_llvm_ir(
+    crate_dir: &std::path::Path,
+    target: &str,
+    coverage_toolchain: Option<&str>,
+    coverage_rustflags: &str,
+    package_name: Option<&str>,
+) {
+    let mut cmd = Command::new("cargo");
+    if let Some(toolchain) = coverage_toolchain {
+        cmd.arg(format!("+{toolchain}"));
+    }
+    cmd.arg("rustc");
+    if let Some(name) = package_name {
+        cmd.arg("-p").arg(name);
+    }
+    cmd.arg("--target")
+        .arg(target)
+        .arg("--release")
+        .arg("--")
+        .arg("--emit=llvm-ir")
+        .env("RUSTFLAGS", coverage_rustflags)
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .current_dir(crate_dir);
+    let status = cmd
+        .status()
+        .unwrap_or_else(|e| panic!("failed to emit LLVM IR for {}: {e}", crate_dir.display()));
+    if !status.success() {
+        eprintln!(
+            "cargo:warning=failed to emit LLVM IR for {} (non-fatal)",
+            crate_dir.display()
+        );
+    }
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let workspace_root = manifest_dir.parent().expect("workspace root");
@@ -39,11 +77,16 @@ fn main() {
     // instrumentation via minicov. Requires a nightly toolchain specified
     // via PAWS_WASM_COVERAGE_TOOLCHAIN (defaults to "nightly").
     let coverage_enabled = env::var("PAWS_WASM_COVERAGE").is_ok();
-    let coverage_toolchain =
-        env::var("PAWS_WASM_COVERAGE_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string());
+    // Optional: override the toolchain used for coverage builds. When unset,
+    // the active toolchain (from rust-toolchain.toml) is used, which already
+    // has nightly features and WASM targets installed.
+    let coverage_toolchain = env::var("PAWS_WASM_COVERAGE_TOOLCHAIN").ok();
     let coverage_rustflags = if coverage_enabled {
         let existing = env::var("RUSTFLAGS").unwrap_or_default();
-        let coverage_flags = "-Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir";
+        // Note: --emit=llvm-ir is NOT included here because it would override
+        // cargo's --emit=dep-info,link. LLVM IR is emitted in a separate
+        // `cargo rustc` pass after the main build.
+        let coverage_flags = "-Cinstrument-coverage -Zno-profiler-runtime";
         if existing.is_empty() {
             coverage_flags.to_string()
         } else {
@@ -76,8 +119,8 @@ fn main() {
         }
 
         let mut cmd = Command::new("cargo");
-        if coverage_enabled {
-            cmd.arg(format!("+{coverage_toolchain}"));
+        if let Some(toolchain) = &coverage_toolchain {
+            cmd.arg(format!("+{toolchain}"));
         }
         cmd.arg("build")
             .arg("--target")
@@ -86,13 +129,28 @@ fn main() {
             .current_dir(&crate_dir);
         if coverage_enabled {
             cmd.arg("--features").arg("coverage");
+            // Cargo sets CARGO_ENCODED_RUSTFLAGS for build scripts, which
+            // child cargo processes prefer over RUSTFLAGS. Remove it so our
+            // RUSTFLAGS takes effect.
             cmd.env("RUSTFLAGS", &coverage_rustflags);
+            cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
         }
         let status = cmd
             .status()
             .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
 
         assert!(status.success(), "cargo build failed for {name}");
+
+        // Emit LLVM IR in a separate pass (needed for coverage reports).
+        if coverage_enabled {
+            emit_llvm_ir(
+                &crate_dir,
+                WASM_TARGET,
+                coverage_toolchain.as_deref(),
+                &coverage_rustflags,
+                None,
+            );
+        }
 
         let wasm_filename = format!("{}.wasm", name.replace('-', "_"));
         let wasm_src = crate_dir
@@ -133,8 +191,8 @@ fn main() {
         }
 
         let mut cmd = Command::new("cargo");
-        if coverage_enabled {
-            cmd.arg(format!("+{coverage_toolchain}"));
+        if let Some(toolchain) = &coverage_toolchain {
+            cmd.arg(format!("+{toolchain}"));
         }
         cmd.arg("build")
             .arg("--target")
@@ -145,13 +203,27 @@ fn main() {
             .current_dir(&crate_dir);
         if coverage_enabled {
             cmd.arg("--features").arg("coverage");
+            // Cargo sets CARGO_ENCODED_RUSTFLAGS for build scripts, which
+            // child cargo processes prefer over RUSTFLAGS. Remove it so our
+            // RUSTFLAGS takes effect.
             cmd.env("RUSTFLAGS", &coverage_rustflags);
+            cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
         }
         let status = cmd
             .status()
             .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
 
         assert!(status.success(), "cargo build failed for {name}");
+
+        if coverage_enabled {
+            emit_llvm_ir(
+                &crate_dir,
+                YEW_WASM_TARGET,
+                coverage_toolchain.as_deref(),
+                &coverage_rustflags,
+                Some(name),
+            );
+        }
 
         // yew workspace examples produce output in yew/target/
         let wasm_filename = format!("{}.wasm", name.replace('-', "_"));
