@@ -9,12 +9,13 @@ coverage:
         threshold: 3%
     patch:
       default:
-        # 50% is a pragmatic target: the host `cargo llvm-cov` run can't
-        # exercise coverage-pipeline branches that require an instrumented
-        # WASM module (e.g. the SharedMemory read path in
-        # `extract_guest_coverage`). Those paths are exercised end-to-end
-        # in the separate `wasm-coverage` CI step.
-        target: 50%
+        # Patch coverage is informational (reports visible but non-blocking).
+        # The host `cargo llvm-cov` run can't exercise coverage-pipeline
+        # branches that require an instrumented WASM module (e.g. the
+        # SharedMemory read path in `extract_guest_coverage`) — those are
+        # measured end-to-end in the separate `wasm-coverage` CI step, so
+        # low host-patch coverage doesn't reflect actual untested code.
+        informational: true
 
 ignore:
   - "examples/**"
