@@ -37,10 +37,11 @@ fn run_example(name: &str) -> RuntimeState {
             .parent()
             .expect("workspace root");
         let directory = workspace_root.join("target/wasm-coverage");
-        std::fs::create_dir_all(&directory).ok();
+        std::fs::create_dir_all(&directory)
+            .expect("failed to create target/wasm-coverage directory");
         let path = directory.join(format!("{name}.profraw"));
         std::fs::write(&path, &bytes)
-            .unwrap_or_else(|e| eprintln!("warning: failed to write {}: {e}", path.display()));
+            .unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
     }
     state
 }

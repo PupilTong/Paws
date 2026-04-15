@@ -28,44 +28,6 @@ const YEW_WASM_TARGET: &str = "wasm32-wasip1";
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
 
-/// Runs a second `cargo rustc` pass that emits LLVM IR for the given crate.
-///
-/// The LLVM IR files (`.ll`) are needed by `llvm-cov` to generate coverage
-/// reports — `.wasm` binaries lack the `__llvm_covmap` section.
-fn emit_llvm_ir(
-    crate_dir: &std::path::Path,
-    target: &str,
-    coverage_toolchain: Option<&str>,
-    coverage_rustflags: &str,
-    package_name: Option<&str>,
-) {
-    let mut cmd = Command::new("cargo");
-    if let Some(toolchain) = coverage_toolchain {
-        cmd.arg(format!("+{toolchain}"));
-    }
-    cmd.arg("rustc");
-    if let Some(name) = package_name {
-        cmd.arg("-p").arg(name);
-    }
-    cmd.arg("--target")
-        .arg(target)
-        .arg("--release")
-        .arg("--")
-        .arg("--emit=llvm-ir")
-        .env("RUSTFLAGS", coverage_rustflags)
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .current_dir(crate_dir);
-    let status = cmd
-        .status()
-        .unwrap_or_else(|e| panic!("failed to emit LLVM IR for {}: {e}", crate_dir.display()));
-    if !status.success() {
-        eprintln!(
-            "cargo:warning=failed to emit LLVM IR for {} (non-fatal)",
-            crate_dir.display()
-        );
-    }
-}
-
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let workspace_root = manifest_dir.parent().expect("workspace root");
@@ -83,9 +45,11 @@ fn main() {
     let coverage_toolchain = env::var("PAWS_WASM_COVERAGE_TOOLCHAIN").ok();
     let coverage_rustflags = if coverage_enabled {
         let existing = env::var("RUSTFLAGS").unwrap_or_default();
-        // Note: --emit=llvm-ir is NOT included here because it would override
-        // cargo's --emit=dep-info,link. LLVM IR is emitted in a separate
-        // `cargo rustc` pass after the main build.
+        // `-Cinstrument-coverage` embeds the `__llvm_covmap` section
+        // directly into the linked `.wasm` artifact. Because rustc and
+        // `lld` preserve the section end-to-end, we can pass the `.wasm`
+        // files straight to `llvm-cov export` — no separate object files
+        // or LLVM IR emission needed.
         let coverage_flags = "-Cinstrument-coverage -Zno-profiler-runtime";
         if existing.is_empty() {
             coverage_flags.to_string()
@@ -140,17 +104,6 @@ fn main() {
             .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
 
         assert!(status.success(), "cargo build failed for {name}");
-
-        // Emit LLVM IR in a separate pass (needed for coverage reports).
-        if coverage_enabled {
-            emit_llvm_ir(
-                &crate_dir,
-                WASM_TARGET,
-                coverage_toolchain.as_deref(),
-                &coverage_rustflags,
-                None,
-            );
-        }
 
         let wasm_filename = format!("{}.wasm", name.replace('-', "_"));
         let wasm_src = crate_dir
@@ -214,16 +167,6 @@ fn main() {
             .unwrap_or_else(|e| panic!("failed to run cargo build for {name}: {e}"));
 
         assert!(status.success(), "cargo build failed for {name}");
-
-        if coverage_enabled {
-            emit_llvm_ir(
-                &crate_dir,
-                YEW_WASM_TARGET,
-                coverage_toolchain.as_deref(),
-                &coverage_rustflags,
-                Some(name),
-            );
-        }
 
         // yew workspace examples produce output in yew/target/
         let wasm_filename = format!("{}.wasm", name.replace('-', "_"));

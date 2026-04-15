@@ -4,7 +4,7 @@
 # Prerequisites:
 #   - `llvm-tools-preview` rustup component installed
 #   - Profraw files written to target/wasm-coverage/ by E2E tests
-#   - LLVM IR (.ll) files emitted during the coverage build
+#   - Instrumented .wasm binaries produced by the coverage build
 #
 # Usage:
 #   PAWS_WASM_COVERAGE=1 cargo test -p wasmtime-engine --test e2e_examples --features wasm-coverage
@@ -13,6 +13,9 @@
 # Output: target/wasm-coverage/guest-lcov.info
 
 set -euo pipefail
+# Non-matching globs expand to an empty list instead of the literal pattern,
+# so the `.profraw` length check below behaves correctly.
+shopt -s nullglob
 
 COVERAGE_DIR="target/wasm-coverage"
 
@@ -25,9 +28,8 @@ LLVM_BIN="${SYSROOT}/lib/rustlib/${HOST}/bin"
 
 PROFDATA="${LLVM_BIN}/llvm-profdata"
 LLVM_COV="${LLVM_BIN}/llvm-cov"
-LLC="${LLVM_BIN}/llc"
 
-for tool in "$PROFDATA" "$LLVM_COV" "$LLC"; do
+for tool in "$PROFDATA" "$LLVM_COV"; do
     if [[ ! -x "$tool" ]]; then
         echo "error: $tool not found — install the llvm-tools-preview component:" >&2
         echo "  rustup component add llvm-tools-preview" >&2
@@ -49,41 +51,39 @@ echo "Merging ${#PROFRAW_FILES[@]} profraw file(s)..."
 "$PROFDATA" merge -sparse "${PROFRAW_FILES[@]}" -o "${COVERAGE_DIR}/merged.profdata"
 
 # ---------------------------------------------------------------------------
-# 2. Compile LLVM IR (.ll) files to object files (.o) with __llvm_covmap
+# 2. Collect instrumented .wasm binaries
 # ---------------------------------------------------------------------------
-# The .ll files are emitted by --emit=llvm-ir during the coverage build.
-# They live in the deps/ subdirectory of each example's target directory.
-mkdir -p "${COVERAGE_DIR}/objects"
+# `-Cinstrument-coverage` embeds `__llvm_covmap` directly into the linked
+# .wasm artifact, and `llvm-cov export` can read it straight from there.
+# No separate object-file extraction is needed.
+#
+# Examples have their own nested target/ trees (each crate is its own
+# mini-workspace under examples/), so we search under examples/ and yew/.
+WASM_ARGS=()
+WASM_COUNT=0
+while IFS= read -r -d '' wasm_file; do
+    # Skip deps/ copies — use only the final linked artifact per crate.
+    case "$wasm_file" in
+        */deps/*) continue ;;
+    esac
+    WASM_ARGS+=("-object=${wasm_file}")
+    WASM_COUNT=$((WASM_COUNT + 1))
+done < <(find examples/ yew/ -name "*.wasm" -path "*/release/*" -print0 2>/dev/null)
 
-LL_COUNT=0
-for ll_file in $(find examples/ yew/ -name "*.ll" -path "*/deps/*" 2>/dev/null); do
-    obj_name=$(basename "${ll_file%.ll}.o")
-    "$LLC" -filetype=obj "$ll_file" -o "${COVERAGE_DIR}/objects/${obj_name}" 2>/dev/null || {
-        echo "  warning: failed to compile ${ll_file}, skipping" >&2
-        continue
-    }
-    LL_COUNT=$((LL_COUNT + 1))
-done
-
-if [[ $LL_COUNT -eq 0 ]]; then
-    echo "error: no .ll files found under examples/ or yew/" >&2
-    echo "  Ensure guest code was built with PAWS_WASM_COVERAGE=1 (emits LLVM IR)" >&2
+if [[ $WASM_COUNT -eq 0 ]]; then
+    echo "error: no .wasm files found under examples/ or yew/" >&2
+    echo "  Ensure guest code was built with PAWS_WASM_COVERAGE=1" >&2
     exit 1
 fi
-echo "Compiled ${LL_COUNT} LLVM IR file(s) to object files."
+echo "Found ${WASM_COUNT} instrumented .wasm binary(s)."
 
 # ---------------------------------------------------------------------------
-# 3. Generate lcov from profdata + object files
+# 3. Generate lcov from profdata + .wasm binaries
 # ---------------------------------------------------------------------------
-OBJECT_ARGS=()
-for obj_file in "${COVERAGE_DIR}"/objects/*.o; do
-    OBJECT_ARGS+=("-object=${obj_file}")
-done
-
 echo "Generating guest-lcov.info..."
 "$LLVM_COV" export --format=lcov \
     --instr-profile="${COVERAGE_DIR}/merged.profdata" \
-    "${OBJECT_ARGS[@]}" \
+    "${WASM_ARGS[@]}" \
     > "${COVERAGE_DIR}/guest-lcov.info"
 
 LINES=$(wc -l < "${COVERAGE_DIR}/guest-lcov.info")
