@@ -7,8 +7,6 @@
 //! 4. Returns 0 if the `<span>` was created (pipeline works), non-zero
 //!    otherwise.
 
-#![cfg_attr(not(feature = "coverage"), no_std)]
-
 use rust_wasm_binding::*;
 
 /// Callback invoked by the host during event dispatch. The `callback_id`

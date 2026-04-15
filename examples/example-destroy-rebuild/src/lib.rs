@@ -3,8 +3,6 @@
 //! Tests that destroyed elements are properly cleaned up and new elements
 //! can be created and attached afterwards.
 
-#![cfg_attr(not(feature = "coverage"), no_std)]
-
 use rust_wasm_binding::*;
 
 #[no_mangle]

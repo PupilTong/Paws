@@ -1,7 +1,5 @@
 //! Creates a `div` with inline width and height styles.
 
-#![cfg_attr(not(feature = "coverage"), no_std)]
-
 use rust_wasm_binding::*;
 
 #[no_mangle]

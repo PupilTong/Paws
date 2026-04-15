@@ -1,7 +1,5 @@
 //! Creates a `div` and adds a stylesheet that sets `height: 77px` on all divs.
 
-#![cfg_attr(not(feature = "coverage"), no_std)]
-
 use rust_wasm_binding::*;
 
 #[no_mangle]

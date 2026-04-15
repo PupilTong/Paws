@@ -1,7 +1,5 @@
 //! Creates a `div` and sets `class` and `id` attributes on it.
 
-#![cfg_attr(not(feature = "coverage"), no_std)]
-
 use rust_wasm_binding::*;
 
 #[no_mangle]

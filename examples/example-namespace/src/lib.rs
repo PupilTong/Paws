@@ -12,8 +12,6 @@
 //!   * `get_namespace_uri` with a too-small buffer → needed length returned
 //!     without writing
 
-#![cfg_attr(not(feature = "coverage"), no_std)]
-
 use rust_wasm_binding::*;
 
 const SVG_NS: &str = "http://www.w3.org/2000/svg";

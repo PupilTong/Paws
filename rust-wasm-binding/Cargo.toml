@@ -8,12 +8,6 @@ license.workspace = true
 path = "src/lib.rs"
 
 [features]
-# Installs a `#[panic_handler]` for `#![no_std]` WASM guests. Enabled by
-# default so the example crates under `Paws/examples/` keep working out of
-# the box. Downstream `std` consumers (e.g. the yew fork) must opt out with
-# `default-features = false` to avoid a duplicate `panic_impl` lang item.
-default = ["panic-handler"]
-panic-handler = []
 # Enables LLVM coverage instrumentation via minicov. Guest WASM modules
 # compiled with this feature export `__paws_dump_coverage` /
 # `__paws_coverage_ptr` so the host can extract profraw bytes after execution.

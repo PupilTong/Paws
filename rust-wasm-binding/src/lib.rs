@@ -3,33 +3,12 @@
 //! Provides safe wrappers around all host-imported functions that WASM guests
 //! can call to manipulate the DOM, set styles, and trigger layout.
 //!
-//! Targets `wasm32-wasip1-threads` (or `wasm32-wasip1`). This crate is
-//! `#![no_std]` by default. When the `coverage` feature is active, `std` is
-//! linked instead — minicov's C profiling runtime needs wasi-libc symbols
-//! (`malloc`, `free`) that are only available through `std` on WASI targets.
-
-#![cfg_attr(not(feature = "coverage"), no_std)]
-
-#[cfg(feature = "coverage")]
-extern crate alloc;
+//! Targets `wasm32-wasip1-threads` (or `wasm32-wasip1`) and links `std`
+//! (wasi-libc). Earlier revisions were `#![no_std]`, but minicov coverage
+//! instrumentation and the yew fork both needed `std` anyway — keeping
+//! two build modes added complexity for no real binary-size savings.
 
 pub use view_macros::css;
-
-// ---------------------------------------------------------------------------
-// Panic handler for no_std WASM targets
-// ---------------------------------------------------------------------------
-// Disabled when `coverage` is active because linking `std` already provides
-// a panic handler.
-
-#[cfg(all(
-    target_arch = "wasm32",
-    feature = "panic-handler",
-    not(feature = "coverage")
-))]
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    core::arch::wasm32::unreachable()
-}
 
 // ---------------------------------------------------------------------------
 // Raw extern declarations (private)
@@ -832,8 +811,7 @@ pub use dom::{
 ///    linear memory so the host can read the bytes.
 #[cfg(all(feature = "coverage", target_arch = "wasm32"))]
 mod coverage_export {
-    use alloc::vec::Vec;
-    use core::cell::UnsafeCell;
+    use std::cell::UnsafeCell;
 
     struct CoverageBuffer {
         data: UnsafeCell<Option<Vec<u8>>>,
