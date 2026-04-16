@@ -135,38 +135,44 @@ fn run_wasm_inner<R: EngineRenderer>(
     }
 }
 
+/// Guest exports that `rust-wasm-binding` provides when compiled with the
+/// `coverage` feature. Kept together so the host-side names can't drift
+/// from the `#[export_name]` attributes on the guest side.
+const COVERAGE_DUMP_EXPORT: &str = "__paws_dump_coverage";
+const COVERAGE_PTR_EXPORT: &str = "__paws_coverage_ptr";
+const MEMORY_EXPORT: &str = "memory";
+
 /// Extracts profraw coverage bytes from a WASM guest instance.
 ///
-/// Looks for the `__paws_dump_coverage` and `__paws_coverage_ptr` exports
-/// that `rust-wasm-binding` provides when compiled with the `coverage`
-/// feature. Returns `None` if the exports are absent or if the guest
-/// reports zero coverage bytes.
+/// Looks for the [`COVERAGE_DUMP_EXPORT`] and [`COVERAGE_PTR_EXPORT`]
+/// functions on the instance. Returns `None` if the exports are absent
+/// or if the guest reports zero coverage bytes.
 fn extract_guest_coverage<R: EngineRenderer>(
     instance: &wasmtime::Instance,
     store: &mut Store<RuntimeState<R>>,
 ) -> Option<Vec<u8>> {
     let dump_function = instance
-        .get_typed_func::<(), i32>(store.as_context_mut(), "__paws_dump_coverage")
+        .get_typed_func::<(), i32>(store.as_context_mut(), COVERAGE_DUMP_EXPORT)
         .ok()?;
     let raw_length = dump_function.call(store.as_context_mut(), ()).ok()?;
     let length = (raw_length > 0).then_some(raw_length as usize)?;
 
     let ptr_function = instance
-        .get_typed_func::<(), i32>(store.as_context_mut(), "__paws_coverage_ptr")
+        .get_typed_func::<(), i32>(store.as_context_mut(), COVERAGE_PTR_EXPORT)
         .ok()?;
     let raw_pointer = ptr_function.call(store.as_context_mut(), ()).ok()?;
     let pointer = (raw_pointer > 0).then_some(raw_pointer as usize)?;
 
     // Read bytes from WASM linear memory. Handle both regular Memory
     // (WAT tests) and SharedMemory (wasm32-wasip1-threads modules).
-    if let Some(memory) = instance.get_memory(store.as_context_mut(), "memory") {
+    if let Some(memory) = instance.get_memory(store.as_context_mut(), MEMORY_EXPORT) {
         let data = memory.data(&store);
         if pointer + length > data.len() {
             return None;
         }
         Some(data[pointer..pointer + length].to_vec())
     } else if let Some(wasmtime::Extern::SharedMemory(shared)) =
-        instance.get_export(store.as_context_mut(), "memory")
+        instance.get_export(store.as_context_mut(), MEMORY_EXPORT)
     {
         let data = shared.data();
         if pointer + length > data.len() {

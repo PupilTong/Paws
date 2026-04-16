@@ -40,14 +40,45 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Generate code coverage
+      - name: Generate host code coverage
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
-      - name: Upload coverage to Codecov
+      # -----------------------------------------------------------------
+      # WASM guest coverage (minicov + llvm-tools-preview)
+      # The project toolchain (rust-toolchain.toml = nightly-2026-04-07)
+      # is used for the coverage build. We just need to ensure WASM
+      # targets and llvm-tools-preview are installed on it.
+      # -----------------------------------------------------------------
+      - name: Install WASM targets and llvm-tools for guest coverage
+        run: |
+          rustup target add wasm32-wasip1-threads wasm32-wasip1 --toolchain nightly-2026-04-07
+          rustup component add llvm-tools-preview --toolchain nightly-2026-04-07
+
+      - name: Run E2E tests with guest coverage extraction
+        env:
+          PAWS_WASM_COVERAGE: "1"
+        run: cargo +nightly-2026-04-07 test -p wasmtime-engine --test e2e_examples --features wasm-coverage
+
+      - name: Generate guest coverage report
+        run: bash scripts/wasm-coverage.sh
+
+      # Upload each lcov file under its own flag so host and guest coverage
+      # are tracked independently in the Codecov dashboard. A single upload
+      # call with multiple files+flags assigns ALL flags to ALL files.
+      - name: Upload host coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
+          flags: host
+          fail_ci_if_error: true
+
+      - name: Upload guest coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/wasm-coverage/guest-lcov.info
+          flags: guest
           fail_ci_if_error: true
 
       - name: Install cargo-codspeed

@@ -7,6 +7,12 @@ license.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+# Enables profraw extraction in E2E tests. When active, tests call
+# `run_wasm_with_coverage` and write `.profraw` files to
+# `target/wasm-coverage/` for post-processing by `scripts/wasm-coverage.sh`.
+wasm-coverage = []
+
 [dependencies]
 engine = { path = "../engine" }
 stylo_atoms = "0.13"

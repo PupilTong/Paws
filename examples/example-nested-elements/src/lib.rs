@@ -3,8 +3,6 @@
 //! Uses both `append_element` (first child) and `append_elements` (batch for
 //! the remaining two) to exercise both APIs.
 
-#![no_std]
-
 use rust_wasm_binding::*;
 
 #[no_mangle]

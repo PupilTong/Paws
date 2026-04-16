@@ -9,4 +9,7 @@ crate-type = ["cdylib"]
 [dependencies]
 rust-wasm-binding = { path = "../../rust-wasm-binding" }
 
+[features]
+coverage = ["rust-wasm-binding/coverage"]
+
 [workspace]

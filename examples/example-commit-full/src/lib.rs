@@ -2,8 +2,6 @@
 //!
 //! Exercises the complete DOM → style → layout path in a single WASM module.
 
-#![no_std]
-
 use rust_wasm_binding::*;
 
 #[no_mangle]

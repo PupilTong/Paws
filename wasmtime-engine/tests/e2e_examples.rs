@@ -6,7 +6,6 @@
 include!(concat!(env!("OUT_DIR"), "/wasm_examples.rs"));
 
 use engine::{CSSStyleValue, NodeId, RuntimeState};
-use wasmtime_engine::run_wasm;
 
 /// Loads an example WASM binary by name.
 fn load_example(name: &str) -> Vec<u8> {
@@ -15,10 +14,44 @@ fn load_example(name: &str) -> Vec<u8> {
 }
 
 /// Runs an example and returns the RuntimeState.
+///
+/// When the `wasm-coverage` feature is active, uses
+/// [`wasmtime_engine::run_wasm_with_coverage`] and writes the extracted
+/// profraw bytes to `target/wasm-coverage/{name}.profraw`.
 fn run_example(name: &str) -> RuntimeState {
     let wasm = load_example(name);
     let state = RuntimeState::new("https://example.com".to_string());
-    run_wasm(state, &wasm, "run").expect("wasm execution failed")
+    #[cfg(not(feature = "wasm-coverage"))]
+    {
+        wasmtime_engine::run_wasm(state, &wasm, "run").expect("wasm execution failed")
+    }
+    #[cfg(feature = "wasm-coverage")]
+    {
+        let (state, profraw) = wasmtime_engine::run_wasm_with_coverage(state, &wasm, "run")
+            .expect("wasm execution failed");
+        if let Some(bytes) = profraw {
+            write_profraw(name, &bytes);
+        }
+        state
+    }
+}
+
+/// Writes a profraw blob under the workspace-root `target/wasm-coverage/`.
+///
+/// Using the workspace root (not `CARGO_TARGET_DIR` or the per-crate
+/// `target/`) keeps profraw files colocated with the other coverage
+/// artifacts that `scripts/wasm-coverage.sh` expects.
+#[cfg(feature = "wasm-coverage")]
+fn write_profraw(name: &str, bytes: &[u8]) {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root");
+    let coverage_output_dir = workspace_root.join("target/wasm-coverage");
+    std::fs::create_dir_all(&coverage_output_dir)
+        .expect("failed to create target/wasm-coverage directory");
+    let path = coverage_output_dir.join(format!("{name}.profraw"));
+    std::fs::write(&path, bytes)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
 }
 
 // -----------------------------------------------------------------------
@@ -382,22 +415,13 @@ fn test_all_examples_run_successfully() {
     ];
 
     for name in examples {
-        let wasm = load_example(name);
-        let state = RuntimeState::new("https://example.com".to_string());
-        let result = run_wasm(state, &wasm, "run");
-        assert!(result.is_ok(), "example {name} should run without error");
+        let _state = run_example(name);
     }
 
     // yew examples may not be available if the submodule isn't checked out.
     if let Ok(path) = std::panic::catch_unwind(|| example_wasm_path("example_yew_counter")) {
         if std::path::Path::new(path).exists() {
-            let wasm = std::fs::read(path).unwrap();
-            let state = RuntimeState::new("https://example.com".to_string());
-            let result = run_wasm(state, &wasm, "run");
-            assert!(
-                result.is_ok(),
-                "example_yew_counter should run without error"
-            );
+            let _state = run_example("example_yew_counter");
         }
     }
 }

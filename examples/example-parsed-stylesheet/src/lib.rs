@@ -2,8 +2,6 @@
 //!
 //! The stylesheet sets `display: flex` and `width: 200px` on all divs.
 
-#![no_std]
-
 use rust_wasm_binding::*;
 
 #[no_mangle]

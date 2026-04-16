@@ -1,7 +1,5 @@
 //! Creates a `div` with inline width and height styles.
 
-#![no_std]
-
 use rust_wasm_binding::*;
 
 #[no_mangle]
