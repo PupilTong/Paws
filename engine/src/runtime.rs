@@ -157,7 +157,18 @@ impl<R: EngineRenderer> RuntimeState<R> {
     /// Both dimensions become `AvailableSpace::Definite`. To restore the
     /// default content-sized layout, set `self.viewport = Size::MAX_CONTENT`
     /// directly.
+    ///
+    /// Dimensions must be finite and non-negative — Taffy treats NaN or
+    /// negative values as layout bugs that produce undefined output.
     pub fn set_viewport(&mut self, width: f32, height: f32) {
+        debug_assert!(
+            width.is_finite() && width >= 0.0,
+            "viewport width must be finite and non-negative, got {width}"
+        );
+        debug_assert!(
+            height.is_finite() && height >= 0.0,
+            "viewport height must be finite and non-negative, got {height}"
+        );
         self.viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(width),
             height: taffy::AvailableSpace::Definite(height),

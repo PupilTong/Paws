@@ -1,23 +1,21 @@
 //! The [`Runner`] and [`RunnerBuilder`] types.
 
 use engine::{EngineRenderer, RuntimeState};
-use wasmtime_engine::{run_wasm, run_wasm_with_coverage};
+use wasmtime::Engine as WasmEngine;
+use wasmtime_engine::{create_engine, run_wasm_with_coverage_and_engine, run_wasm_with_engine};
 
 use crate::error::RunnerError;
 
 /// Default document URL used when the caller doesn't supply one.
 const DEFAULT_URL: &str = "https://example.com";
 
-/// Default viewport (CSS pixels). Matches iPhone 14 portrait, a common
-/// mobile-first baseline. Callers can override via [`RunnerBuilder::viewport`].
-const DEFAULT_VIEWPORT_WIDTH: f32 = 390.0;
-const DEFAULT_VIEWPORT_HEIGHT: f32 = 844.0;
-
 /// Builder for [`Runner`]. Obtain one from [`Runner::builder`].
 pub struct RunnerBuilder<R: EngineRenderer = ()> {
     url: String,
-    viewport_width: f32,
-    viewport_height: f32,
+    /// `None` means "don't constrain layout" (Taffy's `Size::MAX_CONTENT`),
+    /// matching [`RuntimeState`]'s historical default. Only populated when
+    /// the caller explicitly calls [`viewport`](Self::viewport).
+    viewport: Option<(f32, f32)>,
     renderer: R,
 }
 
@@ -25,8 +23,7 @@ impl RunnerBuilder<()> {
     fn new() -> Self {
         Self {
             url: DEFAULT_URL.to_string(),
-            viewport_width: DEFAULT_VIEWPORT_WIDTH,
-            viewport_height: DEFAULT_VIEWPORT_HEIGHT,
+            viewport: None,
             renderer: (),
         }
     }
@@ -40,9 +37,9 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
     }
 
     /// Sets the viewport that the guest's `__commit` will use for layout.
+    /// When unset, layout runs content-sized (Taffy's `MAX_CONTENT`).
     pub fn viewport(mut self, width: f32, height: f32) -> Self {
-        self.viewport_width = width;
-        self.viewport_height = height;
+        self.viewport = Some((width, height));
         self
     }
 
@@ -51,8 +48,7 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
     pub fn renderer<R2: EngineRenderer>(self, renderer: R2) -> RunnerBuilder<R2> {
         RunnerBuilder {
             url: self.url,
-            viewport_width: self.viewport_width,
-            viewport_height: self.viewport_height,
+            viewport: self.viewport,
             renderer,
         }
     }
@@ -60,11 +56,12 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
     /// Finalises the builder and returns a ready-to-use [`Runner`].
     pub fn build(self) -> Runner<R> {
         let mut state = RuntimeState::with_renderer(self.url, self.renderer);
-        state.set_viewport(self.viewport_width, self.viewport_height);
+        if let Some((width, height)) = self.viewport {
+            state.set_viewport(width, height);
+        }
         Runner {
             state: Some(state),
-            viewport_width: self.viewport_width,
-            viewport_height: self.viewport_height,
+            engine: create_engine(),
         }
     }
 }
@@ -72,9 +69,13 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
 /// Headless runner that owns a [`RuntimeState`] and drives WASM guests.
 ///
 /// Does **not** expose a host-side `commit()` method — commits happen only
-/// via the `__commit` host function called from WASM. The viewport is
-/// stored on [`RuntimeState`] so the host-side `__commit` handler reads it
+/// via the `__commit` host function called from WASM. The viewport lives
+/// on [`RuntimeState`] so the host-side `__commit` handler reads it
 /// automatically when the guest triggers a commit.
+///
+/// Owns a long-lived [`wasmtime::Engine`] that is reused across every
+/// `run*` call. Creating the engine is expensive (JIT setup); reuse makes
+/// back-to-back runs cheap.
 ///
 /// The state is held in an `Option` so it can be temporarily moved out
 /// during a `run_wasm` call (which takes the state by value). The `Option`
@@ -82,13 +83,12 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
 /// unwrap it.
 pub struct Runner<R: EngineRenderer = ()> {
     state: Option<RuntimeState<R>>,
-    viewport_width: f32,
-    viewport_height: f32,
+    engine: WasmEngine,
 }
 
 impl Runner<()> {
     /// Returns a builder with default url (`https://example.com`) and
-    /// viewport (390 × 844 CSS pixels).
+    /// content-sized layout (Taffy's `Size::MAX_CONTENT`).
     pub fn builder() -> RunnerBuilder<()> {
         RunnerBuilder::new()
     }
@@ -100,7 +100,18 @@ impl<R: EngineRenderer> Runner<R> {
     /// The underlying [`RuntimeState`] is recovered even on failure, so
     /// [`state`](Self::state) / [`state_mut`](Self::state_mut) remain usable.
     pub fn run(&mut self, wasm: &[u8], func: &str) -> Result<(), RunnerError> {
-        self.run_inner(wasm, func, false).map(|_| ())
+        let state = self.take_state();
+        match run_wasm_with_engine(&self.engine, state, wasm, func) {
+            Ok(state) => {
+                self.state = Some(state);
+                Ok(())
+            }
+            Err(run_err) => {
+                let boxed = *run_err;
+                self.state = Some(boxed.state);
+                Err(RunnerError { error: boxed.error })
+            }
+        }
     }
 
     /// Executes a WASM module like [`run`](Self::run) and additionally
@@ -113,30 +124,8 @@ impl<R: EngineRenderer> Runner<R> {
         wasm: &[u8],
         func: &str,
     ) -> Result<Option<Vec<u8>>, RunnerError> {
-        self.run_inner(wasm, func, true)
-    }
-
-    fn run_inner(
-        &mut self,
-        wasm: &[u8],
-        func: &str,
-        with_coverage: bool,
-    ) -> Result<Option<Vec<u8>>, RunnerError> {
-        // `wasmtime_engine::run_wasm` takes the state by value. Take it
-        // out of the `Option`, call into wasmtime, and restore whichever
-        // state comes back (success or error).
-        let state = self
-            .state
-            .take()
-            .expect("state is Some between Runner method calls");
-
-        let result = if with_coverage {
-            run_wasm_with_coverage(state, wasm, func)
-        } else {
-            run_wasm(state, wasm, func).map(|state| (state, None))
-        };
-
-        match result {
+        let state = self.take_state();
+        match run_wasm_with_coverage_and_engine(&self.engine, state, wasm, func) {
             Ok((state, profraw)) => {
                 self.state = Some(state);
                 Ok(profraw)
@@ -149,17 +138,28 @@ impl<R: EngineRenderer> Runner<R> {
         }
     }
 
+    /// Moves the `RuntimeState` out of the runner for a by-value wasmtime
+    /// call. Callers are expected to restore it before the method returns;
+    /// this is a helper to keep the `Option`-unwrapping in one place.
+    fn take_state(&mut self) -> RuntimeState<R> {
+        self.state
+            .take()
+            .expect("state is Some between Runner method calls")
+    }
+
     /// Updates the viewport size. The change takes effect on the next
     /// guest-initiated commit; it does not retrigger layout on its own.
     pub fn resize(&mut self, width: f32, height: f32) {
-        self.viewport_width = width;
-        self.viewport_height = height;
         self.state_mut().set_viewport(width, height);
     }
 
-    /// Returns the current viewport dimensions (width, height) in CSS pixels.
-    pub fn viewport(&self) -> (f32, f32) {
-        (self.viewport_width, self.viewport_height)
+    /// Returns the current viewport as stored on [`RuntimeState`].
+    ///
+    /// `Size::MAX_CONTENT` means "no constraint" — the layout will be
+    /// content-sized. A `Size { width: Definite(w), height: Definite(h) }`
+    /// value was set via the builder or [`resize`](Self::resize).
+    pub fn viewport(&self) -> taffy::Size<taffy::AvailableSpace> {
+        self.state().viewport
     }
 
     /// Borrows the underlying [`RuntimeState`] for DOM / layout inspection.
@@ -193,6 +193,7 @@ impl Default for Runner<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use taffy::prelude::TaffyMaxContent;
 
     /// A minimal WAT module that matches the wasmtime-engine linker's
     /// expected imports but does nothing — exercises the happy path.
@@ -234,12 +235,9 @@ mod tests {
     "#;
 
     #[test]
-    fn builder_defaults_are_stable() {
+    fn builder_defaults_to_max_content() {
         let runner = Runner::builder().build();
-        assert_eq!(
-            runner.viewport(),
-            (DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT)
-        );
+        assert_eq!(runner.viewport(), taffy::Size::MAX_CONTENT);
     }
 
     #[test]
@@ -248,9 +246,8 @@ mod tests {
             .url("https://paws.test")
             .viewport(1024.0, 768.0)
             .build();
-        assert_eq!(runner.viewport(), (1024.0, 768.0));
         assert_eq!(
-            runner.state().viewport,
+            runner.viewport(),
             taffy::Size {
                 width: taffy::AvailableSpace::Definite(1024.0),
                 height: taffy::AvailableSpace::Definite(768.0),
@@ -262,9 +259,8 @@ mod tests {
     fn resize_updates_state_viewport() {
         let mut runner = Runner::builder().viewport(100.0, 100.0).build();
         runner.resize(500.0, 300.0);
-        assert_eq!(runner.viewport(), (500.0, 300.0));
         assert_eq!(
-            runner.state().viewport,
+            runner.viewport(),
             taffy::Size {
                 width: taffy::AvailableSpace::Definite(500.0),
                 height: taffy::AvailableSpace::Definite(300.0),
@@ -347,5 +343,17 @@ mod tests {
                 height: 600.0
             }
         );
+    }
+
+    #[test]
+    fn engine_is_reused_across_runs() {
+        // Two sequential runs on the same Runner shouldn't allocate a new
+        // wasmtime::Engine — this is hard to assert directly, but running
+        // many wasms in succession works and completes without leaks.
+        let mut runner = Runner::builder().build();
+        let wat_bytes = wat::parse_str(NOOP_WAT).expect("valid wat");
+        for _ in 0..5 {
+            runner.run(&wat_bytes, "run").expect("each run succeeds");
+        }
     }
 }
