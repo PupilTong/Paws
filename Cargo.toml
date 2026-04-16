@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "engine",
     "wasmtime-engine",
+    "paws-runner",
     "rust-wasm-binding", "paws-style-ir", "view-macros",
     "ios-renderer-backend",
 ]

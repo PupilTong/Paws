@@ -11,6 +11,7 @@ pub extern "C" fn run() -> i32 {
         append_element(0, div_id)?;
         set_inline_style(div_id, "width", "200px")?;
         set_inline_style(div_id, "height", "100px")?;
+        commit()?;
         Ok(0)
     })();
 

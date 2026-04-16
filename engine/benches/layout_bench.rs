@@ -4,6 +4,7 @@
 //! isolating the Taffy trait implementation on `Document`.
 
 use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Criterion};
+use taffy::prelude::TaffyMaxContent;
 
 use engine::layout::compute_layout_in_place;
 use engine::{NodeId, RuntimeState};
@@ -85,6 +86,7 @@ fn bench_flex_layout_5(c: &mut Criterion) {
             compute_layout_in_place(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(root as u64)),
+                taffy::Size::MAX_CONTENT,
             )
         })
     });
@@ -101,6 +103,7 @@ fn bench_flex_layout_50(c: &mut Criterion) {
             compute_layout_in_place(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(root as u64)),
+                taffy::Size::MAX_CONTENT,
             )
         })
     });
@@ -117,6 +120,7 @@ fn bench_deep_block_layout(c: &mut Criterion) {
             compute_layout_in_place(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(root as u64)),
+                taffy::Size::MAX_CONTENT,
             )
         })
     });
@@ -157,6 +161,7 @@ fn bench_grid_layout_3x3(c: &mut Criterion) {
             compute_layout_in_place(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(grid as u64)),
+                taffy::Size::MAX_CONTENT,
             )
         })
     });
@@ -211,6 +216,7 @@ fn bench_mixed_layout(c: &mut Criterion) {
             compute_layout_in_place(
                 black_box(&mut state.doc),
                 black_box(NodeId::from(root as u64)),
+                taffy::Size::MAX_CONTENT,
             )
         })
     });

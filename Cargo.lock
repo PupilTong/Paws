@@ -1599,6 +1599,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "paws-runner"
+version = "0.1.0"
+dependencies = [
+ "engine",
+ "taffy",
+ "wasmtime",
+ "wasmtime-engine",
+ "wat",
+]
+
+[[package]]
 name = "paws-style-ir"
 version = "0.1.0"
 dependencies = [
@@ -2881,6 +2892,7 @@ version = "0.1.0"
 dependencies = [
  "codspeed-criterion-compat",
  "engine",
+ "paws-runner",
  "stylo_atoms",
  "taffy",
  "wasmtime",

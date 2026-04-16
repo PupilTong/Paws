@@ -1,4 +1,5 @@
 use markup5ever::{LocalName, Namespace, QualName};
+use taffy::prelude::TaffyMaxContent;
 
 use crate::dom::{Document, DomError};
 use crate::style::StyleContext;
@@ -109,6 +110,13 @@ pub struct RuntimeState<R: EngineRenderer = ()> {
     /// Set by `dispatch_event` and cleared after the dispatch loop completes.
     /// WASM event accessor host functions read/mutate this field.
     pub current_event: Option<crate::events::Event>,
+    /// Viewport size passed to Taffy when the guest calls `__commit`.
+    ///
+    /// Defaults to `MAX_CONTENT` (content-sized layout), matching the
+    /// historical behaviour. Hosts that need to bound layout to a fixed
+    /// viewport (e.g. `paws-runner`, future window-based hosts) call
+    /// [`set_viewport`](Self::set_viewport) before running the guest.
+    pub viewport: taffy::Size<taffy::AvailableSpace>,
 }
 
 impl RuntimeState<()> {
@@ -140,8 +148,22 @@ impl<R: EngineRenderer> RuntimeState<R> {
             stylesheet_cache,
             renderer,
             current_event: None,
+            viewport: taffy::Size::MAX_CONTENT,
         }
     }
+
+    /// Sets the viewport that the guest's next `__commit` will use.
+    ///
+    /// Both dimensions become `AvailableSpace::Definite`. To restore the
+    /// default content-sized layout, set `self.viewport = Size::MAX_CONTENT`
+    /// directly.
+    pub fn set_viewport(&mut self, width: f32, height: f32) {
+        self.viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(width),
+            height: taffy::AvailableSpace::Definite(height),
+        };
+    }
+
     /// Creates a new HTML element with the given tag name. Returns the node ID.
     pub fn create_element(&mut self, tag: String) -> u32 {
         let name = QualName::new(None, markup5ever::ns!(html), LocalName::from(tag));
@@ -311,7 +333,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
 
         // 3. Layout from the root element
         if let Some(root_id) = root_element {
-            crate::layout::compute_layout_in_place(&mut self.doc, root_id);
+            crate::layout::compute_layout_in_place(&mut self.doc, root_id, self.viewport);
         }
 
         // 4. Notify the renderer (split borrow: &mut renderer + &mut doc are disjoint fields)
@@ -2813,7 +2835,8 @@ mod tests {
 
         assert!(crate::layout::compute_layout_in_place(
             &mut state.doc,
-            taffy::NodeId::from(container as u64)
+            taffy::NodeId::from(container as u64),
+            taffy::Size::MAX_CONTENT,
         ));
         let node = state
             .doc
@@ -2858,7 +2881,8 @@ mod tests {
 
         assert!(crate::layout::compute_layout_in_place(
             &mut state.doc,
-            taffy::NodeId::from(container as u64)
+            taffy::NodeId::from(container as u64),
+            taffy::Size::MAX_CONTENT,
         ));
         let node = state
             .doc
@@ -2902,7 +2926,8 @@ mod tests {
         // Verify layout computes
         assert!(crate::layout::compute_layout_in_place(
             &mut state.doc,
-            taffy::NodeId::from(el as u64)
+            taffy::NodeId::from(el as u64),
+            taffy::Size::MAX_CONTENT,
         ));
         let node = state.doc.get_node(taffy::NodeId::from(el as u64)).unwrap();
         assert_eq!(node.layout().size.width, 100.0);

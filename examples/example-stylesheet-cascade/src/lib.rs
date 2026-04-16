@@ -10,6 +10,7 @@ pub extern "C" fn run() -> i32 {
         let div_id = create_element("div")?;
         append_element(0, div_id)?;
         add_stylesheet("div { height: 77px; }")?;
+        commit()?;
         Ok(0)
     })();
 
