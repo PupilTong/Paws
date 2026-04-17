@@ -439,6 +439,12 @@ fn test_all_examples_run_successfully() {
         "example_namespace",
         "example_event_dispatch",
         "example_yew_counter",
+        "example_yew_use_state_counter",
+        "example_yew_multi_state_setters",
+        "example_yew_use_state_eq",
+        "example_yew_ub_deref",
+        "example_yew_stale_read",
+        "example_yew_child_rerender",
     ];
 
     for name in examples {
