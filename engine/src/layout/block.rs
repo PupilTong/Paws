@@ -28,8 +28,17 @@ use taffy::{
 /// `layout_cache`, `unrounded_layout`, `final_layout`). This is the preferred
 /// API — use [`compute_layout`] only if you need a detached `LayoutBox` tree.
 ///
+/// `viewport` is the available space passed to Taffy's root layout pass.
+/// Use `Size::MAX_CONTENT` for content-sized layout (the historical default);
+/// use `Size { width: Definite(w), height: Definite(h) }` to constrain layout
+/// to a fixed viewport.
+///
 /// Returns `true` if layout was computed, `false` if the root node has no style.
-pub fn compute_layout_in_place<S: RenderState>(doc: &mut Document<S>, root_id: NodeId) -> bool {
+pub fn compute_layout_in_place<S: RenderState>(
+    doc: &mut Document<S>,
+    root_id: NodeId,
+    viewport: Size<AvailableSpace>,
+) -> bool {
     if doc
         .get_node(root_id)
         .and_then(|n| n.taffy_style.as_ref())
@@ -37,7 +46,7 @@ pub fn compute_layout_in_place<S: RenderState>(doc: &mut Document<S>, root_id: N
     {
         return false;
     }
-    compute_root_layout(doc, root_id, Size::MAX_CONTENT);
+    compute_root_layout(doc, root_id, viewport);
     round_layout(doc, root_id);
     true
 }
@@ -395,7 +404,7 @@ mod tests {
         let style_ctx = crate::style::StyleContext::new(url);
         doc.resolve_style(&style_ctx);
 
-        assert!(compute_layout_in_place(&mut doc, elem1));
+        assert!(compute_layout_in_place(&mut doc, elem1, Size::MAX_CONTENT));
         let node = doc.get_node(elem1).unwrap();
         // elem1 has one styled child (elem2).
         assert_eq!(
@@ -415,7 +424,7 @@ mod tests {
         // Don't resolve styles — taffy_style will be None.
         let el = doc.create_element(QualName::new(None, "".into(), "div".into()));
         doc.append_child(doc.root, el).unwrap();
-        assert!(!compute_layout_in_place(&mut doc, el));
+        assert!(!compute_layout_in_place(&mut doc, el, Size::MAX_CONTENT));
     }
 
     #[test]
@@ -443,7 +452,11 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        compute_layout_in_place(&mut state.doc, NodeId::from(parent as u64));
+        compute_layout_in_place(
+            &mut state.doc,
+            NodeId::from(parent as u64),
+            Size::MAX_CONTENT,
+        );
 
         // Hidden child should have zero dimensions.
         let hidden_node = state.doc.get_node(NodeId::from(hidden as u64)).unwrap();
@@ -470,7 +483,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        compute_layout_in_place(&mut state.doc, NodeId::from(grid as u64));
+        compute_layout_in_place(&mut state.doc, NodeId::from(grid as u64), Size::MAX_CONTENT);
 
         let grid_node = state.doc.get_node(NodeId::from(grid as u64)).unwrap();
         assert!(
@@ -492,7 +505,7 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        compute_layout_in_place(&mut state.doc, NodeId::from(el as u64));
+        compute_layout_in_place(&mut state.doc, NodeId::from(el as u64), Size::MAX_CONTENT);
 
         let node = state.doc.get_node(NodeId::from(el as u64)).unwrap();
         assert_eq!(node.layout().size.width, 100.0);
@@ -518,7 +531,11 @@ mod tests {
             .unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        compute_layout_in_place(&mut state.doc, NodeId::from(block as u64));
+        compute_layout_in_place(
+            &mut state.doc,
+            NodeId::from(block as u64),
+            Size::MAX_CONTENT,
+        );
 
         let block_node = state.doc.get_node(NodeId::from(block as u64)).unwrap();
         assert_eq!(block_node.layout().size.width, 200.0);
@@ -543,7 +560,8 @@ mod tests {
         state.doc.resolve_style(&state.style_context);
         assert!(compute_layout_in_place(
             &mut state.doc,
-            NodeId::from(flex as u64)
+            NodeId::from(flex as u64),
+            Size::MAX_CONTENT,
         ));
     }
 
@@ -560,7 +578,7 @@ mod tests {
         state.append_element(div, text).unwrap();
 
         state.doc.resolve_style(&state.style_context);
-        compute_layout_in_place(&mut state.doc, NodeId::from(div as u64));
+        compute_layout_in_place(&mut state.doc, NodeId::from(div as u64), Size::MAX_CONTENT);
 
         let text_node = state.doc.get_node(NodeId::from(text as u64)).unwrap();
         assert!(text_node.is_text_node(), "child should be a text node");

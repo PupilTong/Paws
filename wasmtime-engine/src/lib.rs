@@ -50,7 +50,20 @@ impl<R: EngineRenderer> std::fmt::Debug for RunWasmError<R> {
 /// Result of running a WASM module with coverage extraction.
 type WasmCoverageResult<R> = Result<(RuntimeState<R>, Option<Vec<u8>>), Box<RunWasmError<R>>>;
 
+/// What to capture from the guest after a successful run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunMode {
+    /// Return immediately after the guest export returns.
+    Plain,
+    /// Extract profraw coverage bytes from the guest before returning.
+    WithCoverage,
+}
+
 /// Compiles and runs a binary WASM module against a [`RuntimeState`].
+///
+/// Allocates a fresh [`wasmtime::Engine`] for this single run. Callers
+/// that execute many modules back-to-back (e.g. [`paws-runner`]) should
+/// prefer [`run_wasm_with_engine`] to reuse a long-lived engine.
 ///
 /// The `RuntimeState` is always recovered, even on error.
 pub fn run_wasm<R: EngineRenderer>(
@@ -58,7 +71,28 @@ pub fn run_wasm<R: EngineRenderer>(
     wasm_bytes: &[u8],
     func_name: &str,
 ) -> Result<RuntimeState<R>, Box<RunWasmError<R>>> {
-    run_wasm_inner(state, wasm_bytes, func_name, false).map(|(state, _)| state)
+    run_wasm_inner(
+        &create_engine(),
+        state,
+        wasm_bytes,
+        func_name,
+        RunMode::Plain,
+    )
+    .map(|(state, _)| state)
+}
+
+/// Like [`run_wasm`] but reuses an existing [`wasmtime::Engine`].
+///
+/// `wasmtime::Engine` is designed for reuse across many module
+/// compilations and executions; creating one involves JIT setup that
+/// dominates the cost of small runs.
+pub fn run_wasm_with_engine<R: EngineRenderer>(
+    engine: &WasmEngine,
+    state: RuntimeState<R>,
+    wasm_bytes: &[u8],
+    func_name: &str,
+) -> Result<RuntimeState<R>, Box<RunWasmError<R>>> {
+    run_wasm_inner(engine, state, wasm_bytes, func_name, RunMode::Plain).map(|(state, _)| state)
 }
 
 /// Like [`run_wasm`] but also extracts LLVM coverage data from the guest.
@@ -71,31 +105,49 @@ pub fn run_wasm_with_coverage<R: EngineRenderer>(
     wasm_bytes: &[u8],
     func_name: &str,
 ) -> WasmCoverageResult<R> {
-    run_wasm_inner(state, wasm_bytes, func_name, true)
+    run_wasm_inner(
+        &create_engine(),
+        state,
+        wasm_bytes,
+        func_name,
+        RunMode::WithCoverage,
+    )
 }
 
-/// Shared implementation for [`run_wasm`] and [`run_wasm_with_coverage`].
-fn run_wasm_inner<R: EngineRenderer>(
+/// Like [`run_wasm_with_coverage`] but reuses an existing
+/// [`wasmtime::Engine`]. See [`run_wasm_with_engine`] for why this matters.
+pub fn run_wasm_with_coverage_and_engine<R: EngineRenderer>(
+    engine: &WasmEngine,
     state: RuntimeState<R>,
     wasm_bytes: &[u8],
     func_name: &str,
-    extract_coverage: bool,
 ) -> WasmCoverageResult<R> {
-    let engine = create_engine();
-    let module = match Module::new(&engine, wasm_bytes) {
+    run_wasm_inner(engine, state, wasm_bytes, func_name, RunMode::WithCoverage)
+}
+
+/// Shared implementation for [`run_wasm`] / [`run_wasm_with_coverage`] and
+/// their engine-reusing variants.
+fn run_wasm_inner<R: EngineRenderer>(
+    engine: &WasmEngine,
+    state: RuntimeState<R>,
+    wasm_bytes: &[u8],
+    func_name: &str,
+    mode: RunMode,
+) -> WasmCoverageResult<R> {
+    let module = match Module::new(engine, wasm_bytes) {
         Ok(m) => m,
         Err(e) => {
             return Err(Box::new(RunWasmError { state, error: e }));
         }
     };
-    let mut linker = build_linker(&engine);
-    let mut store = Store::new(&engine, state);
+    let mut linker = build_linker(engine);
+    let mut store = Store::new(engine, state);
 
     // Modules compiled with wasm32-wasip1-threads import shared memory
     // from "env::memory". Provide it via the linker before instantiation.
     if let Err(e) = (|| -> wasmtime::Result<()> {
         let mem_ty = MemoryType::shared(17, 16384);
-        let shared_mem = SharedMemory::new(&engine, mem_ty)?;
+        let shared_mem = SharedMemory::new(engine, mem_ty)?;
         linker.define(&mut store, "env", "memory", shared_mem)?;
         Ok(())
     })() {
@@ -120,10 +172,9 @@ fn run_wasm_inner<R: EngineRenderer>(
 
     match result {
         Ok((instance, ())) => {
-            let coverage = if extract_coverage {
-                extract_guest_coverage(&instance, &mut store)
-            } else {
-                None
+            let coverage = match mode {
+                RunMode::WithCoverage => extract_guest_coverage(&instance, &mut store),
+                RunMode::Plain => None,
             };
             let state = store.into_data();
             Ok((state, coverage))

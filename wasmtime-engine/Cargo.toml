@@ -28,6 +28,7 @@ features = ["cranelift", "pulley", "runtime", "std", "threads", "wat"]
 
 [dev-dependencies]
 codspeed-criterion-compat = "4.4.1"
+paws-runner = { path = "../paws-runner" }
 
 [[bench]]
 name = "engine_bench"

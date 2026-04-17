@@ -21,6 +21,7 @@ pub extern "C" fn run() -> i32 {
             "#
         ));
 
+        commit()?;
         Ok(0)
     })();
 

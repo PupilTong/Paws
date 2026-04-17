@@ -1,4 +1,5 @@
 use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Criterion};
+use taffy::prelude::TaffyMaxContent;
 
 use engine::RuntimeState;
 use wasmtime::{Engine as WasmEngine, Module, Store};
@@ -41,6 +42,7 @@ fn bench_computed_style(c: &mut Criterion) {
             engine::layout::compute_layout_in_place(
                 black_box(&mut state.doc),
                 black_box(engine::NodeId::from(id as u64)),
+                taffy::Size::MAX_CONTENT,
             );
         })
     });

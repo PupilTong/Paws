@@ -5,7 +5,8 @@
 
 include!(concat!(env!("OUT_DIR"), "/wasm_examples.rs"));
 
-use engine::{CSSStyleValue, NodeId, RuntimeState};
+use engine::{CSSStyleValue, NodeId};
+use paws_runner::Runner;
 
 /// Loads an example WASM binary by name.
 fn load_example(name: &str) -> Vec<u8> {
@@ -13,27 +14,28 @@ fn load_example(name: &str) -> Vec<u8> {
     std::fs::read(path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"))
 }
 
-/// Runs an example and returns the RuntimeState.
+/// Runs an example and returns the [`Runner`] for inspection.
 ///
 /// When the `wasm-coverage` feature is active, uses
-/// [`wasmtime_engine::run_wasm_with_coverage`] and writes the extracted
-/// profraw bytes to `target/wasm-coverage/{name}.profraw`.
-fn run_example(name: &str) -> RuntimeState {
+/// [`Runner::run_with_coverage`] and writes extracted profraw bytes to
+/// `target/wasm-coverage/{name}.profraw`.
+fn run_example(name: &str) -> Runner {
     let wasm = load_example(name);
-    let state = RuntimeState::new("https://example.com".to_string());
+    let mut runner = Runner::builder().build();
     #[cfg(not(feature = "wasm-coverage"))]
     {
-        wasmtime_engine::run_wasm(state, &wasm, "run").expect("wasm execution failed")
+        runner.run(&wasm, "run").expect("wasm execution failed");
     }
     #[cfg(feature = "wasm-coverage")]
     {
-        let (state, profraw) = wasmtime_engine::run_wasm_with_coverage(state, &wasm, "run")
+        let profraw = runner
+            .run_with_coverage(&wasm, "run")
             .expect("wasm execution failed");
         if let Some(bytes) = profraw {
             write_profraw(name, &bytes);
         }
-        state
     }
+    runner
 }
 
 /// Writes a profraw blob under the workspace-root `target/wasm-coverage/`.
@@ -60,7 +62,8 @@ fn write_profraw(name: &str, bytes: &[u8]) {
 
 #[test]
 fn test_basic_element_dom_structure() {
-    let state = run_example("example_basic_element");
+    let runner = run_example("example_basic_element");
+    let state = runner.state();
 
     // Element 1 (the div) should exist
     let div = state
@@ -83,11 +86,10 @@ fn test_basic_element_dom_structure() {
 
 #[test]
 fn test_styled_element_layout_dimensions() {
-    let mut state = run_example("example_styled_element");
-
-    // Resolve styles + compute layout
-    state.commit();
-    let node = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+    // The guest's run() calls commit() before returning, so layout is
+    // already computed by the time run_example returns.
+    let runner = run_example("example_styled_element");
+    let node = runner.state().doc.get_node(NodeId::from(1_u64)).unwrap();
     assert_eq!(node.layout().size.width, 200.0, "div width should be 200px");
     assert_eq!(
         node.layout().size.height,
@@ -102,7 +104,8 @@ fn test_styled_element_layout_dimensions() {
 
 #[test]
 fn test_nested_elements_parent_child() {
-    let state = run_example("example_nested_elements");
+    let runner = run_example("example_nested_elements");
+    let state = runner.state();
 
     // Parent is id 1, children are ids 2, 3, 4
     let parent = state.doc.get_node(NodeId::from(1_u64)).expect("parent div");
@@ -134,10 +137,8 @@ fn test_nested_elements_parent_child() {
 
 #[test]
 fn test_stylesheet_cascade_height() {
-    let mut state = run_example("example_stylesheet_cascade");
-
-    state.commit();
-    let node = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+    let runner = run_example("example_stylesheet_cascade");
+    let node = runner.state().doc.get_node(NodeId::from(1_u64)).unwrap();
     assert_eq!(
         node.layout().size.height,
         77.0,
@@ -151,11 +152,8 @@ fn test_stylesheet_cascade_height() {
 
 #[test]
 fn test_parsed_stylesheet_display_flex() {
-    let mut state = run_example("example_parsed_stylesheet");
-
-    // Trigger style resolution
-    state.commit();
-    let node = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+    let mut runner = run_example("example_parsed_stylesheet");
+    let node = runner.state().doc.get_node(NodeId::from(1_u64)).unwrap();
     assert_eq!(
         node.layout().size.width,
         200.0,
@@ -163,6 +161,7 @@ fn test_parsed_stylesheet_display_flex() {
     );
 
     // Check computed display value
+    let state = runner.state_mut();
     let map = state
         .computed_style_map(1)
         .expect("computed style map for div");
@@ -183,10 +182,11 @@ fn test_parsed_stylesheet_display_flex() {
 #[test]
 fn test_attributes_set_successfully() {
     // The wasm module returns 0 on success (all set_attribute calls passed)
-    let state = run_example("example_attributes");
+    let runner = run_example("example_attributes");
 
     // Verify the element exists and is attached
-    let div = state
+    let div = runner
+        .state()
         .doc
         .get_node(NodeId::from(1_u64))
         .expect("div should exist");
@@ -200,7 +200,8 @@ fn test_attributes_set_successfully() {
 
 #[test]
 fn test_destroy_element_cleanup() {
-    let state = run_example("example_destroy_rebuild");
+    let runner = run_example("example_destroy_rebuild");
+    let state = runner.state();
 
     // Parent (id 1) should exist
     let parent = state
@@ -233,12 +234,9 @@ fn test_destroy_element_cleanup() {
 
 #[test]
 fn test_commit_full_pipeline() {
-    let mut state = run_example("example_commit_full");
-
-    // commit() was already called inside the wasm module, but we can call
-    // it again (idempotent) to verify layout
-    state.commit();
-    let node = state.doc.get_node(NodeId::from(1_u64)).unwrap();
+    // commit() is called inside the wasm module's run().
+    let runner = run_example("example_commit_full");
+    let node = runner.state().doc.get_node(NodeId::from(1_u64)).unwrap();
     assert_eq!(node.layout().size.width, 300.0, "div width should be 300px");
     assert_eq!(
         node.layout().size.height,
@@ -253,7 +251,8 @@ fn test_commit_full_pipeline() {
 
 #[test]
 fn test_namespace_dom_structure_and_uris() {
-    let state = run_example("example_namespace");
+    let runner = run_example("example_namespace");
+    let state = runner.state();
 
     // Example creates: svg(1) with circle(2), math(3), div(4)
     let svg = state
@@ -307,7 +306,8 @@ fn test_namespace_dom_structure_and_uris() {
 
 #[test]
 fn test_event_dispatch_callback_fires() {
-    let state = run_example("example_event_dispatch");
+    let runner = run_example("example_event_dispatch");
+    let state = runner.state();
 
     // The example creates div(1) > button(2), registers a click listener,
     // dispatches a click, and the listener creates span(3) as a sibling.
@@ -350,7 +350,8 @@ fn test_yew_counter_renders_dom() {
         eprintln!("skipping test_yew_counter_renders_dom: wasm binary not found");
         return;
     }
-    let state = run_example("example_yew_counter");
+    let runner = run_example("example_yew_counter");
+    let state = runner.state();
 
     // The yew counter component renders:
     //   root(1) > div.counter(?) > button(?) + span(?)
@@ -415,13 +416,13 @@ fn test_all_examples_run_successfully() {
     ];
 
     for name in examples {
-        let _state = run_example(name);
+        let _runner = run_example(name);
     }
 
     // yew examples may not be available if the submodule isn't checked out.
     if let Ok(path) = std::panic::catch_unwind(|| example_wasm_path("example_yew_counter")) {
         if std::path::Path::new(path).exists() {
-            let _state = run_example("example_yew_counter");
+            let _runner = run_example("example_yew_counter");
         }
     }
 }

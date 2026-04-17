@@ -222,6 +222,7 @@ pub fn paint_order_children<S: RenderState>(
 mod tests {
     use super::*;
     use crate::runtime::RuntimeState;
+    use taffy::prelude::TaffyMaxContent;
 
     /// Helper: create a styled child under `parent` and return its id.
     fn add_styled_child(state: &mut RuntimeState, parent: u32, styles: &[(&str, &str)]) -> u32 {
@@ -237,7 +238,11 @@ mod tests {
 
     fn commit_and_layout(state: &mut RuntimeState, root: u32) {
         state.doc.resolve_style(&state.style_context);
-        crate::layout::compute_layout_in_place(&mut state.doc, taffy::NodeId::from(root as u64));
+        crate::layout::compute_layout_in_place(
+            &mut state.doc,
+            taffy::NodeId::from(root as u64),
+            taffy::Size::MAX_CONTENT,
+        );
     }
 
     // ── SC detection tests ─────────────────────────────────────────

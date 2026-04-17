@@ -76,6 +76,13 @@ fn build_wasm_example(
         // coverage RUSTFLAGS takes effect.
         cmd.env("RUSTFLAGS", &coverage.rustflags);
         cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+        // `-Cinstrument-coverage` + LTO on wasm produces
+        // "data symbols must live in a data section: __covrec_..." —
+        // LLVM can't relocate coverage records across LTO boundaries for
+        // the wasm backend. Override profile.release.lto for coverage
+        // builds so the per-crate profile config (e.g. yew's) doesn't
+        // re-enable it.
+        cmd.env("CARGO_PROFILE_RELEASE_LTO", "false");
     }
     let status = cmd
         .status()
