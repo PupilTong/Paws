@@ -23,7 +23,16 @@ const EXAMPLES: &[&str] = &[
 /// `-threads` target requires a wasi-threads host implementation that
 /// we don't yet provide. The non-threads variant uses static TLS and
 /// the same `rust-wasm-binding` FFI.
-const YEW_EXAMPLES: &[&str] = &["example-yew-counter"];
+const YEW_EXAMPLES: &[&str] = &[
+    "example-yew-counter",
+    // Ported from tests-archive/integration/use_state.rs
+    "example-yew-use-state-counter",
+    "example-yew-multi-state-setters",
+    "example-yew-use-state-eq",
+    "example-yew-ub-deref",
+    "example-yew-stale-read",
+    "example-yew-child-rerender",
+];
 const YEW_WASM_TARGET: &str = "wasm32-wasip1";
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";

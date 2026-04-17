@@ -397,6 +397,64 @@ fn test_yew_counter_renders_dom() {
 }
 
 // -----------------------------------------------------------------------
+// yew use_state tests — ported from tests-archive/integration/use_state.rs
+// Each fixture panics (→ wasmtime trap → test failure) if its assertion fails.
+// -----------------------------------------------------------------------
+
+/// Helper to skip a yew example gracefully if the submodule isn't checked out.
+fn run_yew_example_if_available(name: &str) -> bool {
+    let path = std::panic::catch_unwind(|| example_wasm_path(name));
+    let Ok(path) = path else { return false };
+    if !std::path::Path::new(path).exists() {
+        return false;
+    }
+    run_example(name);
+    true
+}
+
+#[test]
+fn test_yew_use_state_counter() {
+    if !run_yew_example_if_available("example_yew_use_state_counter") {
+        eprintln!("skipping test_yew_use_state_counter: example not built");
+    }
+}
+
+#[test]
+fn test_yew_multi_state_setters() {
+    if !run_yew_example_if_available("example_yew_multi_state_setters") {
+        eprintln!("skipping test_yew_multi_state_setters: example not built");
+    }
+}
+
+#[test]
+fn test_yew_use_state_eq() {
+    if !run_yew_example_if_available("example_yew_use_state_eq") {
+        eprintln!("skipping test_yew_use_state_eq: example not built");
+    }
+}
+
+#[test]
+fn test_yew_ub_deref() {
+    if !run_yew_example_if_available("example_yew_ub_deref") {
+        eprintln!("skipping test_yew_ub_deref: example not built");
+    }
+}
+
+#[test]
+fn test_yew_stale_read() {
+    if !run_yew_example_if_available("example_yew_stale_read") {
+        eprintln!("skipping test_yew_stale_read: example not built");
+    }
+}
+
+#[test]
+fn test_yew_child_rerender() {
+    if !run_yew_example_if_available("example_yew_child_rerender") {
+        eprintln!("skipping test_yew_child_rerender: example not built");
+    }
+}
+
+// -----------------------------------------------------------------------
 // Additional: verify all examples run without error
 // -----------------------------------------------------------------------
 
