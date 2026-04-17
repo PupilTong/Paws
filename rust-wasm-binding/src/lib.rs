@@ -95,50 +95,159 @@ extern "C" {
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(unused_variables, non_snake_case, dead_code)]
 mod native_stubs {
-    pub(super) fn __create_element(name_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __create_element_ns(ns_ptr: *const u8, tag_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __get_namespace_uri(id: i32, buf_ptr: *mut u8, buf_len: i32) -> i32 { -1 }
-    pub(super) fn __create_text_node(text_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __set_inline_style(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __set_attribute(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __append_element(parent: i32, child: i32) -> i32 { -1 }
-    pub(super) fn __append_elements(parent: i32, ptr: *const i32, len: i32) -> i32 { -1 }
-    pub(super) fn __destroy_element(id: i32) -> i32 { -1 }
-    pub(super) fn __add_stylesheet(css_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __commit() -> i32 { -1 }
-    pub(super) fn __get_first_child(id: i32) -> i32 { -1 }
-    pub(super) fn __get_last_child(id: i32) -> i32 { -1 }
-    pub(super) fn __get_next_sibling(id: i32) -> i32 { -1 }
-    pub(super) fn __get_previous_sibling(id: i32) -> i32 { -1 }
-    pub(super) fn __get_parent_element(id: i32) -> i32 { -1 }
-    pub(super) fn __get_parent_node(id: i32) -> i32 { -1 }
-    pub(super) fn __is_connected(id: i32) -> i32 { -1 }
-    pub(super) fn __has_attribute(id: i32, name_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __get_attribute(id: i32, name_ptr: *const u8, buf_ptr: *mut u8, buf_len: i32) -> i32 { -1 }
-    pub(super) fn __remove_attribute(id: i32, name_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __remove_child(parent: i32, child: i32) -> i32 { -1 }
-    pub(super) fn __replace_child(parent: i32, new_child: i32, old_child: i32) -> i32 { -1 }
-    pub(super) fn __insert_before(parent: i32, new_child: i32, ref_child: i32) -> i32 { -1 }
-    pub(super) fn __clone_node(id: i32, deep: i32) -> i32 { -1 }
-    pub(super) fn __set_node_value(id: i32, value_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __get_node_type(id: i32) -> i32 { -1 }
-    pub(super) fn __add_event_listener(target_id: i32, type_ptr: *const u8, callback_id: i32, options_flags: i32) -> i32 { -1 }
-    pub(super) fn __remove_event_listener(target_id: i32, type_ptr: *const u8, callback_id: i32, options_flags: i32) -> i32 { -1 }
-    pub(super) fn __dispatch_event(target_id: i32, type_ptr: *const u8, bubbles: i32, cancelable: i32, composed: i32) -> i32 { -1 }
-    pub(super) fn __event_stop_propagation() -> i32 { -1 }
-    pub(super) fn __event_stop_immediate_propagation() -> i32 { -1 }
-    pub(super) fn __event_prevent_default() -> i32 { -1 }
-    pub(super) fn __event_target() -> i32 { -1 }
-    pub(super) fn __event_current_target() -> i32 { -1 }
-    pub(super) fn __event_phase() -> i32 { -1 }
-    pub(super) fn __event_bubbles() -> i32 { -1 }
-    pub(super) fn __event_cancelable() -> i32 { -1 }
-    pub(super) fn __event_default_prevented() -> i32 { -1 }
-    pub(super) fn __event_composed() -> i32 { -1 }
-    pub(super) fn __event_timestamp() -> f64 { 0.0 }
-    pub(super) fn __attach_shadow(host_id: i32, mode_ptr: *const u8) -> i32 { -1 }
-    pub(super) fn __get_shadow_root(host_id: i32) -> i32 { -1 }
-    pub(super) fn __add_shadow_stylesheet(shadow_root_id: i32, css_ptr: *const u8) -> i32 { -1 }
+    pub(super) fn __create_element(name_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __create_element_ns(ns_ptr: *const u8, tag_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __get_namespace_uri(id: i32, buf_ptr: *mut u8, buf_len: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __create_text_node(text_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __set_inline_style(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __set_attribute(id: i32, name_ptr: *const u8, value_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __append_element(parent: i32, child: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __append_elements(parent: i32, ptr: *const i32, len: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __destroy_element(id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __add_stylesheet(css_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __commit() -> i32 {
+        -1
+    }
+    pub(super) fn __get_first_child(id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __get_last_child(id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __get_next_sibling(id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __get_previous_sibling(id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __get_parent_element(id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __get_parent_node(id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __is_connected(id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __has_attribute(id: i32, name_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __get_attribute(
+        id: i32,
+        name_ptr: *const u8,
+        buf_ptr: *mut u8,
+        buf_len: i32,
+    ) -> i32 {
+        -1
+    }
+    pub(super) fn __remove_attribute(id: i32, name_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __remove_child(parent: i32, child: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __replace_child(parent: i32, new_child: i32, old_child: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __insert_before(parent: i32, new_child: i32, ref_child: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __clone_node(id: i32, deep: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __set_node_value(id: i32, value_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __get_node_type(id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __add_event_listener(
+        target_id: i32,
+        type_ptr: *const u8,
+        callback_id: i32,
+        options_flags: i32,
+    ) -> i32 {
+        -1
+    }
+    pub(super) fn __remove_event_listener(
+        target_id: i32,
+        type_ptr: *const u8,
+        callback_id: i32,
+        options_flags: i32,
+    ) -> i32 {
+        -1
+    }
+    pub(super) fn __dispatch_event(
+        target_id: i32,
+        type_ptr: *const u8,
+        bubbles: i32,
+        cancelable: i32,
+        composed: i32,
+    ) -> i32 {
+        -1
+    }
+    pub(super) fn __event_stop_propagation() -> i32 {
+        -1
+    }
+    pub(super) fn __event_stop_immediate_propagation() -> i32 {
+        -1
+    }
+    pub(super) fn __event_prevent_default() -> i32 {
+        -1
+    }
+    pub(super) fn __event_target() -> i32 {
+        -1
+    }
+    pub(super) fn __event_current_target() -> i32 {
+        -1
+    }
+    pub(super) fn __event_phase() -> i32 {
+        -1
+    }
+    pub(super) fn __event_bubbles() -> i32 {
+        -1
+    }
+    pub(super) fn __event_cancelable() -> i32 {
+        -1
+    }
+    pub(super) fn __event_default_prevented() -> i32 {
+        -1
+    }
+    pub(super) fn __event_composed() -> i32 {
+        -1
+    }
+    pub(super) fn __event_timestamp() -> f64 {
+        0.0
+    }
+    pub(super) fn __attach_shadow(host_id: i32, mode_ptr: *const u8) -> i32 {
+        -1
+    }
+    pub(super) fn __get_shadow_root(host_id: i32) -> i32 {
+        -1
+    }
+    pub(super) fn __add_shadow_stylesheet(shadow_root_id: i32, css_ptr: *const u8) -> i32 {
+        -1
+    }
     pub(super) fn paws_add_parsed_stylesheet(ptr: *const u8, len: usize) {}
 }
 
