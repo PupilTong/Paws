@@ -34,6 +34,18 @@ const YEW_EXAMPLES: &[&str] = &[
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
 
+/// Yew fixtures build for the non-threads WASI target. Under
+/// `wasm32-wasip1-threads`, wasi-libc's pthread TLS bootstrap doesn't
+/// pin a stable main-thread `pthread_t` without a real wasi-threads
+/// host, and yew's `thread_local!` recursion guard in
+/// `scheduler::start_now` breaks (the scheduler loop re-enters itself,
+/// 100% CPU). Fixing this requires integrating
+/// `wasmtime-wasi-threads`, which in turn requires `T: Clone + Send +
+/// 'static` on the store data — a `RuntimeState<R>` → `Arc<Mutex<>>`
+/// refactor across `wasmtime-engine/src/wasm.rs`. Tracked separately;
+/// until then, yew fixtures stay on the non-threads target.
+const YEW_WASM_TARGET: &str = "wasm32-wasip1";
+
 /// Shared coverage configuration for guest WASM builds.
 struct CoverageConfig {
     enabled: bool,
@@ -75,6 +87,16 @@ fn build_wasm_example(
     if let Some(pkg) = package {
         cmd.arg("-p").arg(pkg);
     }
+    // Disable LTO unconditionally for guest WASM builds. Yew's
+    // workspace profile turns on `lto = true` + `opt-level = "z"` +
+    // `codegen-units = 1`, which strips/merges symbols aggressively —
+    // causing (a) `wasi_thread_start` to be removed from the
+    // `wasm32-wasip1-threads` binary even though wasi-libc's pthread
+    // init expects it, and (b) coverage records with empty function
+    // names that `llvm-cov export` then refuses to read. Disabling LTO
+    // sidesteps both issues at small runtime cost (these are test
+    // fixtures, not production binaries).
+    cmd.env("CARGO_PROFILE_RELEASE_LTO", "false");
     if coverage.enabled {
         cmd.arg("--features").arg("coverage");
         // Cargo sets CARGO_ENCODED_RUSTFLAGS='' for build scripts; child
@@ -82,19 +104,9 @@ fn build_wasm_example(
         // coverage RUSTFLAGS takes effect.
         cmd.env("RUSTFLAGS", &coverage.rustflags);
         cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
-        // `-Cinstrument-coverage` + LTO on wasm produces
-        // "data symbols must live in a data section: __covrec_..." —
-        // LLVM can't relocate coverage records across LTO boundaries for
-        // the wasm backend. Override profile.release.lto for coverage
-        // builds so the per-crate profile config (e.g. yew's) doesn't
-        // re-enable it.
-        cmd.env("CARGO_PROFILE_RELEASE_LTO", "false");
-        // yew's workspace profile sets opt-level="z" + codegen-units=1,
-        // which under -Cinstrument-coverage can emit coverage records
-        // with empty function names (llvm-cov then fails with
-        // "malformed instrumentation profile data: function name is
-        // empty"). Override to a less aggressive config for coverage
-        // builds so llvm-cov can read the records back.
+        // Soften opt-level + codegen-units so -Cinstrument-coverage
+        // retains enough function-name metadata for llvm-cov to read
+        // the coverage records back.
         cmd.env("CARGO_PROFILE_RELEASE_OPT_LEVEL", "1");
         cmd.env("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "16");
     }
@@ -188,7 +200,10 @@ fn main() {
     // Build yew examples. Each crate is a member of the yew submodule's
     // workspace, so we run `cargo build` from the yew workspace root
     // with `-p <name>` and pick up the artifact from yew/target/.
-    let yew_wasm_src_dir = yew_dir.join("target").join(WASM_TARGET).join("release");
+    let yew_wasm_src_dir = yew_dir
+        .join("target")
+        .join(YEW_WASM_TARGET)
+        .join("release");
     for name in YEW_EXAMPLES {
         let crate_dir = yew_examples_dir.join(name);
         if !crate_dir.exists() {
@@ -198,7 +213,7 @@ fn main() {
             name,
             &yew_dir,
             &yew_wasm_src_dir,
-            WASM_TARGET,
+            YEW_WASM_TARGET,
             Some(name),
             &out_dir,
             &coverage,
