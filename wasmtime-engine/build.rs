@@ -181,8 +181,6 @@ fn main() {
     }
 
     // Build yew examples (part of the yew workspace, output in yew/target/).
-    // Skip gracefully if the yew submodule isn't checked out (e.g. in CI
-    // without --recurse-submodules).
     let yew_wasm_src_dir = workspace_root
         .join("yew")
         .join("target")
@@ -191,11 +189,7 @@ fn main() {
     for name in YEW_EXAMPLES {
         let crate_dir = yew_examples_dir.join(name);
         if !crate_dir.exists() {
-            eprintln!(
-                "cargo:warning=skipping yew example {name}: \
-                 {crate_dir:?} not found (submodule not checked out?)"
-            );
-            continue;
+            panic!("yew example crate not found: {}", crate_dir.display());
         }
         wasm_paths.push(build_wasm_example(
             name,
