@@ -92,6 +92,14 @@ fn build_wasm_example(
         // builds so the per-crate profile config (e.g. yew's) doesn't
         // re-enable it.
         cmd.env("CARGO_PROFILE_RELEASE_LTO", "false");
+        // yew's workspace profile sets opt-level="z" + codegen-units=1,
+        // which under -Cinstrument-coverage can emit coverage records
+        // with empty function names (llvm-cov then fails with
+        // "malformed instrumentation profile data: function name is
+        // empty"). Override to a less aggressive config for coverage
+        // builds so llvm-cov can read the records back.
+        cmd.env("CARGO_PROFILE_RELEASE_OPT_LEVEL", "1");
+        cmd.env("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "16");
     }
     let status = cmd
         .status()
