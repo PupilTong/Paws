@@ -95,64 +95,72 @@ extern "C" {
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(unused_variables, non_snake_case, dead_code)]
 mod native_stubs {
-    pub(super) fn __create_element(_name_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __create_element(_name_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __create_element_ns(_ns_ptr: *const u8, _tag_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __create_element_ns(_ns_ptr: *const u8, _tag_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_namespace_uri(_id: i32, _buf_ptr: *mut u8, _buf_len: i32) -> i32 {
+    pub(super) unsafe fn __get_namespace_uri(_id: i32, _buf_ptr: *mut u8, _buf_len: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __create_text_node(_text_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __create_text_node(_text_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __set_inline_style(_id: i32, _name_ptr: *const u8, _value_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __set_inline_style(
+        _id: i32,
+        _name_ptr: *const u8,
+        _value_ptr: *const u8,
+    ) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __set_attribute(_id: i32, _name_ptr: *const u8, _value_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __set_attribute(
+        _id: i32,
+        _name_ptr: *const u8,
+        _value_ptr: *const u8,
+    ) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __append_element(_parent: i32, _child: i32) -> i32 {
+    pub(super) unsafe fn __append_element(_parent: i32, _child: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __append_elements(_parent: i32, _ptr: *const i32, _len: i32) -> i32 {
+    pub(super) unsafe fn __append_elements(_parent: i32, _ptr: *const i32, _len: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __destroy_element(_id: i32) -> i32 {
+    pub(super) unsafe fn __destroy_element(_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __add_stylesheet(_css_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __add_stylesheet(_css_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __commit() -> i32 {
+    pub(super) unsafe fn __commit() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_first_child(_id: i32) -> i32 {
+    pub(super) unsafe fn __get_first_child(_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_last_child(_id: i32) -> i32 {
+    pub(super) unsafe fn __get_last_child(_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_next_sibling(_id: i32) -> i32 {
+    pub(super) unsafe fn __get_next_sibling(_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_previous_sibling(_id: i32) -> i32 {
+    pub(super) unsafe fn __get_previous_sibling(_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_parent_element(_id: i32) -> i32 {
+    pub(super) unsafe fn __get_parent_element(_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_parent_node(_id: i32) -> i32 {
+    pub(super) unsafe fn __get_parent_node(_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __is_connected(_id: i32) -> i32 {
+    pub(super) unsafe fn __is_connected(_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __has_attribute(_id: i32, _name_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __has_attribute(_id: i32, _name_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_attribute(
+    pub(super) unsafe fn __get_attribute(
         _id: i32,
         _name_ptr: *const u8,
         _buf_ptr: *mut u8,
@@ -160,28 +168,28 @@ mod native_stubs {
     ) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __remove_attribute(_id: i32, _name_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __remove_attribute(_id: i32, _name_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __remove_child(_parent: i32, _child: i32) -> i32 {
+    pub(super) unsafe fn __remove_child(_parent: i32, _child: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __replace_child(_parent: i32, _new_child: i32, _old_child: i32) -> i32 {
+    pub(super) unsafe fn __replace_child(_parent: i32, _new_child: i32, _old_child: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __insert_before(_parent: i32, _new_child: i32, _ref_child: i32) -> i32 {
+    pub(super) unsafe fn __insert_before(_parent: i32, _new_child: i32, _ref_child: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __clone_node(_id: i32, _deep: i32) -> i32 {
+    pub(super) unsafe fn __clone_node(_id: i32, _deep: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __set_node_value(_id: i32, _value_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __set_node_value(_id: i32, _value_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_node_type(_id: i32) -> i32 {
+    pub(super) unsafe fn __get_node_type(_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __add_event_listener(
+    pub(super) unsafe fn __add_event_listener(
         _target_id: i32,
         _type_ptr: *const u8,
         _callback_id: i32,
@@ -189,7 +197,7 @@ mod native_stubs {
     ) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __remove_event_listener(
+    pub(super) unsafe fn __remove_event_listener(
         _target_id: i32,
         _type_ptr: *const u8,
         _callback_id: i32,
@@ -197,7 +205,7 @@ mod native_stubs {
     ) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __dispatch_event(
+    pub(super) unsafe fn __dispatch_event(
         _target_id: i32,
         _type_ptr: *const u8,
         _bubbles: i32,
@@ -206,49 +214,49 @@ mod native_stubs {
     ) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_stop_propagation() -> i32 {
+    pub(super) unsafe fn __event_stop_propagation() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_stop_immediate_propagation() -> i32 {
+    pub(super) unsafe fn __event_stop_immediate_propagation() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_prevent_default() -> i32 {
+    pub(super) unsafe fn __event_prevent_default() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_target() -> i32 {
+    pub(super) unsafe fn __event_target() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_current_target() -> i32 {
+    pub(super) unsafe fn __event_current_target() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_phase() -> i32 {
+    pub(super) unsafe fn __event_phase() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_bubbles() -> i32 {
+    pub(super) unsafe fn __event_bubbles() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_cancelable() -> i32 {
+    pub(super) unsafe fn __event_cancelable() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_default_prevented() -> i32 {
+    pub(super) unsafe fn __event_default_prevented() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_composed() -> i32 {
+    pub(super) unsafe fn __event_composed() -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __event_timestamp() -> f64 {
+    pub(super) unsafe fn __event_timestamp() -> f64 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __attach_shadow(_host_id: i32, _mode_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __attach_shadow(_host_id: i32, _mode_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __get_shadow_root(_host_id: i32) -> i32 {
+    pub(super) unsafe fn __get_shadow_root(_host_id: i32) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn __add_shadow_stylesheet(_shadow_root_id: i32, _css_ptr: *const u8) -> i32 {
+    pub(super) unsafe fn __add_shadow_stylesheet(_shadow_root_id: i32, _css_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
     }
-    pub(super) fn paws_add_parsed_stylesheet(_ptr: *const u8, _len: usize) {
+    pub(super) unsafe fn paws_add_parsed_stylesheet(_ptr: *const u8, _len: usize) {
         unimplemented!("DOM not available on native target")
     }
 }
