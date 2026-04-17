@@ -200,10 +200,7 @@ fn main() {
     // Build yew examples. Each crate is a member of the yew submodule's
     // workspace, so we run `cargo build` from the yew workspace root
     // with `-p <name>` and pick up the artifact from yew/target/.
-    let yew_wasm_src_dir = yew_dir
-        .join("target")
-        .join(YEW_WASM_TARGET)
-        .join("release");
+    let yew_wasm_src_dir = yew_dir.join("target").join(YEW_WASM_TARGET).join("release");
     for name in YEW_EXAMPLES {
         let crate_dir = yew_examples_dir.join(name);
         if !crate_dir.exists() {
