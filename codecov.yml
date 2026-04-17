@@ -22,6 +22,13 @@ ignore:
   # rust-wasm-binding guest coverage is captured via minicov instrumentation
   # and reported separately under the `guest` flag (see scripts/wasm-coverage.sh).
 
+# Rewrite the absolute paths emitted by `llvm-cov export` (which embed the
+# CI workspace prefix) to Paws-repo-relative paths so Codecov can match
+# them against tracked files — including yew submodule sources under
+# yew/packages/yew/src/.
+fixes:
+  - "/home/runner/work/Paws/Paws/::"
+
 flags:
   host:
     paths:

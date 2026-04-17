@@ -16,13 +16,11 @@ const EXAMPLES: &[&str] = &[
     "example-event-dispatch",
 ];
 
-/// Examples under `Paws/yew/examples/` — part of the yew workspace.
-/// These produce WASM binaries inside `yew/target/` instead of their
-/// own `target/` directory. Built for `wasm32-wasip1` (not the
-/// `-threads` variant) because wasi-libc's pthread-based TLS in the
-/// `-threads` target requires a wasi-threads host implementation that
-/// we don't yet provide. The non-threads variant uses static TLS and
-/// the same `rust-wasm-binding` FFI.
+/// Yew-based test fixtures under `Paws/examples/yew/`. Source lives in
+/// the Paws repo; each crate is a member of the yew submodule's
+/// workspace (see `yew/Cargo.toml`) so `yew/packages/yew`'s
+/// `workspace = true` dependencies resolve. Built artifacts land in
+/// `yew/target/` (shared so yew itself only compiles once).
 const YEW_EXAMPLES: &[&str] = &[
     "example-yew-counter",
     // Ported from tests-archive/integration/use_state.rs
@@ -33,7 +31,6 @@ const YEW_EXAMPLES: &[&str] = &[
     "example-yew-stale-read",
     "example-yew-child-rerender",
 ];
-const YEW_WASM_TARGET: &str = "wasm32-wasip1";
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
 
@@ -130,7 +127,8 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let workspace_root = manifest_dir.parent().expect("workspace root");
     let examples_dir = workspace_root.join("examples");
-    let yew_examples_dir = workspace_root.join("yew").join("examples");
+    let yew_examples_dir = examples_dir.join("yew");
+    let yew_dir = workspace_root.join("yew");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // When PAWS_WASM_COVERAGE=1, compile guest WASM with LLVM coverage
@@ -157,7 +155,6 @@ fn main() {
     };
 
     println!("cargo:rerun-if-changed={}", examples_dir.display());
-    println!("cargo:rerun-if-changed={}", yew_examples_dir.display());
     println!(
         "cargo:rerun-if-changed={}",
         workspace_root
@@ -188,12 +185,10 @@ fn main() {
         ));
     }
 
-    // Build yew examples (part of the yew workspace, output in yew/target/).
-    let yew_wasm_src_dir = workspace_root
-        .join("yew")
-        .join("target")
-        .join(YEW_WASM_TARGET)
-        .join("release");
+    // Build yew examples. Each crate is a member of the yew submodule's
+    // workspace, so we run `cargo build` from the yew workspace root
+    // with `-p <name>` and pick up the artifact from yew/target/.
+    let yew_wasm_src_dir = yew_dir.join("target").join(WASM_TARGET).join("release");
     for name in YEW_EXAMPLES {
         let crate_dir = yew_examples_dir.join(name);
         if !crate_dir.exists() {
@@ -201,9 +196,9 @@ fn main() {
         }
         wasm_paths.push(build_wasm_example(
             name,
-            &crate_dir,
+            &yew_dir,
             &yew_wasm_src_dir,
-            YEW_WASM_TARGET,
+            WASM_TARGET,
             Some(name),
             &out_dir,
             &coverage,
