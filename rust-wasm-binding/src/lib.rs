@@ -93,7 +93,6 @@ extern "C" {
 // host target. All stubs panic if actually called (DOM doesn't exist natively).
 // Pure-Rust tests (html! macro expansion, VNode comparisons) never invoke them.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(unused_variables, non_snake_case, dead_code)]
 mod native_stubs {
     pub(super) unsafe fn __create_element(_name_ptr: *const u8) -> i32 {
         unimplemented!("DOM not available on native target")
