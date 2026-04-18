@@ -15,6 +15,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -23,6 +26,7 @@ jobs:
         run: |
           rustup target add aarch64-apple-ios-sim
           rustup target add wasm32-wasip1-threads
+          rustup target add wasm32-wasip1
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

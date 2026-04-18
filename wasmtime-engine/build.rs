@@ -16,17 +16,35 @@ const EXAMPLES: &[&str] = &[
     "example-event-dispatch",
 ];
 
-/// Examples under `Paws/yew/examples/` — part of the yew workspace.
-/// These produce WASM binaries inside `yew/target/` instead of their
-/// own `target/` directory. Built for `wasm32-wasip1` (not the
-/// `-threads` variant) because wasi-libc's pthread-based TLS in the
-/// `-threads` target requires a wasi-threads host implementation that
-/// we don't yet provide. The non-threads variant uses static TLS and
-/// the same `rust-wasm-binding` FFI.
-const YEW_EXAMPLES: &[&str] = &["example-yew-counter"];
-const YEW_WASM_TARGET: &str = "wasm32-wasip1";
+/// Yew-based test fixtures under `Paws/examples/yew/`. Source lives in
+/// the Paws repo; each crate is a member of the yew submodule's
+/// workspace (see `yew/Cargo.toml`) so `yew/packages/yew`'s
+/// `workspace = true` dependencies resolve. Built artifacts land in
+/// `yew/target/` (shared so yew itself only compiles once).
+const YEW_EXAMPLES: &[&str] = &[
+    "example-yew-counter",
+    // Ported from tests-archive/integration/use_state.rs
+    "example-yew-use-state-counter",
+    "example-yew-multi-state-setters",
+    "example-yew-use-state-eq",
+    "example-yew-ub-deref",
+    "example-yew-stale-read",
+    "example-yew-child-rerender",
+];
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
+
+/// Yew fixtures build for the non-threads WASI target. Under
+/// `wasm32-wasip1-threads`, wasi-libc's pthread TLS bootstrap doesn't
+/// pin a stable main-thread `pthread_t` without a real wasi-threads
+/// host, and yew's `thread_local!` recursion guard in
+/// `scheduler::start_now` breaks (the scheduler loop re-enters itself,
+/// 100% CPU). Fixing this requires integrating
+/// `wasmtime-wasi-threads`, which in turn requires `T: Clone + Send +
+/// 'static` on the store data — a `RuntimeState<R>` → `Arc<Mutex<>>`
+/// refactor across `wasmtime-engine/src/wasm.rs`. Tracked separately;
+/// until then, yew fixtures stay on the non-threads target.
+const YEW_WASM_TARGET: &str = "wasm32-wasip1";
 
 /// Shared coverage configuration for guest WASM builds.
 struct CoverageConfig {
@@ -69,6 +87,16 @@ fn build_wasm_example(
     if let Some(pkg) = package {
         cmd.arg("-p").arg(pkg);
     }
+    // Disable LTO unconditionally for guest WASM builds. Yew's
+    // workspace profile turns on `lto = true` + `opt-level = "z"` +
+    // `codegen-units = 1`, which strips/merges symbols aggressively —
+    // causing (a) `wasi_thread_start` to be removed from the
+    // `wasm32-wasip1-threads` binary even though wasi-libc's pthread
+    // init expects it, and (b) coverage records with empty function
+    // names that `llvm-cov export` then refuses to read. Disabling LTO
+    // sidesteps both issues at small runtime cost (these are test
+    // fixtures, not production binaries).
+    cmd.env("CARGO_PROFILE_RELEASE_LTO", "false");
     if coverage.enabled {
         cmd.arg("--features").arg("coverage");
         // Cargo sets CARGO_ENCODED_RUSTFLAGS='' for build scripts; child
@@ -76,13 +104,11 @@ fn build_wasm_example(
         // coverage RUSTFLAGS takes effect.
         cmd.env("RUSTFLAGS", &coverage.rustflags);
         cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
-        // `-Cinstrument-coverage` + LTO on wasm produces
-        // "data symbols must live in a data section: __covrec_..." —
-        // LLVM can't relocate coverage records across LTO boundaries for
-        // the wasm backend. Override profile.release.lto for coverage
-        // builds so the per-crate profile config (e.g. yew's) doesn't
-        // re-enable it.
-        cmd.env("CARGO_PROFILE_RELEASE_LTO", "false");
+        // Soften opt-level + codegen-units so -Cinstrument-coverage
+        // retains enough function-name metadata for llvm-cov to read
+        // the coverage records back.
+        cmd.env("CARGO_PROFILE_RELEASE_OPT_LEVEL", "1");
+        cmd.env("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "16");
     }
     let status = cmd
         .status()
@@ -113,7 +139,8 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let workspace_root = manifest_dir.parent().expect("workspace root");
     let examples_dir = workspace_root.join("examples");
-    let yew_examples_dir = workspace_root.join("yew").join("examples");
+    let yew_examples_dir = examples_dir.join("yew");
+    let yew_dir = workspace_root.join("yew");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // When PAWS_WASM_COVERAGE=1, compile guest WASM with LLVM coverage
@@ -140,7 +167,6 @@ fn main() {
     };
 
     println!("cargo:rerun-if-changed={}", examples_dir.display());
-    println!("cargo:rerun-if-changed={}", yew_examples_dir.display());
     println!(
         "cargo:rerun-if-changed={}",
         workspace_root
@@ -171,26 +197,18 @@ fn main() {
         ));
     }
 
-    // Build yew examples (part of the yew workspace, output in yew/target/).
-    // Skip gracefully if the yew submodule isn't checked out (e.g. in CI
-    // without --recurse-submodules).
-    let yew_wasm_src_dir = workspace_root
-        .join("yew")
-        .join("target")
-        .join(YEW_WASM_TARGET)
-        .join("release");
+    // Build yew examples. Each crate is a member of the yew submodule's
+    // workspace, so we run `cargo build` from the yew workspace root
+    // with `-p <name>` and pick up the artifact from yew/target/.
+    let yew_wasm_src_dir = yew_dir.join("target").join(YEW_WASM_TARGET).join("release");
     for name in YEW_EXAMPLES {
         let crate_dir = yew_examples_dir.join(name);
         if !crate_dir.exists() {
-            eprintln!(
-                "cargo:warning=skipping yew example {name}: \
-                 {crate_dir:?} not found (submodule not checked out?)"
-            );
-            continue;
+            panic!("yew example crate not found: {}", crate_dir.display());
         }
         wasm_paths.push(build_wasm_example(
             name,
-            &crate_dir,
+            &yew_dir,
             &yew_wasm_src_dir,
             YEW_WASM_TARGET,
             Some(name),

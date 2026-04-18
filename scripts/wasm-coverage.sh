@@ -80,11 +80,27 @@ echo "Found ${WASM_COUNT} instrumented .wasm binary(s)."
 # ---------------------------------------------------------------------------
 # 3. Generate lcov from profdata + .wasm binaries
 # ---------------------------------------------------------------------------
+# Some instrumented wasm artifacts can emit malformed coverage records
+# (e.g. "function name is empty") when yew's aggressive release profile
+# — opt-level="z", codegen-units=1 — merges generic monomorphisations
+# such that LLVM strips their symbol names. Feeding every object in a
+# single llvm-cov call fails fast on the first bad one, so we process
+# each wasm separately and skip individual failures, preserving
+# coverage for the rest.
 echo "Generating guest-lcov.info..."
-"$LLVM_COV" export --format=lcov \
-    --instr-profile="${COVERAGE_DIR}/merged.profdata" \
-    "${WASM_ARGS[@]}" \
-    > "${COVERAGE_DIR}/guest-lcov.info"
+: > "${COVERAGE_DIR}/guest-lcov.info"
+SKIPPED=0
+for wasm_arg in "${WASM_ARGS[@]}"; do
+    wasm_path="${wasm_arg#-object=}"
+    if ! "$LLVM_COV" export --format=lcov \
+        --instr-profile="${COVERAGE_DIR}/merged.profdata" \
+        "-object=${wasm_path}" \
+        >> "${COVERAGE_DIR}/guest-lcov.info" 2>/dev/null
+    then
+        echo "warning: skipping ${wasm_path} (llvm-cov export failed)" >&2
+        SKIPPED=$((SKIPPED + 1))
+    fi
+done
 
 LINES=$(wc -l < "${COVERAGE_DIR}/guest-lcov.info")
-echo "Done: ${COVERAGE_DIR}/guest-lcov.info (${LINES} lines)"
+echo "Done: ${COVERAGE_DIR}/guest-lcov.info (${LINES} lines, ${SKIPPED} wasm skipped)"

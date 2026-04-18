@@ -1,0 +1,15 @@
+[package]
+name = "example-yew-child-rerender"
+version = "0.1.0"
+edition = "2021"
+workspace = "../../../yew"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rust-wasm-binding = { path = "../../../rust-wasm-binding", default-features = false }
+yew = { path = "../../../yew/packages/yew", features = ["csr"] }
+
+[features]
+coverage = ["rust-wasm-binding/coverage"]

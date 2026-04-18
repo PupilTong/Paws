@@ -16,14 +16,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Add wasm32-wasip1-threads target
-        run: rustup target add wasm32-wasip1-threads
+      - name: Add wasm32 targets
+        # wasm32-wasip1-threads for standalone Paws examples; plain
+        # wasm32-wasip1 for yew fixtures (see build.rs notes on the
+        # wasi-libc pthread-TLS bootstrap hang).
+        run: rustup target add wasm32-wasip1-threads wasm32-wasip1
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev

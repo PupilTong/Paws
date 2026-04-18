@@ -340,16 +340,6 @@ fn test_event_dispatch_callback_fires() {
 
 #[test]
 fn test_yew_counter_renders_dom() {
-    // Skip if the yew submodule wasn't checked out (CI without --recurse-submodules).
-    let path = std::panic::catch_unwind(|| example_wasm_path("example_yew_counter"));
-    let Ok(path) = path else {
-        eprintln!("skipping test_yew_counter_renders_dom: yew example not built");
-        return;
-    };
-    if !std::path::Path::new(path).exists() {
-        eprintln!("skipping test_yew_counter_renders_dom: wasm binary not found");
-        return;
-    }
     let runner = run_example("example_yew_counter");
     let state = runner.state();
 
@@ -397,6 +387,41 @@ fn test_yew_counter_renders_dom() {
 }
 
 // -----------------------------------------------------------------------
+// yew use_state tests — ported from tests-archive/integration/use_state.rs
+// Each fixture panics (→ wasmtime trap → test failure) if its assertion fails.
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_yew_use_state_counter() {
+    run_example("example_yew_use_state_counter");
+}
+
+#[test]
+fn test_yew_multi_state_setters() {
+    run_example("example_yew_multi_state_setters");
+}
+
+#[test]
+fn test_yew_use_state_eq() {
+    run_example("example_yew_use_state_eq");
+}
+
+#[test]
+fn test_yew_ub_deref() {
+    run_example("example_yew_ub_deref");
+}
+
+#[test]
+fn test_yew_stale_read() {
+    run_example("example_yew_stale_read");
+}
+
+#[test]
+fn test_yew_child_rerender() {
+    run_example("example_yew_child_rerender");
+}
+
+// -----------------------------------------------------------------------
 // Additional: verify all examples run without error
 // -----------------------------------------------------------------------
 
@@ -413,16 +438,16 @@ fn test_all_examples_run_successfully() {
         "example_commit_full",
         "example_namespace",
         "example_event_dispatch",
+        "example_yew_counter",
+        "example_yew_use_state_counter",
+        "example_yew_multi_state_setters",
+        "example_yew_use_state_eq",
+        "example_yew_ub_deref",
+        "example_yew_stale_read",
+        "example_yew_child_rerender",
     ];
 
     for name in examples {
         let _runner = run_example(name);
-    }
-
-    // yew examples may not be available if the submodule isn't checked out.
-    if let Ok(path) = std::panic::catch_unwind(|| example_wasm_path("example_yew_counter")) {
-        if std::path::Path::new(path).exists() {
-            let _runner = run_example("example_yew_counter");
-        }
     }
 }
