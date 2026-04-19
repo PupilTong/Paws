@@ -711,7 +711,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
                     match s.is_connected(id as u32) {
                         Ok(connected) => {
                             s.clear_error();
-                            if connected { 1 } else { 0 }
+                            if connected {
+                                1
+                            } else {
+                                0
+                            }
                         }
                         Err(code) => s.set_error(code, code.message()),
                     }
@@ -742,7 +746,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
                     match s.has_attribute(id as u32, &name) {
                         Ok(has) => {
                             s.clear_error();
-                            if has { 1 } else { 0 }
+                            if has {
+                                1
+                            } else {
+                                0
+                            }
                         }
                         Err(code) => s.set_error(code, code.message()),
                     }
@@ -874,11 +882,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
                     }));
                 }
                 Ok(with_state_i32(&mut caller, |s| {
-                    match s.replace_child(
-                        parent as u32,
-                        new_child as u32,
-                        old_child as u32,
-                    ) {
+                    match s.replace_child(parent as u32, new_child as u32, old_child as u32) {
                         Ok(()) => {
                             s.clear_error();
                             0
@@ -915,11 +919,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
                     Some(ref_child as u32)
                 };
                 Ok(with_state_i32(&mut caller, |s| {
-                    match s.insert_before(
-                        parent as u32,
-                        new_child as u32,
-                        ref_child_opt,
-                    ) {
+                    match s.insert_before(parent as u32, new_child as u32, ref_child_opt) {
                         Ok(()) => {
                             s.clear_error();
                             0
@@ -1147,10 +1147,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
 
                 // Check for re-entrant dispatch; on success clear any error.
                 let precheck = with_state_i32(&mut caller, |s| {
-                    if s.current_event
-                        .as_ref()
-                        .is_some_and(|e| e.dispatch_flag)
-                    {
+                    if s.current_event.as_ref().is_some_and(|e| e.dispatch_flag) {
                         s.set_error(
                             HostErrorCode::EventAlreadyDispatching,
                             HostErrorCode::EventAlreadyDispatching.message(),
@@ -1183,15 +1180,17 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_stop_propagation",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_mut() {
-                    Some(ev) => {
-                        ev.stop_propagation_flag = true;
-                        0
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_mut() {
+                        Some(ev) => {
+                            ev.stop_propagation_flag = true;
+                            0
+                        }
+                        None => s.set_error(
+                            HostErrorCode::NoActiveEvent,
+                            HostErrorCode::NoActiveEvent.message(),
+                        ),
                     }
-                    None => s.set_error(
-                        HostErrorCode::NoActiveEvent,
-                        HostErrorCode::NoActiveEvent.message(),
-                    ),
                 }))
             },
         )
@@ -1202,16 +1201,18 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_stop_immediate_propagation",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_mut() {
-                    Some(ev) => {
-                        ev.stop_propagation_flag = true;
-                        ev.stop_immediate_propagation_flag = true;
-                        0
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_mut() {
+                        Some(ev) => {
+                            ev.stop_propagation_flag = true;
+                            ev.stop_immediate_propagation_flag = true;
+                            0
+                        }
+                        None => s.set_error(
+                            HostErrorCode::NoActiveEvent,
+                            HostErrorCode::NoActiveEvent.message(),
+                        ),
                     }
-                    None => s.set_error(
-                        HostErrorCode::NoActiveEvent,
-                        HostErrorCode::NoActiveEvent.message(),
-                    ),
                 }))
             },
         )
@@ -1222,17 +1223,19 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_prevent_default",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_mut() {
-                    Some(ev) => {
-                        if ev.cancelable && !ev.in_passive_listener {
-                            ev.canceled_flag = true;
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_mut() {
+                        Some(ev) => {
+                            if ev.cancelable && !ev.in_passive_listener {
+                                ev.canceled_flag = true;
+                            }
+                            0
                         }
-                        0
+                        None => s.set_error(
+                            HostErrorCode::NoActiveEvent,
+                            HostErrorCode::NoActiveEvent.message(),
+                        ),
                     }
-                    None => s.set_error(
-                        HostErrorCode::NoActiveEvent,
-                        HostErrorCode::NoActiveEvent.message(),
-                    ),
                 }))
             },
         )
@@ -1245,9 +1248,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_target",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
-                    Some(ev) => ev.target.map_or(-1, |id| u64::from(id) as i32),
-                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_ref() {
+                        Some(ev) => ev.target.map_or(-1, |id| u64::from(id) as i32),
+                        None => HostErrorCode::NoActiveEvent.as_i32(),
+                    }
                 }))
             },
         )
@@ -1258,9 +1263,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_current_target",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
-                    Some(ev) => ev.current_target.map_or(-1, |id| u64::from(id) as i32),
-                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_ref() {
+                        Some(ev) => ev.current_target.map_or(-1, |id| u64::from(id) as i32),
+                        None => HostErrorCode::NoActiveEvent.as_i32(),
+                    }
                 }))
             },
         )
@@ -1271,9 +1278,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_phase",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
-                    Some(ev) => ev.event_phase as i32,
-                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_ref() {
+                        Some(ev) => ev.event_phase as i32,
+                        None => HostErrorCode::NoActiveEvent.as_i32(),
+                    }
                 }))
             },
         )
@@ -1284,9 +1293,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_bubbles",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
-                    Some(ev) => ev.bubbles as i32,
-                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_ref() {
+                        Some(ev) => ev.bubbles as i32,
+                        None => HostErrorCode::NoActiveEvent.as_i32(),
+                    }
                 }))
             },
         )
@@ -1297,9 +1308,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_cancelable",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
-                    Some(ev) => ev.cancelable as i32,
-                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_ref() {
+                        Some(ev) => ev.cancelable as i32,
+                        None => HostErrorCode::NoActiveEvent.as_i32(),
+                    }
                 }))
             },
         )
@@ -1310,9 +1323,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_default_prevented",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
-                    Some(ev) => ev.default_prevented() as i32,
-                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_ref() {
+                        Some(ev) => ev.default_prevented() as i32,
+                        None => HostErrorCode::NoActiveEvent.as_i32(),
+                    }
                 }))
             },
         )
@@ -1323,9 +1338,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
             "env",
             "__event_composed",
             |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
-                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
-                    Some(ev) => ev.composed as i32,
-                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.current_event.as_ref() {
+                        Some(ev) => ev.composed as i32,
+                        None => HostErrorCode::NoActiveEvent.as_i32(),
+                    }
                 }))
             },
         )
@@ -1471,10 +1488,9 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<
         .func_wrap(
             "wasi_snapshot_preview1",
             "environ_get",
-            |_caller: Caller<'_, StoreData<R>>,
-             _environ: i32,
-             _environ_buf: i32|
-             -> Result<i32> { Ok(0) },
+            |_caller: Caller<'_, StoreData<R>>, _environ: i32, _environ_buf: i32| -> Result<i32> {
+                Ok(0)
+            },
         )
         .expect("link wasi environ_get");
 
@@ -1595,9 +1611,7 @@ fn dispatch_event_wasm<R: EngineRenderer>(
     let target_nid = taffy::NodeId::from(target_id as u64);
 
     // 1. Build event path (borrow doc, then release)
-    let Some(path_opt) =
-        with_state(caller, |s| build_event_path(&s.doc, target_nid))
-    else {
+    let Some(path_opt) = with_state(caller, |s| build_event_path(&s.doc, target_nid)) else {
         return Ok(HostErrorCode::WrongThread as i32);
     };
     let path = match path_opt {
