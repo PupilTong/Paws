@@ -1,6 +1,35 @@
+#![forbid(unsafe_code)]
+
 use wasmtime::{format_err, Caller, Engine as WasmEngine, Linker, Result};
 
 use engine::{EngineRenderer, HostErrorCode, RuntimeState};
+
+use crate::shared_memory_access::{with_shared_bytes, with_shared_bytes_mut};
+use crate::store_data::{MainThreadToken, StoreData};
+
+/// Runs `f` on the main-thread [`RuntimeState`]. Returns
+/// [`HostErrorCode::WrongThread`]'s `i32` code if called from a worker
+/// thread that never acquired a [`MainThreadToken`].
+fn with_state_i32<R: EngineRenderer>(
+    caller: &mut Caller<'_, StoreData<R>>,
+    f: impl FnOnce(&mut RuntimeState<R>) -> i32,
+) -> i32 {
+    match MainThreadToken::current() {
+        Some(token) => caller.data().with_state(&token, f),
+        None => HostErrorCode::WrongThread as i32,
+    }
+}
+
+/// Generic version of [`with_state_i32`] for host functions that return
+/// non-`i32` values. Returns [`None`] if called from a worker thread; the
+/// caller chooses the fallback value.
+fn with_state<R: EngineRenderer, T>(
+    caller: &mut Caller<'_, StoreData<R>>,
+    f: impl FnOnce(&mut RuntimeState<R>) -> T,
+) -> Option<T> {
+    let token = MainThreadToken::current()?;
+    Some(caller.data().with_state(&token, f))
+}
 
 /// Resolves the WASM memory export **once** and passes the full linear-memory
 /// `&[u8]` into `f`.
@@ -10,7 +39,7 @@ use engine::{EngineRenderer, HostErrorCode, RuntimeState};
 /// (`get_export("memory")`) and memory-type dispatch happen exactly once per
 /// call, regardless of how much data the callback reads.
 fn with_memory_data<R: EngineRenderer, T>(
-    caller: &mut Caller<'_, RuntimeState<R>>,
+    caller: &mut Caller<'_, StoreData<R>>,
     f: impl FnOnce(&[u8]) -> Result<T>,
 ) -> Result<T> {
     let export = caller
@@ -25,12 +54,34 @@ fn with_memory_data<R: EngineRenderer, T>(
 
     // Fall back to SharedMemory (wasm32-wasip1-threads modules).
     if let Some(shared) = export.into_shared_memory() {
-        let raw = shared.data();
-        // SAFETY: Shared memory may be concurrently modified, but in our
-        // single-threaded WASM execution model no concurrent writes occur
-        // during host function calls. We read a snapshot of the data.
-        let data = unsafe { std::slice::from_raw_parts(raw.as_ptr() as *const u8, raw.len()) };
+        return with_shared_bytes(&shared, f);
+    }
+
+    Err(format_err!(
+        "memory export is neither Memory nor SharedMemory"
+    ))
+}
+
+/// Like [`with_memory_data`] but provides `&mut [u8]` access.
+///
+/// Handles both regular [`wasmtime::Memory`] (WAT tests) and
+/// [`wasmtime::SharedMemory`] (wasm32-wasip1-threads modules). WASI shims
+/// that write back into guest memory use this helper.
+fn with_memory_data_mut<R: EngineRenderer, T>(
+    caller: &mut Caller<'_, StoreData<R>>,
+    f: impl FnOnce(&mut [u8]) -> Result<T>,
+) -> Result<T> {
+    let export = caller
+        .get_export("memory")
+        .ok_or_else(|| format_err!("missing memory export"))?;
+
+    if let Some(memory) = export.clone().into_memory() {
+        let data = memory.data_mut(&mut *caller);
         return f(data);
+    }
+
+    if let Some(shared) = export.into_shared_memory() {
+        return with_shared_bytes_mut(&shared, f);
     }
 
     Err(format_err!(
@@ -44,7 +95,7 @@ fn with_memory_data<R: EngineRenderer, T>(
 /// in-place for the null terminator — no intermediate `Vec` allocations and
 /// no chunked reads.
 pub fn read_cstr<R: EngineRenderer>(
-    caller: &mut Caller<'_, RuntimeState<R>>,
+    caller: &mut Caller<'_, StoreData<R>>,
     ptr: i32,
 ) -> Result<String> {
     let start = ptr as usize;
@@ -68,7 +119,7 @@ pub fn read_cstr<R: EngineRenderer>(
 /// The memory export is resolved once; elements are read directly from the
 /// backing `&[u8]` slice without an intermediate copy.
 fn read_i32_slice<R: EngineRenderer>(
-    caller: &mut Caller<'_, RuntimeState<R>>,
+    caller: &mut Caller<'_, StoreData<R>>,
     ptr: i32,
     len: i32,
 ) -> Result<Vec<u32>> {
@@ -107,7 +158,7 @@ fn read_i32_slice<R: EngineRenderer>(
 /// Returns `Ok(())` if the write fits within the memory, or `Err` on
 /// out-of-bounds access.
 fn write_to_memory<R: EngineRenderer>(
-    caller: &mut Caller<'_, RuntimeState<R>>,
+    caller: &mut Caller<'_, StoreData<R>>,
     ptr: i32,
     data: &[u8],
 ) -> Result<()> {
@@ -116,36 +167,13 @@ fn write_to_memory<R: EngineRenderer>(
         .checked_add(data.len())
         .ok_or_else(|| format_err!("length overflow"))?;
 
-    let export = caller
-        .get_export("memory")
-        .ok_or_else(|| format_err!("missing memory export"))?;
-
-    if let Some(memory) = export.clone().into_memory() {
-        let mem = memory.data_mut(&mut *caller);
+    with_memory_data_mut(caller, |mem| {
         if end > mem.len() {
             return Err(format_err!("pointer out of bounds"));
         }
         mem[start..end].copy_from_slice(data);
-        return Ok(());
-    }
-
-    if let Some(shared) = export.into_shared_memory() {
-        let raw = shared.data();
-        if end > raw.len() {
-            return Err(format_err!("pointer out of bounds"));
-        }
-        // SAFETY: Single-threaded WASM execution — no concurrent writes during
-        // host function calls.
-        unsafe {
-            let dst = raw.as_ptr() as *mut u8;
-            std::ptr::copy_nonoverlapping(data.as_ptr(), dst.add(start), data.len());
-        }
-        return Ok(());
-    }
-
-    Err(format_err!(
-        "memory export is neither Memory nor SharedMemory"
-    ))
+        Ok(())
+    })
 }
 
 /// Reads a raw byte region from WASM linear memory.
@@ -153,7 +181,7 @@ fn write_to_memory<R: EngineRenderer>(
 /// Unlike `read_cstr`, this function *does* allocate a `Vec<u8>` because the
 /// caller needs owned bytes. However, the memory export is resolved only once.
 fn read_byte_vec<R: EngineRenderer>(
-    caller: &mut Caller<'_, RuntimeState<R>>,
+    caller: &mut Caller<'_, StoreData<R>>,
     ptr: i32,
     len: i32,
 ) -> Result<Vec<u8>> {
@@ -174,25 +202,25 @@ fn read_byte_vec<R: EngineRenderer>(
     })
 }
 
-pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeState<R>> {
-    let mut linker: Linker<RuntimeState<R>> = Linker::new(engine);
+pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<StoreData<R>> {
+    let mut linker: Linker<StoreData<R>> = Linker::new(engine);
     linker
         .func_wrap(
             "env",
             "__create_element",
-            |mut caller: Caller<'_, RuntimeState<R>>, name_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, name_ptr: i32| -> Result<i32> {
                 let name = match read_cstr(&mut caller, name_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                caller.data_mut().clear_error();
-                let id = caller.data_mut().create_element(name);
-                Ok(id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.clear_error();
+                    s.create_element(name) as i32
+                }))
             },
         )
         .expect("link __create_element");
@@ -201,7 +229,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__create_element_ns",
-            |mut caller: Caller<'_, RuntimeState<R>>, ns_ptr: i32, tag_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, ns_ptr: i32, tag_ptr: i32| -> Result<i32> {
                 // Reads a C-string from guest memory; on failure stores a
                 // MemoryError in the runtime state and early-returns with the
                 // stored error code. Kept as a closure-local macro so we don't
@@ -211,10 +239,9 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
                         match read_cstr(&mut caller, $ptr) {
                             Ok(value) => value,
                             Err(err) => {
-                                let code = caller
-                                    .data_mut()
-                                    .set_error(HostErrorCode::MemoryError, err.to_string());
-                                return Ok(code);
+                                return Ok(with_state_i32(&mut caller, |s| {
+                                    s.set_error(HostErrorCode::MemoryError, err.to_string())
+                                }));
                             }
                         }
                     };
@@ -222,9 +249,10 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
 
                 let ns = try_read_cstr!(ns_ptr);
                 let tag = try_read_cstr!(tag_ptr);
-                caller.data_mut().clear_error();
-                let id = caller.data_mut().create_element_ns(ns, tag);
-                Ok(id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.clear_error();
+                    s.create_element_ns(ns, tag) as i32
+                }))
             },
         )
         .expect("link __create_element_ns");
@@ -233,40 +261,42 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_namespace_uri",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              id: i32,
              buf_ptr: i32,
              buf_len: i32|
              -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data().get_namespace_uri(id as u32) {
-                    Ok(Some(ns)) => {
-                        let bytes = ns.as_bytes();
+                let Some(query) = with_state(&mut caller, |s| {
+                    s.get_namespace_uri(id as u32)
+                        .map(|opt| opt.map(|ns| ns.as_bytes().to_vec()))
+                }) else {
+                    return Ok(HostErrorCode::WrongThread as i32);
+                };
+                match query {
+                    Ok(Some(bytes)) => {
                         let needed = bytes.len() as i32;
                         if buf_len >= needed {
-                            if let Err(err) = write_to_memory(&mut caller, buf_ptr, bytes) {
-                                let code = caller
-                                    .data_mut()
-                                    .set_error(HostErrorCode::MemoryError, err.to_string());
-                                return Ok(code);
+                            if let Err(err) = write_to_memory(&mut caller, buf_ptr, &bytes) {
+                                return Ok(with_state_i32(&mut caller, |s| {
+                                    s.set_error(HostErrorCode::MemoryError, err.to_string())
+                                }));
                             }
                         }
-                        caller.data_mut().clear_error();
+                        with_state(&mut caller, |s| s.clear_error());
                         Ok(needed)
                     }
                     Ok(None) => {
-                        caller.data_mut().clear_error();
+                        with_state(&mut caller, |s| s.clear_error());
                         Ok(-1)
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
+                    Err(code) => Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(code, code.message())
+                    })),
                 }
             },
         )
@@ -276,19 +306,19 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__create_text_node",
-            |mut caller: Caller<'_, RuntimeState<R>>, text_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, text_ptr: i32| -> Result<i32> {
                 let text = match read_cstr(&mut caller, text_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                caller.data_mut().clear_error();
-                let id = caller.data_mut().create_text_node(text);
-                Ok(id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.clear_error();
+                    s.create_text_node(text) as i32
+                }))
             },
         )
         .expect("link __create_text_node");
@@ -297,46 +327,42 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__set_inline_style",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              id: i32,
              name_ptr: i32,
              value_ptr: i32|
              -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
                 let name = match read_cstr(&mut caller, name_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
                 let value = match read_cstr(&mut caller, value_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
 
-                match caller.data_mut().set_inline_style(id as u32, name, value) {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.set_inline_style(id as u32, name, value) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __set_inline_style");
@@ -345,23 +371,21 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__destroy_element",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data_mut().destroy_element(id as u32) {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.destroy_element(id as u32) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __destroy_element");
@@ -370,26 +394,21 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__append_element",
-            |mut caller: Caller<'_, RuntimeState<R>>, parent: i32, child: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, parent: i32, child: i32| -> Result<i32> {
                 if parent < 0 || child < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative element id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative element id")
+                    }));
                 }
-                match caller
-                    .data_mut()
-                    .append_element(parent as u32, child as u32)
-                {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.append_element(parent as u32, child as u32) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __append_element");
@@ -398,7 +417,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__append_elements",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              parent: i32,
              ptr: i32,
              len: i32|
@@ -407,30 +426,27 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
                 // This minimizes host calls and allows bulk validation in a single pass,
                 // which is faster than repeated per-element FFI transitions.
                 if parent < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidParent, "negative parent id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidParent, "negative parent id")
+                    }));
                 }
                 let children = match read_i32_slice(&mut caller, ptr, len) {
                     Ok(values) => values,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                match caller.data_mut().append_elements(parent as u32, &children) {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.append_elements(parent as u32, &children) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __append_elements");
@@ -439,19 +455,20 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__add_stylesheet",
-            |mut caller: Caller<'_, RuntimeState<R>>, css_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, css_ptr: i32| -> Result<i32> {
                 let css = match read_cstr(&mut caller, css_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                caller.data_mut().clear_error();
-                caller.data_mut().add_stylesheet(css);
-                Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.clear_error();
+                    s.add_stylesheet(css);
+                    0
+                }))
             },
         )
         .expect("link __add_stylesheet");
@@ -460,46 +477,42 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__set_attribute",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              id: i32,
              name_ptr: i32,
              value_ptr: i32|
              -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
                 let name = match read_cstr(&mut caller, name_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
                 let value = match read_cstr(&mut caller, value_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
 
-                match caller.data_mut().set_attribute(id as u32, name, value) {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.set_attribute(id as u32, name, value) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __set_attribute");
@@ -508,10 +521,12 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__commit",
-            |mut caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                caller.data_mut().commit();
-                caller.data_mut().clear_error();
-                Ok(0)
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.commit();
+                    s.clear_error();
+                    0
+                }))
             },
         )
         .expect("link __commit");
@@ -524,27 +539,25 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_first_child",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data().get_first_child(id as u32) {
-                    Ok(Some(child_id)) => {
-                        caller.data_mut().clear_error();
-                        Ok(child_id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.get_first_child(id as u32) {
+                        Ok(Some(child_id)) => {
+                            s.clear_error();
+                            child_id as i32
+                        }
+                        Ok(None) => {
+                            s.clear_error();
+                            -1
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Ok(None) => {
-                        caller.data_mut().clear_error();
-                        Ok(-1)
-                    }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __get_first_child");
@@ -553,27 +566,25 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_last_child",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data().get_last_child(id as u32) {
-                    Ok(Some(child_id)) => {
-                        caller.data_mut().clear_error();
-                        Ok(child_id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.get_last_child(id as u32) {
+                        Ok(Some(child_id)) => {
+                            s.clear_error();
+                            child_id as i32
+                        }
+                        Ok(None) => {
+                            s.clear_error();
+                            -1
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Ok(None) => {
-                        caller.data_mut().clear_error();
-                        Ok(-1)
-                    }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __get_last_child");
@@ -582,27 +593,25 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_next_sibling",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data().get_next_sibling(id as u32) {
-                    Ok(Some(sibling_id)) => {
-                        caller.data_mut().clear_error();
-                        Ok(sibling_id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.get_next_sibling(id as u32) {
+                        Ok(Some(sibling_id)) => {
+                            s.clear_error();
+                            sibling_id as i32
+                        }
+                        Ok(None) => {
+                            s.clear_error();
+                            -1
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Ok(None) => {
-                        caller.data_mut().clear_error();
-                        Ok(-1)
-                    }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __get_next_sibling");
@@ -611,27 +620,25 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_previous_sibling",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data().get_previous_sibling(id as u32) {
-                    Ok(Some(sibling_id)) => {
-                        caller.data_mut().clear_error();
-                        Ok(sibling_id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.get_previous_sibling(id as u32) {
+                        Ok(Some(sibling_id)) => {
+                            s.clear_error();
+                            sibling_id as i32
+                        }
+                        Ok(None) => {
+                            s.clear_error();
+                            -1
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Ok(None) => {
-                        caller.data_mut().clear_error();
-                        Ok(-1)
-                    }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __get_previous_sibling");
@@ -640,27 +647,25 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_parent_element",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data().get_parent_element(id as u32) {
-                    Ok(Some(parent_id)) => {
-                        caller.data_mut().clear_error();
-                        Ok(parent_id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.get_parent_element(id as u32) {
+                        Ok(Some(parent_id)) => {
+                            s.clear_error();
+                            parent_id as i32
+                        }
+                        Ok(None) => {
+                            s.clear_error();
+                            -1
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Ok(None) => {
-                        caller.data_mut().clear_error();
-                        Ok(-1)
-                    }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __get_parent_element");
@@ -669,27 +674,25 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_parent_node",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data().get_parent_node(id as u32) {
-                    Ok(Some(parent_id)) => {
-                        caller.data_mut().clear_error();
-                        Ok(parent_id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.get_parent_node(id as u32) {
+                        Ok(Some(parent_id)) => {
+                            s.clear_error();
+                            parent_id as i32
+                        }
+                        Ok(None) => {
+                            s.clear_error();
+                            -1
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Ok(None) => {
-                        caller.data_mut().clear_error();
-                        Ok(-1)
-                    }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __get_parent_node");
@@ -698,23 +701,21 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__is_connected",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data().is_connected(id as u32) {
-                    Ok(connected) => {
-                        caller.data_mut().clear_error();
-                        Ok(if connected { 1 } else { 0 })
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.is_connected(id as u32) {
+                        Ok(connected) => {
+                            s.clear_error();
+                            if connected { 1 } else { 0 }
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __is_connected");
@@ -723,32 +724,29 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__has_attribute",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32, name_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32, name_ptr: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
                 let name = match read_cstr(&mut caller, name_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                match caller.data().has_attribute(id as u32, &name) {
-                    Ok(has) => {
-                        caller.data_mut().clear_error();
-                        Ok(if has { 1 } else { 0 })
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.has_attribute(id as u32, &name) {
+                        Ok(has) => {
+                            s.clear_error();
+                            if has { 1 } else { 0 }
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __has_attribute");
@@ -757,50 +755,51 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_attribute",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              id: i32,
              name_ptr: i32,
              buf_ptr: i32,
              buf_len: i32|
              -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
                 let name = match read_cstr(&mut caller, name_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                match caller.data().get_attribute(id as u32, &name) {
-                    Ok(Some(value)) => {
-                        let bytes = value.as_bytes();
+                let Some(query) = with_state(&mut caller, |s| {
+                    s.get_attribute(id as u32, &name)
+                        .map(|opt| opt.map(|v| v.as_bytes().to_vec()))
+                }) else {
+                    return Ok(HostErrorCode::WrongThread as i32);
+                };
+                match query {
+                    Ok(Some(bytes)) => {
                         let needed = bytes.len() as i32;
                         if buf_len >= needed {
-                            if let Err(err) = write_to_memory(&mut caller, buf_ptr, bytes) {
-                                let code = caller
-                                    .data_mut()
-                                    .set_error(HostErrorCode::MemoryError, err.to_string());
-                                return Ok(code);
+                            if let Err(err) = write_to_memory(&mut caller, buf_ptr, &bytes) {
+                                return Ok(with_state_i32(&mut caller, |s| {
+                                    s.set_error(HostErrorCode::MemoryError, err.to_string())
+                                }));
                             }
                         }
-                        caller.data_mut().clear_error();
+                        with_state(&mut caller, |s| s.clear_error());
                         Ok(needed)
                     }
                     Ok(None) => {
-                        caller.data_mut().clear_error();
+                        with_state(&mut caller, |s| s.clear_error());
                         Ok(-1)
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
+                    Err(code) => Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(code, code.message())
+                    })),
                 }
             },
         )
@@ -810,32 +809,29 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__remove_attribute",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32, name_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32, name_ptr: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
                 let name = match read_cstr(&mut caller, name_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                match caller.data_mut().remove_attribute(id as u32, &name) {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.remove_attribute(id as u32, &name) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __remove_attribute");
@@ -844,23 +840,21 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__remove_child",
-            |mut caller: Caller<'_, RuntimeState<R>>, parent: i32, child: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, parent: i32, child: i32| -> Result<i32> {
                 if parent < 0 || child < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative element id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative element id")
+                    }));
                 }
-                match caller.data_mut().remove_child(parent as u32, child as u32) {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.remove_child(parent as u32, child as u32) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __remove_child");
@@ -869,31 +863,29 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__replace_child",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              parent: i32,
              new_child: i32,
              old_child: i32|
              -> Result<i32> {
                 if parent < 0 || new_child < 0 || old_child < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative element id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative element id")
+                    }));
                 }
-                match caller.data_mut().replace_child(
-                    parent as u32,
-                    new_child as u32,
-                    old_child as u32,
-                ) {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.replace_child(
+                        parent as u32,
+                        new_child as u32,
+                        old_child as u32,
+                    ) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __replace_child");
@@ -902,42 +894,39 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__insert_before",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              parent: i32,
              new_child: i32,
              ref_child: i32|
              -> Result<i32> {
                 if parent < 0 || new_child < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative element id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative element id")
+                    }));
                 }
                 // ref_child == -1 means "append at end" (no reference child).
                 let ref_child_opt = if ref_child == -1 {
                     None
                 } else if ref_child < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative ref_child id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative ref_child id")
+                    }));
                 } else {
                     Some(ref_child as u32)
                 };
-                match caller.data_mut().insert_before(
-                    parent as u32,
-                    new_child as u32,
-                    ref_child_opt,
-                ) {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.insert_before(
+                        parent as u32,
+                        new_child as u32,
+                        ref_child_opt,
+                    ) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __insert_before");
@@ -946,23 +935,21 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__clone_node",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32, deep: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32, deep: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data_mut().clone_node(id as u32, deep != 0) {
-                    Ok(new_id) => {
-                        caller.data_mut().clear_error();
-                        Ok(new_id as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.clone_node(id as u32, deep != 0) {
+                        Ok(new_id) => {
+                            s.clear_error();
+                            new_id as i32
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __clone_node");
@@ -971,32 +958,29 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__set_node_value",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32, value_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32, value_ptr: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
                 let value = match read_cstr(&mut caller, value_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                match caller.data_mut().set_node_value(id as u32, value) {
-                    Ok(()) => {
-                        caller.data_mut().clear_error();
-                        Ok(0)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.set_node_value(id as u32, value) {
+                        Ok(()) => {
+                            s.clear_error();
+                            0
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __set_node_value");
@@ -1005,23 +989,21 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_node_type",
-            |mut caller: Caller<'_, RuntimeState<R>>, id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, id: i32| -> Result<i32> {
                 if id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative node id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative node id")
+                    }));
                 }
-                match caller.data().get_node_type(id as u32) {
-                    Ok(type_code) => {
-                        caller.data_mut().clear_error();
-                        Ok(type_code as i32)
+                Ok(with_state_i32(&mut caller, |s| {
+                    match s.get_node_type(id as u32) {
+                        Ok(type_code) => {
+                            s.clear_error();
+                            type_code as i32
+                        }
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
-                    }
-                }
+                }))
             },
         )
         .expect("link __get_node_type");
@@ -1030,18 +1012,20 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "paws",
             "paws_add_parsed_stylesheet",
-            |mut caller: Caller<'_, RuntimeState<R>>, ptr: i32, len: i32| -> Result<()> {
+            |mut caller: Caller<'_, StoreData<R>>, ptr: i32, len: i32| -> Result<()> {
                 let bytes = match read_byte_vec(&mut caller, ptr, len) {
                     Ok(bytes) => bytes,
                     Err(err) => {
-                        let _ = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
+                        let _ = with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        });
                         return Ok(());
                     }
                 };
-                caller.data_mut().clear_error();
-                caller.data_mut().add_parsed_stylesheet(&bytes);
+                let _ = with_state(&mut caller, |s| {
+                    s.clear_error();
+                    s.add_parsed_stylesheet(&bytes);
+                });
                 Ok(())
             },
         )
@@ -1053,41 +1037,41 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__add_event_listener",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              target_id: i32,
              type_ptr: i32,
              callback_id: i32,
              options_flags: i32|
              -> Result<i32> {
                 if target_id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidEventTarget, "negative target id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidEventTarget, "negative target id")
+                    }));
                 }
                 let event_type = match read_cstr(&mut caller, type_ptr) {
                     Ok(v) => v,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                caller.data_mut().clear_error();
                 let options = engine::events::ListenerOptions::from_bits(options_flags as u32);
-                match caller.data_mut().add_event_listener(
-                    target_id as u32,
-                    stylo_atoms::Atom::from(event_type),
-                    callback_id as u32,
-                    options,
-                ) {
-                    Ok(()) => Ok(0),
-                    Err(code) => {
-                        caller.data_mut().set_error(code, code.message());
-                        Ok(code.as_i32())
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.clear_error();
+                    match s.add_event_listener(
+                        target_id as u32,
+                        stylo_atoms::Atom::from(event_type),
+                        callback_id as u32,
+                        options,
+                    ) {
+                        Ok(()) => 0,
+                        Err(code) => {
+                            s.set_error(code, code.message());
+                            code.as_i32()
+                        }
                     }
-                }
+                }))
             },
         )
         .expect("link __add_event_listener");
@@ -1096,41 +1080,41 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__remove_event_listener",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              target_id: i32,
              type_ptr: i32,
              callback_id: i32,
              options_flags: i32|
              -> Result<i32> {
                 if target_id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidEventTarget, "negative target id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidEventTarget, "negative target id")
+                    }));
                 }
                 let event_type = match read_cstr(&mut caller, type_ptr) {
                     Ok(v) => v,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                caller.data_mut().clear_error();
                 let capture = (options_flags as u32) & 0b001 != 0;
-                match caller.data_mut().remove_event_listener(
-                    target_id as u32,
-                    stylo_atoms::Atom::from(event_type),
-                    callback_id as u32,
-                    capture,
-                ) {
-                    Ok(()) => Ok(0),
-                    Err(code) => {
-                        caller.data_mut().set_error(code, code.message());
-                        Ok(code.as_i32())
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.clear_error();
+                    match s.remove_event_listener(
+                        target_id as u32,
+                        stylo_atoms::Atom::from(event_type),
+                        callback_id as u32,
+                        capture,
+                    ) {
+                        Ok(()) => 0,
+                        Err(code) => {
+                            s.set_error(code, code.message());
+                            code.as_i32()
+                        }
                     }
-                }
+                }))
             },
         )
         .expect("link __remove_event_listener");
@@ -1139,7 +1123,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__dispatch_event",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              target_id: i32,
              type_ptr: i32,
              bubbles: i32,
@@ -1147,37 +1131,38 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
              composed: i32|
              -> Result<i32> {
                 if target_id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidEventTarget, "negative target id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidEventTarget, "negative target id")
+                    }));
                 }
 
                 let event_type = match read_cstr(&mut caller, type_ptr) {
                     Ok(v) => v,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
 
-                // Check for re-entrant dispatch
-                if caller
-                    .data()
-                    .current_event
-                    .as_ref()
-                    .is_some_and(|e| e.dispatch_flag)
-                {
-                    let code = caller.data_mut().set_error(
-                        HostErrorCode::EventAlreadyDispatching,
-                        HostErrorCode::EventAlreadyDispatching.message(),
-                    );
-                    return Ok(code);
+                // Check for re-entrant dispatch; on success clear any error.
+                let precheck = with_state_i32(&mut caller, |s| {
+                    if s.current_event
+                        .as_ref()
+                        .is_some_and(|e| e.dispatch_flag)
+                    {
+                        s.set_error(
+                            HostErrorCode::EventAlreadyDispatching,
+                            HostErrorCode::EventAlreadyDispatching.message(),
+                        )
+                    } else {
+                        s.clear_error();
+                        0
+                    }
+                });
+                if precheck != 0 {
+                    return Ok(precheck);
                 }
-
-                caller.data_mut().clear_error();
 
                 dispatch_event_wasm(
                     &mut caller,
@@ -1197,20 +1182,17 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_stop_propagation",
-            |mut caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data_mut().current_event.as_mut() {
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_mut() {
                     Some(ev) => {
                         ev.stop_propagation_flag = true;
-                        Ok(0)
+                        0
                     }
-                    None => {
-                        let code = caller.data_mut().set_error(
-                            HostErrorCode::NoActiveEvent,
-                            HostErrorCode::NoActiveEvent.message(),
-                        );
-                        Ok(code)
-                    }
-                }
+                    None => s.set_error(
+                        HostErrorCode::NoActiveEvent,
+                        HostErrorCode::NoActiveEvent.message(),
+                    ),
+                }))
             },
         )
         .expect("link __event_stop_propagation");
@@ -1219,21 +1201,18 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_stop_immediate_propagation",
-            |mut caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data_mut().current_event.as_mut() {
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_mut() {
                     Some(ev) => {
                         ev.stop_propagation_flag = true;
                         ev.stop_immediate_propagation_flag = true;
-                        Ok(0)
+                        0
                     }
-                    None => {
-                        let code = caller.data_mut().set_error(
-                            HostErrorCode::NoActiveEvent,
-                            HostErrorCode::NoActiveEvent.message(),
-                        );
-                        Ok(code)
-                    }
-                }
+                    None => s.set_error(
+                        HostErrorCode::NoActiveEvent,
+                        HostErrorCode::NoActiveEvent.message(),
+                    ),
+                }))
             },
         )
         .expect("link __event_stop_immediate_propagation");
@@ -1242,22 +1221,19 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_prevent_default",
-            |mut caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data_mut().current_event.as_mut() {
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_mut() {
                     Some(ev) => {
                         if ev.cancelable && !ev.in_passive_listener {
                             ev.canceled_flag = true;
                         }
-                        Ok(0)
+                        0
                     }
-                    None => {
-                        let code = caller.data_mut().set_error(
-                            HostErrorCode::NoActiveEvent,
-                            HostErrorCode::NoActiveEvent.message(),
-                        );
-                        Ok(code)
-                    }
-                }
+                    None => s.set_error(
+                        HostErrorCode::NoActiveEvent,
+                        HostErrorCode::NoActiveEvent.message(),
+                    ),
+                }))
             },
         )
         .expect("link __event_prevent_default");
@@ -1268,11 +1244,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_target",
-            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data().current_event.as_ref() {
-                    Some(ev) => Ok(ev.target.map_or(-1, |id| u64::from(id) as i32)),
-                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
-                }
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
+                    Some(ev) => ev.target.map_or(-1, |id| u64::from(id) as i32),
+                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                }))
             },
         )
         .expect("link __event_target");
@@ -1281,11 +1257,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_current_target",
-            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data().current_event.as_ref() {
-                    Some(ev) => Ok(ev.current_target.map_or(-1, |id| u64::from(id) as i32)),
-                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
-                }
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
+                    Some(ev) => ev.current_target.map_or(-1, |id| u64::from(id) as i32),
+                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                }))
             },
         )
         .expect("link __event_current_target");
@@ -1294,11 +1270,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_phase",
-            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data().current_event.as_ref() {
-                    Some(ev) => Ok(ev.event_phase as i32),
-                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
-                }
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
+                    Some(ev) => ev.event_phase as i32,
+                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                }))
             },
         )
         .expect("link __event_phase");
@@ -1307,11 +1283,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_bubbles",
-            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data().current_event.as_ref() {
-                    Some(ev) => Ok(ev.bubbles as i32),
-                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
-                }
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
+                    Some(ev) => ev.bubbles as i32,
+                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                }))
             },
         )
         .expect("link __event_bubbles");
@@ -1320,11 +1296,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_cancelable",
-            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data().current_event.as_ref() {
-                    Some(ev) => Ok(ev.cancelable as i32),
-                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
-                }
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
+                    Some(ev) => ev.cancelable as i32,
+                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                }))
             },
         )
         .expect("link __event_cancelable");
@@ -1333,11 +1309,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_default_prevented",
-            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data().current_event.as_ref() {
-                    Some(ev) => Ok(ev.default_prevented() as i32),
-                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
-                }
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
+                    Some(ev) => ev.default_prevented() as i32,
+                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                }))
             },
         )
         .expect("link __event_default_prevented");
@@ -1346,11 +1322,11 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_composed",
-            |caller: Caller<'_, RuntimeState<R>>| -> Result<i32> {
-                match caller.data().current_event.as_ref() {
-                    Some(ev) => Ok(ev.composed as i32),
-                    None => Ok(HostErrorCode::NoActiveEvent.as_i32()),
-                }
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<i32> {
+                Ok(with_state_i32(&mut caller, |s| match s.current_event.as_ref() {
+                    Some(ev) => ev.composed as i32,
+                    None => HostErrorCode::NoActiveEvent.as_i32(),
+                }))
             },
         )
         .expect("link __event_composed");
@@ -1359,11 +1335,12 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__event_timestamp",
-            |caller: Caller<'_, RuntimeState<R>>| -> Result<f64> {
-                match caller.data().current_event.as_ref() {
-                    Some(ev) => Ok(ev.time_stamp),
-                    None => Ok(-1.0),
-                }
+            |mut caller: Caller<'_, StoreData<R>>| -> Result<f64> {
+                Ok(with_state(&mut caller, |s| match s.current_event.as_ref() {
+                    Some(ev) => ev.time_stamp,
+                    None => -1.0,
+                })
+                .unwrap_or(-1.0))
             },
         )
         .expect("link __event_timestamp");
@@ -1374,30 +1351,27 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__attach_shadow",
-            |mut caller: Caller<'_, RuntimeState<R>>, host_id: i32, mode_ptr: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, host_id: i32, mode_ptr: i32| -> Result<i32> {
                 if host_id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidParent, "negative host id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidParent, "negative host id")
+                    }));
                 }
                 let mode = match read_cstr(&mut caller, mode_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                caller.data_mut().clear_error();
-                match caller.data_mut().attach_shadow(host_id as u32, &mode) {
-                    Ok(id) => Ok(id as i32),
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.clear_error();
+                    match s.attach_shadow(host_id as u32, &mode) {
+                        Ok(id) => id as i32,
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                }
+                }))
             },
         )
         .expect("link __attach_shadow");
@@ -1406,18 +1380,19 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__get_shadow_root",
-            |mut caller: Caller<'_, RuntimeState<R>>, host_id: i32| -> Result<i32> {
+            |mut caller: Caller<'_, StoreData<R>>, host_id: i32| -> Result<i32> {
                 if host_id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative id")
+                    }));
                 }
-                caller.data_mut().clear_error();
-                match caller.data().get_shadow_root(host_id as u32) {
-                    Some(id) => Ok(id as i32),
-                    None => Ok(-1),
-                }
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.clear_error();
+                    match s.get_shadow_root(host_id as u32) {
+                        Some(id) => id as i32,
+                        None => -1,
+                    }
+                }))
             },
         )
         .expect("link __get_shadow_root");
@@ -1426,36 +1401,30 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "env",
             "__add_shadow_stylesheet",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              shadow_root_id: i32,
              css_ptr: i32|
              -> Result<i32> {
                 if shadow_root_id < 0 {
-                    let code = caller
-                        .data_mut()
-                        .set_error(HostErrorCode::InvalidChild, "negative shadow root id");
-                    return Ok(code);
+                    return Ok(with_state_i32(&mut caller, |s| {
+                        s.set_error(HostErrorCode::InvalidChild, "negative shadow root id")
+                    }));
                 }
                 let css = match read_cstr(&mut caller, css_ptr) {
                     Ok(value) => value,
                     Err(err) => {
-                        let code = caller
-                            .data_mut()
-                            .set_error(HostErrorCode::MemoryError, err.to_string());
-                        return Ok(code);
+                        return Ok(with_state_i32(&mut caller, |s| {
+                            s.set_error(HostErrorCode::MemoryError, err.to_string())
+                        }));
                     }
                 };
-                caller.data_mut().clear_error();
-                match caller
-                    .data_mut()
-                    .add_shadow_stylesheet(shadow_root_id as u32, css)
-                {
-                    Ok(()) => Ok(0),
-                    Err(code) => {
-                        let err_code = caller.data_mut().set_error(code, code.message());
-                        Ok(err_code)
+                Ok(with_state_i32(&mut caller, |s| {
+                    s.clear_error();
+                    match s.add_shadow_stylesheet(shadow_root_id as u32, css) {
+                        Ok(()) => 0,
+                        Err(code) => s.set_error(code, code.message()),
                     }
-                }
+                }))
             },
         )
         .expect("link __add_shadow_stylesheet");
@@ -1470,19 +1439,12 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "wasi_snapshot_preview1",
             "random_get",
-            |mut caller: Caller<'_, RuntimeState<R>>, buf_ptr: i32, buf_len: i32| -> Result<i32> {
-                with_memory_data(&mut caller, |data| {
+            |mut caller: Caller<'_, StoreData<R>>, buf_ptr: i32, buf_len: i32| -> Result<i32> {
+                with_memory_data_mut(&mut caller, |data| {
                     let start = buf_ptr as usize;
                     let end = start + buf_len as usize;
                     if end <= data.len() {
-                        // Deterministic fill — not crypto-safe, sufficient for
-                        // hash seeding.
-                        // SAFETY: with_memory_data returns &[u8]; we need &mut.
-                        // Single-threaded WASM — no concurrent writes.
-                        let slice = unsafe {
-                            std::slice::from_raw_parts_mut(data.as_ptr() as *mut u8, data.len())
-                        };
-                        for (i, byte) in slice[start..end].iter_mut().enumerate() {
+                        for (i, byte) in data[start..end].iter_mut().enumerate() {
                             *byte = (i.wrapping_mul(0x9E37_79B9) >> 24) as u8;
                         }
                     }
@@ -1497,7 +1459,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "wasi_snapshot_preview1",
             "environ_sizes_get",
-            |_caller: Caller<'_, RuntimeState<R>>,
+            |_caller: Caller<'_, StoreData<R>>,
              _count_ptr: i32,
              _buf_size_ptr: i32|
              -> Result<i32> { Ok(0) },
@@ -1509,7 +1471,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "wasi_snapshot_preview1",
             "environ_get",
-            |_caller: Caller<'_, RuntimeState<R>>,
+            |_caller: Caller<'_, StoreData<R>>,
              _environ: i32,
              _environ_buf: i32|
              -> Result<i32> { Ok(0) },
@@ -1521,7 +1483,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "wasi_snapshot_preview1",
             "clock_time_get",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              _clock_id: i32,
              _precision: i64,
              time_ptr: i32|
@@ -1530,14 +1492,10 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_nanos() as u64;
-                with_memory_data(&mut caller, |data| {
+                with_memory_data_mut(&mut caller, |data| {
                     let offset = time_ptr as usize;
                     if offset + 8 <= data.len() {
-                        // SAFETY: single-threaded WASM, no concurrent writes.
-                        let slice = unsafe {
-                            std::slice::from_raw_parts_mut(data.as_ptr() as *mut u8, data.len())
-                        };
-                        slice[offset..offset + 8].copy_from_slice(&nanos.to_le_bytes());
+                        data[offset..offset + 8].copy_from_slice(&nanos.to_le_bytes());
                     }
                     Ok(0i32)
                 })
@@ -1550,14 +1508,14 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "wasi_snapshot_preview1",
             "fd_write",
-            |mut caller: Caller<'_, RuntimeState<R>>,
+            |mut caller: Caller<'_, StoreData<R>>,
              fd: i32,
              iovs_ptr: i32,
              iovs_len: i32,
              nwritten_ptr: i32|
              -> Result<i32> {
                 let mut total: u32 = 0;
-                with_memory_data(&mut caller, |data| {
+                with_memory_data_mut(&mut caller, |data| {
                     for i in 0..iovs_len as usize {
                         let iov = iovs_ptr as usize + i * 8;
                         if iov + 8 > data.len() {
@@ -1585,11 +1543,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
                     }
                     let np = nwritten_ptr as usize;
                     if np + 4 <= data.len() {
-                        // SAFETY: single-threaded WASM, no concurrent writes.
-                        let slice = unsafe {
-                            std::slice::from_raw_parts_mut(data.as_ptr() as *mut u8, data.len())
-                        };
-                        slice[np..np + 4].copy_from_slice(&total.to_le_bytes());
+                        data[np..np + 4].copy_from_slice(&total.to_le_bytes());
                     }
                     Ok(0i32)
                 })
@@ -1602,7 +1556,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "wasi_snapshot_preview1",
             "proc_exit",
-            |_caller: Caller<'_, RuntimeState<R>>, code: i32| -> Result<()> {
+            |_caller: Caller<'_, StoreData<R>>, code: i32| -> Result<()> {
                 Err(format_err!("WASM guest called proc_exit({code})"))
             },
         )
@@ -1613,7 +1567,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
         .func_wrap(
             "wasi_snapshot_preview1",
             "sched_yield",
-            |_caller: Caller<'_, RuntimeState<R>>| -> Result<i32> { Ok(0) },
+            |_caller: Caller<'_, StoreData<R>>| -> Result<i32> { Ok(0) },
         )
         .expect("link wasi sched_yield");
 
@@ -1627,7 +1581,7 @@ pub fn build_linker<R: EngineRenderer>(engine: &WasmEngine) -> Linker<RuntimeSta
 /// `Caller::data()` / `Caller::data_mut()` borrow must be released before
 /// calling into WASM (which re-enters host functions).
 fn dispatch_event_wasm<R: EngineRenderer>(
-    caller: &mut Caller<'_, RuntimeState<R>>,
+    caller: &mut Caller<'_, StoreData<R>>,
     target_id: u32,
     event_type: stylo_atoms::Atom,
     bubbles: bool,
@@ -1641,24 +1595,36 @@ fn dispatch_event_wasm<R: EngineRenderer>(
     let target_nid = taffy::NodeId::from(target_id as u64);
 
     // 1. Build event path (borrow doc, then release)
-    let path = match build_event_path(&caller.data().doc, target_nid) {
+    let Some(path_opt) =
+        with_state(caller, |s| build_event_path(&s.doc, target_nid))
+    else {
+        return Ok(HostErrorCode::WrongThread as i32);
+    };
+    let path = match path_opt {
         Some(p) => p,
         None => {
-            let code = caller.data_mut().set_error(
-                HostErrorCode::InvalidEventTarget,
-                "target not found in tree",
-            );
-            return Ok(code);
+            return Ok(with_state_i32(caller, |s| {
+                s.set_error(
+                    HostErrorCode::InvalidEventTarget,
+                    "target not found in tree",
+                )
+            }));
         }
     };
 
     let target_index = path.len() - 1;
 
     // 2. Initialize event and store in RuntimeState
-    let mut event = Event::new(event_type.clone(), bubbles, cancelable, composed);
-    event.target = Some(target_nid);
-    event.dispatch_flag = true;
-    caller.data_mut().current_event = Some(event);
+    if with_state(caller, |s| {
+        let mut event = Event::new(event_type.clone(), bubbles, cancelable, composed);
+        event.target = Some(target_nid);
+        event.dispatch_flag = true;
+        s.current_event = Some(event);
+    })
+    .is_none()
+    {
+        return Ok(HostErrorCode::WrongThread as i32);
+    }
 
     // 3. Get the WASM export for listener invocation
     let invoke_fn = caller
@@ -1667,18 +1633,22 @@ fn dispatch_event_wasm<R: EngineRenderer>(
 
     // 4. Capture phase: path[0..target_index]
     for &node_id in &path[..target_index] {
-        {
-            let ev = caller.data().current_event.as_ref().unwrap();
-            if ev.stop_propagation_flag {
-                break;
-            }
+        let stop = with_state(caller, |s| {
+            s.current_event
+                .as_ref()
+                .map(|e| e.stop_propagation_flag)
+                .unwrap_or(false)
+        })
+        .unwrap_or(true);
+        if stop {
+            break;
         }
 
-        {
-            let ev = caller.data_mut().current_event.as_mut().unwrap();
+        with_state(caller, |s| {
+            let ev = s.current_event.as_mut().unwrap();
             ev.event_phase = EventPhase::Capturing;
             ev.current_target = Some(node_id);
-        }
+        });
 
         dispatch_listeners_on_node(
             caller,
@@ -1690,39 +1660,47 @@ fn dispatch_event_wasm<R: EngineRenderer>(
     }
 
     // 5. At-target phase
-    {
-        let ev = caller.data().current_event.as_ref().unwrap();
-        if !ev.stop_propagation_flag {
-            {
-                let ev = caller.data_mut().current_event.as_mut().unwrap();
-                ev.event_phase = EventPhase::AtTarget;
-                ev.current_target = Some(target_nid);
-            }
-            dispatch_listeners_on_node(
-                caller,
-                target_nid,
-                &event_type,
-                EventPhase::AtTarget,
-                invoke_fn.as_ref(),
-            )?;
-        }
+    let stop_at_target = with_state(caller, |s| {
+        s.current_event
+            .as_ref()
+            .map(|e| e.stop_propagation_flag)
+            .unwrap_or(false)
+    })
+    .unwrap_or(true);
+    if !stop_at_target {
+        with_state(caller, |s| {
+            let ev = s.current_event.as_mut().unwrap();
+            ev.event_phase = EventPhase::AtTarget;
+            ev.current_target = Some(target_nid);
+        });
+        dispatch_listeners_on_node(
+            caller,
+            target_nid,
+            &event_type,
+            EventPhase::AtTarget,
+            invoke_fn.as_ref(),
+        )?;
     }
 
     // 6. Bubble phase (only if bubbles)
     if bubbles {
         for i in (0..target_index).rev() {
-            {
-                let ev = caller.data().current_event.as_ref().unwrap();
-                if ev.stop_propagation_flag {
-                    break;
-                }
+            let stop = with_state(caller, |s| {
+                s.current_event
+                    .as_ref()
+                    .map(|e| e.stop_propagation_flag)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(true);
+            if stop {
+                break;
             }
 
-            {
-                let ev = caller.data_mut().current_event.as_mut().unwrap();
+            with_state(caller, |s| {
+                let ev = s.current_event.as_mut().unwrap();
                 ev.event_phase = EventPhase::Bubbling;
                 ev.current_target = Some(path[i]);
-            }
+            });
 
             dispatch_listeners_on_node(
                 caller,
@@ -1735,21 +1713,25 @@ fn dispatch_event_wasm<R: EngineRenderer>(
     }
 
     // 7. Finalize
-    let canceled = {
-        let ev = caller.data_mut().current_event.as_mut().unwrap();
-        ev.dispatch_flag = false;
-        ev.event_phase = EventPhase::None;
-        ev.current_target = None;
-        ev.default_prevented()
-    };
-    caller.data_mut().current_event = None;
+    let canceled = with_state(caller, |s| {
+        let canceled = {
+            let ev = s.current_event.as_mut().unwrap();
+            ev.dispatch_flag = false;
+            ev.event_phase = EventPhase::None;
+            ev.current_target = None;
+            ev.default_prevented()
+        };
+        s.current_event = None;
 
-    // 8. Clean up removed listeners
-    for &node_id in &path {
-        if let Some(node) = caller.data_mut().doc.get_node_mut(node_id) {
-            node.event_listeners.retain(|l| !l.removed);
+        // 8. Clean up removed listeners
+        for &node_id in &path {
+            if let Some(node) = s.doc.get_node_mut(node_id) {
+                node.event_listeners.retain(|l| !l.removed);
+            }
         }
-    }
+        canceled
+    })
+    .unwrap_or(false);
 
     // Return 1 if NOT canceled, 0 if canceled (matches W3C dispatchEvent return)
     Ok(if canceled { 0 } else { 1 })
@@ -1757,7 +1739,7 @@ fn dispatch_event_wasm<R: EngineRenderer>(
 
 /// Invokes matching listeners on a single node during WASM dispatch.
 fn dispatch_listeners_on_node<R: EngineRenderer>(
-    caller: &mut Caller<'_, RuntimeState<R>>,
+    caller: &mut Caller<'_, StoreData<R>>,
     node_id: taffy::NodeId,
     event_type: &stylo_atoms::Atom,
     phase: engine::events::event::EventPhase,
@@ -1766,35 +1748,38 @@ fn dispatch_listeners_on_node<R: EngineRenderer>(
     use engine::events::dispatch::collect_matching_listeners;
 
     // Snapshot listeners (borrow released after)
-    let listeners = collect_matching_listeners(&caller.data().doc, node_id, event_type, phase);
+    let Some(listeners) = with_state(caller, |s| {
+        collect_matching_listeners(&s.doc, node_id, event_type, phase)
+    }) else {
+        return Ok(());
+    };
 
     for snap in &listeners {
-        // Re-check removed flag
-        {
-            let active = caller
-                .data()
+        // Re-check removed flag; possibly mark once listeners for removal;
+        // set passive flag — all in one lock.
+        let proceed = with_state(caller, |s| {
+            let active = s
                 .doc
                 .get_node(node_id)
                 .and_then(|n| n.event_listeners.get(snap.index))
                 .is_some_and(|l| !l.removed);
             if !active {
-                continue;
+                return false;
             }
-        }
-
-        // Mark once listeners for removal
-        if snap.once {
-            if let Some(node) = caller.data_mut().doc.get_node_mut(node_id) {
-                if let Some(entry) = node.event_listeners.get_mut(snap.index) {
-                    entry.removed = true;
+            if snap.once {
+                if let Some(node) = s.doc.get_node_mut(node_id) {
+                    if let Some(entry) = node.event_listeners.get_mut(snap.index) {
+                        entry.removed = true;
+                    }
                 }
             }
-        }
-
-        // Set passive flag
-        {
-            let ev = caller.data_mut().current_event.as_mut().unwrap();
+            let ev = s.current_event.as_mut().unwrap();
             ev.in_passive_listener = snap.passive;
+            true
+        })
+        .unwrap_or(false);
+        if !proceed {
+            continue;
         }
 
         // Invoke the WASM listener callback (if the export exists)
@@ -1807,18 +1792,15 @@ fn dispatch_listeners_on_node<R: EngineRenderer>(
             )?;
         }
 
-        // Clear passive flag
-        {
-            let ev = caller.data_mut().current_event.as_mut().unwrap();
+        // Clear passive flag and check stop-immediate in one lock.
+        let stop = with_state(caller, |s| {
+            let ev = s.current_event.as_mut().unwrap();
             ev.in_passive_listener = false;
-        }
-
-        // Check stop immediate propagation
-        {
-            let ev = caller.data().current_event.as_ref().unwrap();
-            if ev.stop_immediate_propagation_flag {
-                break;
-            }
+            ev.stop_immediate_propagation_flag
+        })
+        .unwrap_or(true);
+        if stop {
+            break;
         }
     }
 

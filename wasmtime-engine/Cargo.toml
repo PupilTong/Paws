@@ -17,6 +17,13 @@ wasm-coverage = []
 engine = { path = "../engine" }
 stylo_atoms = "0.13"
 taffy = { version = "0.9.2", default-features = false }
+# `send_wrapper::SendWrapper<T>` gives us a Send/Sync wrapper over
+# `RuntimeState<R>` (which contains Stylo types with non-Send internal raw
+# pointers). Runtime-checked: any access from a thread other than the one
+# that created it panics. Combined with the compile-time `MainThreadToken`
+# guard, the runtime check never triggers in correct Paws code — it's a
+# defense-in-depth panic if the compile-time guarantee is ever bypassed.
+send_wrapper = "0.6"
 
 # Cranelift compiles WASM → Pulley bytecode on iOS (no native JIT).
 # `config.target("pulley64")` in create_engine() prevents W+X pages.
@@ -29,6 +36,7 @@ features = ["cranelift", "pulley", "runtime", "std", "threads", "wat"]
 [dev-dependencies]
 codspeed-criterion-compat = "4.4.1"
 paws-runner = { path = "../paws-runner" }
+static_assertions = "1.1"
 
 [[bench]]
 name = "engine_bench"
