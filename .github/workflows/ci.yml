@@ -28,8 +28,9 @@ jobs:
 
       - name: Add wasm32 targets
         # wasm32-wasip1-threads for standalone Paws examples; plain
-        # wasm32-wasip1 for yew fixtures (see build.rs notes on the
-        # wasi-libc pthread-TLS bootstrap hang).
+        # wasm32-wasip1 for yew fixtures. The host wires
+        # wasmtime-wasi-threads but wasi-libc's pthread TLS bootstrap
+        # still hangs yew under -threads (tracked separately).
         run: rustup target add wasm32-wasip1-threads wasm32-wasip1
 
       - name: Install system dependencies

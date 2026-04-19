@@ -34,16 +34,15 @@ const YEW_EXAMPLES: &[&str] = &[
 
 const WASM_TARGET: &str = "wasm32-wasip1-threads";
 
-/// Yew fixtures build for the non-threads WASI target. Under
-/// `wasm32-wasip1-threads`, wasi-libc's pthread TLS bootstrap doesn't
-/// pin a stable main-thread `pthread_t` without a real wasi-threads
-/// host, and yew's `thread_local!` recursion guard in
-/// `scheduler::start_now` breaks (the scheduler loop re-enters itself,
-/// 100% CPU). Fixing this requires integrating
-/// `wasmtime-wasi-threads`, which in turn requires `T: Clone + Send +
-/// 'static` on the store data — a `RuntimeState<R>` → `Arc<Mutex<>>`
-/// refactor across `wasmtime-engine/src/wasm.rs`. Tracked separately;
-/// until then, yew fixtures stay on the non-threads target.
+/// Yew fixtures stay on `wasm32-wasip1` (non-threads target). Although the
+/// host wires `wasmtime-wasi-threads` in `run_wasm_inner` and so provides
+/// `wasi::thread-spawn` + shared-memory imports, empirically this is not
+/// sufficient to unblock yew's `thread_local!` recursion guard in
+/// `scheduler::start_now`: the test still hangs (multiple worker threads
+/// spin in unreachable paths). Additional wasi-libc pthread-init plumbing
+/// beyond what `wasmtime-wasi-threads::add_to_linker` provides appears to
+/// be required. Tracked as a follow-up; until then yew fixtures use the
+/// non-threads target.
 const YEW_WASM_TARGET: &str = "wasm32-wasip1";
 
 /// Shared coverage configuration for guest WASM builds.

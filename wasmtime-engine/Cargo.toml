@@ -32,6 +32,12 @@ version = "43"
 default-features = false
 features = ["cranelift", "pulley", "runtime", "std", "threads", "wat"]
 
+# Provides the `wasi::thread-spawn` host function and shared-memory wiring.
+# Without it, `wasm32-wasip1-threads` guests hang on wasi-libc's pthread
+# TLS bootstrap (yew's `thread_local!` recursion guard re-enters at 100% CPU).
+[dependencies.wasmtime-wasi-threads]
+version = "43"
+
 
 [dev-dependencies]
 codspeed-criterion-compat = "4.4.1"
