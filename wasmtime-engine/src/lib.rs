@@ -11,8 +11,11 @@ pub mod wasm;
 pub use store_data::{MainThreadToken, StoreData};
 pub use wasm::{build_linker, read_cstr};
 
+use std::sync::Arc;
+
 use engine::{EngineRenderer, RuntimeState};
-use wasmtime::{AsContextMut, Engine as WasmEngine, MemoryType, Module, SharedMemory, Store};
+use wasmtime::{AsContextMut, Engine as WasmEngine, Module, Store};
+use wasmtime_wasi_threads::WasiThreadsCtx;
 
 /// Create a [`wasmtime::Engine`] configured for the current platform.
 ///
@@ -154,17 +157,40 @@ fn run_wasm_inner<R: EngineRenderer>(
     let mut linker = build_linker(engine);
     let mut store = Store::new(engine, StoreData::new(state));
 
-    // Modules compiled with wasm32-wasip1-threads import shared memory
-    // from "env::memory". Provide it via the linker before instantiation.
-    if let Err(e) = (|| -> wasmtime::Result<()> {
-        let mem_ty = MemoryType::shared(17, 16384);
-        let shared_mem = SharedMemory::new(engine, mem_ty)?;
-        linker.define(&mut store, "env", "memory", shared_mem)?;
-        Ok(())
-    })() {
+    // Wire up `wasi::thread-spawn` and satisfy any shared-memory imports the
+    // module declares. wasmtime-wasi-threads walks `module.imports()` and
+    // defines shared memory for each shared import — covers both
+    // wasm32-wasip1-threads modules (yew, paws-runner) and standard modules
+    // that don't import shared memory (no-op in that case).
+    //
+    // WAT tests export their own (non-shared) memory and import nothing, so
+    // this is a no-op for them; the `thread-spawn` function is added to the
+    // linker but never referenced.
+    if let Err(e) = wasmtime_wasi_threads::add_to_linker(
+        &mut linker,
+        &store,
+        &module,
+        |d: &mut StoreData<R>| {
+            d.wasi_threads
+                .as_ref()
+                .expect("wasi_threads not initialized")
+        },
+    ) {
         let state = store.into_data().into_state();
         return Err(Box::new(RunWasmError { state, error: e }));
     }
+
+    // Freeze the linker into an Arc so `WasiThreadsCtx` can hand a clone
+    // to each spawned wasm thread's trampoline for re-instantiation.
+    let linker = Arc::new(linker);
+    let ctx = match WasiThreadsCtx::new(module.clone(), linker.clone(), /*use_async=*/ false) {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            let state = store.into_data().into_state();
+            return Err(Box::new(RunWasmError { state, error: e }));
+        }
+    };
+    store.data_mut().wasi_threads = Some(ctx);
 
     let result = (|| -> wasmtime::Result<(wasmtime::Instance, ())> {
         let instance = linker.instantiate(&mut store, &module)?;
