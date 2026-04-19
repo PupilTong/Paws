@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use engine::{EngineRenderer, RuntimeState};
 use send_wrapper::SendWrapper;
+use wasmtime_wasi_threads::WasiThreadsCtx;
 
 /// Unforgeable proof that the current OS thread is the Paws main wasm thread.
 ///
@@ -81,6 +82,11 @@ impl MainThreadToken {
 /// correct Paws code; it's defense-in-depth for the invariant.
 pub struct StoreData<R: EngineRenderer> {
     state: Arc<Mutex<SendWrapper<RuntimeState<R>>>>,
+    /// wasi-threads context, populated after Store construction by
+    /// `run_wasm_inner` before the guest entry point is invoked. Cloned
+    /// into every worker thread's Store view by wasi-threads' spawn
+    /// trampoline. `None` on WAT tests / non-threaded modules.
+    pub(crate) wasi_threads: Option<Arc<WasiThreadsCtx<StoreData<R>>>>,
 }
 
 impl<R: EngineRenderer> StoreData<R> {
@@ -91,6 +97,7 @@ impl<R: EngineRenderer> StoreData<R> {
     pub fn new(state: RuntimeState<R>) -> Self {
         Self {
             state: Arc::new(Mutex::new(SendWrapper::new(state))),
+            wasi_threads: None,
         }
     }
 
@@ -166,6 +173,7 @@ impl<R: EngineRenderer> Clone for StoreData<R> {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
+            wasi_threads: self.wasi_threads.clone(),
         }
     }
 }
