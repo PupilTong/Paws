@@ -17,18 +17,47 @@ fn load_example(name: &str) -> Vec<u8> {
 /// Runs an example and returns the [`Runner`] for inspection.
 ///
 /// All examples are built as components (`wasm32-wasip2`), so this
-/// routes through [`Runner::run_component`]. Coverage extraction
-/// (`PAWS_WASM_COVERAGE=1`) is disabled pending a component-aware
-/// probe path for the inner core module's `__paws_dump_coverage` /
-/// `__paws_coverage_ptr` exports; the `wasm-coverage` feature and its
-/// CI wiring are kept for that follow-up but produce no data for now.
+/// routes through [`Runner::run_component`]. When the
+/// `wasm-coverage` feature is active, uses
+/// [`Runner::run_component_with_coverage`] instead and writes the
+/// extracted profraw bytes to `target/wasm-coverage/{name}.profraw`.
 fn run_example(name: &str) -> Runner {
     let wasm = load_example(name);
     let mut runner = Runner::builder().build();
+    #[cfg(not(feature = "wasm-coverage"))]
+    {
+        runner
+            .run_component(&wasm, "run")
+            .expect("wasm execution failed");
+    }
+    #[cfg(feature = "wasm-coverage")]
+    {
+        let profraw = runner
+            .run_component_with_coverage(&wasm, "run")
+            .expect("wasm execution failed");
+        if let Some(bytes) = profraw {
+            write_profraw(name, &bytes);
+        }
+    }
     runner
-        .run_component(&wasm, "run")
-        .expect("wasm execution failed");
-    runner
+}
+
+/// Writes a profraw blob under the workspace-root `target/wasm-coverage/`.
+///
+/// Using the workspace root (not `CARGO_TARGET_DIR` or the per-crate
+/// `target/`) keeps profraw files colocated with the other coverage
+/// artifacts that `scripts/wasm-coverage.sh` expects.
+#[cfg(feature = "wasm-coverage")]
+fn write_profraw(name: &str, bytes: &[u8]) {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root");
+    let coverage_output_dir = workspace_root.join("target/wasm-coverage");
+    std::fs::create_dir_all(&coverage_output_dir)
+        .expect("failed to create target/wasm-coverage directory");
+    let path = coverage_output_dir.join(format!("{name}.profraw"));
+    std::fs::write(&path, bytes)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", path.display()));
 }
 
 // -----------------------------------------------------------------------

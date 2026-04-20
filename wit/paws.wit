@@ -88,13 +88,16 @@ interface stylesheet {
 }
 
 /// The standard Paws guest world: imports everything the host exposes
-/// and exports the two entry points the host calls into — the main
-/// `run` function and `invoke-listener`, invoked by the host for each
-/// matching listener during event dispatch.
-///
-/// Coverage exports (`__paws_dump_coverage`, `__paws_coverage_ptr`)
-/// intentionally live outside the WIT contract so they can remain
-/// optional under a guest Cargo feature without splitting the world.
+/// and exports the three entry points the host calls into:
+/// - `run`: the main entry, invoked once per guest execution.
+/// - `invoke-listener`: invoked by the host for each matching listener
+///   during event dispatch.
+/// - `dump-coverage`: returns profraw bytes when the guest was built
+///   with coverage instrumentation (`rust-wasm-binding/coverage`
+///   feature → `minicov`), or an empty list otherwise. Kept in the
+///   world so every guest has the export; the `paws_main!` macro
+///   supplies a default implementation that returns empty bytes
+///   unless the `coverage` Cargo feature is enabled.
 world paws-guest {
     import dom;
     import events;
@@ -103,4 +106,5 @@ world paws-guest {
 
     export run: func() -> s32;
     export invoke-listener: func(callback-id: s32);
+    export dump-coverage: func() -> list<u8>;
 }

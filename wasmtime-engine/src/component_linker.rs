@@ -498,11 +498,15 @@ pub fn run_component<R: EngineRenderer>(
     run_component_inner(engine, state, wasm_bytes, false).map(|(state, _)| state)
 }
 
-/// Compiles a WASM component, runs its `run` export, and (if the
-/// component exports them) extracts guest coverage bytes. The coverage
-/// exports live outside the WIT world and are only present when guests
-/// are built with the `coverage` Cargo feature — absent exports yield
-/// `Ok(None)` rather than an error.
+/// Compiles a WASM component, runs its `run` export, and extracts
+/// profraw coverage bytes via the component's `dump-coverage` export.
+///
+/// `dump-coverage` is part of the `paws-guest` world so every Paws
+/// guest has it, but the default `paws_main!` body returns an empty
+/// `Vec<u8>` unless the guest was built with
+/// `rust-wasm-binding/coverage`. An empty vec is surfaced as
+/// `Ok(None)` so callers can skip the lcov step without branching on
+/// content length.
 pub fn run_component_with_coverage<R: EngineRenderer>(
     engine: &WasmEngine,
     state: RuntimeState<R>,
@@ -516,7 +520,7 @@ fn run_component_inner<R: EngineRenderer>(
     engine: &WasmEngine,
     state: RuntimeState<R>,
     wasm_bytes: &[u8],
-    _with_coverage: bool,
+    with_coverage: bool,
 ) -> WasmCoverageResult<R> {
     let component = match Component::new(engine, wasm_bytes) {
         Ok(c) => c,
@@ -528,36 +532,39 @@ fn run_component_inner<R: EngineRenderer>(
     };
     let mut store = Store::new(engine, HostData::new(state));
 
-    let result = (|| -> wasmtime::Result<()> {
+    let result = (|| -> wasmtime::Result<Option<Vec<u8>>> {
         // Instantiate the component directly against the linker so we
-        // can pull typed handles to BOTH `invoke-listener` (needed by
-        // the custom `dispatch-event` registration for guest re-entry
-        // during three-phase dispatch) and `run` (the entry point).
-        // `PawsGuest::instantiate` would give us the same `run`
-        // accessor but not expose the underlying `invoke-listener`
-        // `Func`, so we skip the convenience wrapper.
+        // can pull typed handles to ALL three exports at once:
+        //   - `invoke-listener` for the custom dispatch-event wiring
+        //     (three-phase guest re-entry)
+        //   - `run` for the entry point
+        //   - `dump-coverage` for optional profraw extraction
+        // `PawsGuest::instantiate` would give us `run` only, so we
+        // skip the convenience wrapper.
         let instance = linker.instantiate(&mut store, &component)?;
         let invoke = instance.get_typed_func::<(i32,), ()>(&mut store, "invoke-listener")?;
         let run = instance.get_typed_func::<(), (i32,)>(&mut store, "run")?;
+        let dump_coverage =
+            instance.get_typed_func::<(), (Vec<u8>,)>(&mut store, "dump-coverage")?;
 
-        // Stash invoke-listener BEFORE calling run so any event
-        // dispatched during the initial `run()` reaches its listeners.
         store.data_mut().invoke_listener = Some(invoke);
 
         let (_exit_code,) = run.call(&mut store, ())?;
-        Ok(())
+
+        if with_coverage {
+            let (bytes,) = dump_coverage.call(&mut store, ())?;
+            if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(bytes))
+            }
+        } else {
+            Ok(None)
+        }
     })();
 
-    // Coverage extraction from components is a follow-up: the
-    // `__paws_dump_coverage` / `__paws_coverage_ptr` exports live
-    // inside the wrapped core module, not at the component boundary,
-    // so they need a separate probe path. Returning `None` for now
-    // keeps the existing `PAWS_WASM_COVERAGE` signal intact but
-    // reports no bytes.
-    let coverage = None;
-
     match result {
-        Ok(()) => Ok((store.into_data().into_state(), coverage)),
+        Ok(coverage) => Ok((store.into_data().into_state(), coverage)),
         Err(error) => Err(Box::new(RunWasmError {
             state: store.into_data().into_state(),
             error,

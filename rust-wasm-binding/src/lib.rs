@@ -582,6 +582,35 @@ pub fn __dispatch_listener(callback_id: i32) {
     }
 }
 
+/// Default `Guest::dump_coverage` body used by [`paws_main!`].
+///
+/// When the `coverage` Cargo feature is on, returns a fresh profraw
+/// snapshot via `minicov::capture_coverage`. When the feature is off,
+/// returns an empty `Vec<u8>` — the WIT export still exists (every
+/// `paws-guest` component has it) but the host's extraction step
+/// sees zero bytes and short-circuits.
+#[doc(hidden)]
+pub fn __dump_coverage() -> Vec<u8> {
+    #[cfg(feature = "coverage")]
+    {
+        let mut buffer = Vec::new();
+        // SAFETY: `capture_coverage` requires single-threaded use and
+        // that every static global-constructor has already run. Paws
+        // guests are single-threaded WASM, and this helper is only
+        // reachable from `Guest::dump_coverage`, which the host calls
+        // AFTER `Guest::run()` returns — so every `#[ctor]`/`lazy_static`
+        // has been initialised by then.
+        unsafe {
+            minicov::capture_coverage(&mut buffer).expect("capture_coverage");
+        }
+        buffer
+    }
+    #[cfg(not(feature = "coverage"))]
+    {
+        Vec::new()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shadow DOM
 // ---------------------------------------------------------------------------
@@ -646,6 +675,9 @@ macro_rules! paws_main {
             fn run() -> i32 $body
             fn invoke_listener(callback_id: i32) {
                 $crate::__dispatch_listener(callback_id);
+            }
+            fn dump_coverage() -> ::std::vec::Vec<u8> {
+                $crate::__dump_coverage()
             }
         }
         $crate::export_paws_app!(__PawsApp);

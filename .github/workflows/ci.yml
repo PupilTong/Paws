@@ -54,26 +54,40 @@ jobs:
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
       # -----------------------------------------------------------------
-      # WASM guest coverage is temporarily disabled during the
-      # component-model migration. The previous pipeline relied on
-      # `minicov` instrumenting the guest + `#[export_name]` exports
-      # (`__paws_dump_coverage` / `__paws_coverage_ptr`) for the host
-      # to probe. Under the component model those exports live inside
-      # the wrapped core module, not at the component boundary, so the
-      # old probe path no longer applies and `-Cinstrument-coverage`
-      # fails to link (undefined `__llvm_profile_runtime` after
-      # `minicov` was dropped from `rust-wasm-binding`). Re-enabling
-      # guest coverage is tracked as follow-up work.
+      # WASM guest coverage (minicov + llvm-tools-preview).
+      # Guests are components (wasm32-wasip2); profraw bytes come out
+      # through the component's `dump-coverage` export, plumbed through
+      # `Runner::run_component_with_coverage` → `e2e_examples::write_profraw`.
       # -----------------------------------------------------------------
+      - name: Install WASM target and llvm-tools for guest coverage
+        run: |
+          rustup target add wasm32-wasip2 --toolchain nightly-2026-04-07
+          rustup component add llvm-tools-preview --toolchain nightly-2026-04-07
 
-      # Upload host coverage to Codecov. Guest coverage upload is
-      # skipped until the component-model probe path is wired up.
+      - name: Run E2E tests with guest coverage extraction
+        env:
+          PAWS_WASM_COVERAGE: "1"
+        run: cargo +nightly-2026-04-07 test -p wasmtime-engine --test e2e_examples --features wasm-coverage
+
+      - name: Generate guest coverage report
+        run: bash scripts/wasm-coverage.sh
+
+      # Upload each lcov file under its own flag so host and guest
+      # coverage are tracked independently in the Codecov dashboard.
       - name: Upload host coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           flags: host
+          fail_ci_if_error: true
+
+      - name: Upload guest coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/wasm-coverage/guest-lcov.info
+          flags: guest
           fail_ci_if_error: true
 
       - name: Install cargo-codspeed
