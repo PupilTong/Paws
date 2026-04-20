@@ -134,7 +134,6 @@ fn main() {
     let workspace_root = manifest_dir.parent().expect("workspace root");
     let examples_dir = workspace_root.join("examples");
     let yew_examples_dir = examples_dir.join("yew");
-    let yew_dir = workspace_root.join("yew");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // When PAWS_WASM_COVERAGE=1, compile guest WASM with LLVM coverage
@@ -191,10 +190,15 @@ fn main() {
         ));
     }
 
-    // Build yew examples. Each crate is a member of the yew submodule's
-    // workspace, so we run `cargo build` from the yew workspace root
-    // with `-p <name>` and pick up the artifact from yew/target/.
-    let yew_wasm_src_dir = yew_dir.join("target").join(WASM_TARGET).join("release");
+    // Build yew examples. Each crate is a member of the OUTER Paws
+    // workspace (yew's own workspace manifest was moved aside to
+    // `yew/Cargo.toml.backup` during the absorption), so we run
+    // `cargo build -p <name>` from the Paws workspace root and pick up
+    // the artifact from the shared `target/` directory.
+    let paws_wasm_src_dir = workspace_root
+        .join("target")
+        .join(WASM_TARGET)
+        .join("release");
     for name in YEW_EXAMPLES {
         let crate_dir = yew_examples_dir.join(name);
         if !crate_dir.exists() {
@@ -202,8 +206,8 @@ fn main() {
         }
         wasm_paths.push(build_wasm_example(
             name,
-            &yew_dir,
-            &yew_wasm_src_dir,
+            workspace_root,
+            &paws_wasm_src_dir,
             WASM_TARGET,
             Some(name),
             &out_dir,

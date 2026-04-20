@@ -5,7 +5,6 @@ edition = "2021"
 # This fixture's source lives in Paws but it must be built as a member
 # of the yew workspace so yew/packages/yew's `workspace = true` deps
 # resolve. The yew-side change is in yew/Cargo.toml's workspace.members.
-workspace = "../../../yew"
 
 [lib]
 crate-type = ["cdylib"]
