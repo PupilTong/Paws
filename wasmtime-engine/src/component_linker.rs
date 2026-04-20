@@ -534,24 +534,26 @@ fn run_component_inner<R: EngineRenderer>(
 
     let result = (|| -> wasmtime::Result<Option<Vec<u8>>> {
         // Instantiate the component directly against the linker so we
-        // can pull typed handles to ALL three exports at once:
-        //   - `invoke-listener` for the custom dispatch-event wiring
-        //     (three-phase guest re-entry)
-        //   - `run` for the entry point
-        //   - `dump-coverage` for optional profraw extraction
-        // `PawsGuest::instantiate` would give us `run` only, so we
-        // skip the convenience wrapper.
+        // can pull typed handles to `invoke-listener` (needed by the
+        // custom dispatch-event wiring for three-phase guest re-entry)
+        // and `run` (the entry point). `PawsGuest::instantiate` would
+        // give us `run` only, so we skip the convenience wrapper.
         let instance = linker.instantiate(&mut store, &component)?;
         let invoke = instance.get_typed_func::<(i32,), ()>(&mut store, "invoke-listener")?;
         let run = instance.get_typed_func::<(), (i32,)>(&mut store, "run")?;
-        let dump_coverage =
-            instance.get_typed_func::<(), (Vec<u8>,)>(&mut store, "dump-coverage")?;
 
         store.data_mut().invoke_listener = Some(invoke);
 
         let (_exit_code,) = run.call(&mut store, ())?;
 
+        // Only probe `dump-coverage` when the caller actually wants
+        // profraw bytes. Keeping the lookup out of the hot path avoids
+        // a per-run export-lookup cost for the common case, and stays
+        // tolerant of handcrafted / minimal guests that might not
+        // implement the export even though the WIT world declares it.
         if with_coverage {
+            let dump_coverage =
+                instance.get_typed_func::<(), (Vec<u8>,)>(&mut store, "dump-coverage")?;
             let (bytes,) = dump_coverage.call(&mut store, ())?;
             if bytes.is_empty() {
                 Ok(None)
