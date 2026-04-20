@@ -24,17 +24,22 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Rust toolchain (from rust-toolchain.toml)
-        run: rustup show
-
-      - name: Format
-        run: cargo fmt --check
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install toolchain and system dependencies
+        run: |
+          rustup show
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig-dev
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-codspeed
+
+      - name: Format
+        run: cargo fmt --check
 
       - name: Clippy
         # Scoped to Paws' own crates. Yew (vendored at `yew/packages/*`)
@@ -53,9 +58,6 @@ jobs:
             -p paws-examples \
             -- -D warnings
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
       - name: Generate host code coverage
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
@@ -73,26 +75,13 @@ jobs:
       - name: Generate guest coverage report
         run: bash scripts/wasm-coverage.sh
 
-      - name: Upload host coverage to Codecov
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-          flags: host
+          files: lcov.info,target/wasm-coverage/guest-lcov.info
+          flags: host,guest
           fail_ci_if_error: true
-
-      - name: Upload guest coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/wasm-coverage/guest-lcov.info
-          flags: guest
-          fail_ci_if_error: true
-
-      - name: Install cargo-codspeed
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-codspeed
 
       - name: Build the benchmark target(s)
         run: cargo codspeed build
