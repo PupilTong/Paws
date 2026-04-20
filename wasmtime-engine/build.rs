@@ -3,6 +3,8 @@ use std::process::Command;
 use std::{env, fs};
 
 /// Examples under `Paws/examples/` — each is its own mini-workspace.
+/// All guests are component-model modules built for `wasm32-wasip2`,
+/// loaded at runtime via [`wasmtime_engine::run_component`].
 const EXAMPLES: &[&str] = &[
     "example-basic-element",
     "example-styled-element",
@@ -15,17 +17,6 @@ const EXAMPLES: &[&str] = &[
     "example-namespace",
     "example-event-dispatch",
 ];
-
-/// Component-model examples that compile to `wasm32-wasip2` and are
-/// packaged as components. These feed the `run_component` host path
-/// introduced in PR2a. Kept separate from `EXAMPLES` because:
-///   - the target is different (`wasm32-wasip2` vs `wasm32-wasip1`)
-///   - their output is a component binary, not a core module
-///   - they intentionally do not depend on `rust-wasm-binding` yet
-///     (that crate is migrated to `wit-bindgen` in a follow-up PR)
-const COMPONENT_EXAMPLES: &[&str] = &["example-basic-element-component"];
-
-const COMPONENT_WASM_TARGET: &str = "wasm32-wasip2";
 
 /// Yew-based test fixtures under `Paws/examples/yew/`. Source lives in
 /// the Paws repo; each crate is a member of the yew submodule's
@@ -43,7 +34,13 @@ const YEW_EXAMPLES: &[&str] = &[
     "example-yew-child-rerender",
 ];
 
-const WASM_TARGET: &str = "wasm32-wasip1";
+/// Single target for every guest. `wasm-component-ld` wraps the core
+/// module emitted by LLVM into a component, which the host loads via
+/// [`wasmtime_engine::run_component`] (see `wasmtime-engine/src/lib.rs`).
+/// `wasm32-wasip3` is not a viable target yet — as of nightly-2026-04-18
+/// it has no shipped `libc.a`, and its linker (`wasm-component-ld`) is
+/// shared with wasip2 anyway.
+const WASM_TARGET: &str = "wasm32-wasip2";
 
 /// Shared coverage configuration for guest WASM builds.
 struct CoverageConfig {
@@ -191,43 +188,6 @@ fn main() {
             None,
             &out_dir,
             &coverage,
-        ));
-    }
-
-    // Build component-model examples. Each is its own mini-workspace
-    // targeting `wasm32-wasip2`; `wasm-component-ld` wraps the output
-    // as a component, which the host loads via `run_component`.
-    //
-    // Coverage instrumentation is piggy-backed on `rust-wasm-binding`'s
-    // `coverage` feature (minicov). The component examples do not
-    // depend on `rust-wasm-binding` — cargo would reject
-    // `--features coverage` with "this package does not contain this
-    // feature". Pass a force-disabled `CoverageConfig` so the profraw
-    // bytes from the legacy examples stay the sole coverage source for
-    // now; wiring guest coverage through the component boundary is
-    // follow-up work.
-    let component_coverage = CoverageConfig {
-        enabled: false,
-        toolchain: coverage.toolchain.clone(),
-        rustflags: String::new(),
-    };
-    for name in COMPONENT_EXAMPLES {
-        let crate_dir = examples_dir.join(name);
-        if !crate_dir.exists() {
-            panic!("component example crate not found: {}", crate_dir.display());
-        }
-        let wasm_src_dir = crate_dir
-            .join("target")
-            .join(COMPONENT_WASM_TARGET)
-            .join("release");
-        wasm_paths.push(build_wasm_example(
-            name,
-            &crate_dir,
-            &wasm_src_dir,
-            COMPONENT_WASM_TARGET,
-            None,
-            &out_dir,
-            &component_coverage,
         ));
     }
 

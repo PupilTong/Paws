@@ -55,45 +55,45 @@ fn FormComponent() -> Html {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn run() -> i32 {
-    CAPTURED_VALUES.with(|v| *v.borrow_mut() = None);
-    rust_wasm_binding::reset_scratch();
+rust_wasm_binding::paws_main! {
+    fn run() -> i32 {
+        CAPTURED_VALUES.with(|v| *v.borrow_mut() = None);
 
-    let root = Rc::new(Element::new("div").expect("create root"));
-    let root_id = root.id();
-    rust_wasm_binding::append_element(0, root_id).expect("append root");
+        let root = Rc::new(Element::new("div").expect("create root"));
+        let root_id = root.id();
+        rust_wasm_binding::append_element(0, root_id).expect("append root");
 
-    let _app = yew::Renderer::<FormComponent>::with_root(root).render();
+        let _app = yew::Renderer::<FormComponent>::with_root(root).render();
 
-    // Traverse: root → component div → buttons (siblings)
-    let comp_div = rust_wasm_binding::get_first_child(root_id)
-        .expect("component output div");
-    let btn_a = rust_wasm_binding::get_first_child(comp_div)
-        .expect("update-a button");
-    let btn_b = rust_wasm_binding::get_next_sibling(btn_a)
-        .expect("update-b button");
-    let btn_submit = rust_wasm_binding::get_next_sibling(btn_b)
-        .expect("submit button");
+        // Traverse: root → component div → buttons (siblings)
+        let comp_div = rust_wasm_binding::get_first_child(root_id)
+            .expect("component output div");
+        let btn_a = rust_wasm_binding::get_first_child(comp_div)
+            .expect("update-a button");
+        let btn_b = rust_wasm_binding::get_next_sibling(btn_a)
+            .expect("update-b button");
+        let btn_submit = rust_wasm_binding::get_next_sibling(btn_b)
+            .expect("submit button");
 
-    // Click update-a and update-b WITHOUT flushing between — simulates rapid
-    // input before a re-render. The submit handler must see latest values from
-    // both handles despite no re-render having occurred yet.
-    rust_wasm_binding::dispatch_event(btn_a, "click", true, true, false)
-        .expect("dispatch update-a");
-    rust_wasm_binding::dispatch_event(btn_b, "click", true, true, false)
-        .expect("dispatch update-b");
-    rust_wasm_binding::dispatch_event(btn_submit, "click", true, true, false)
-        .expect("dispatch submit");
+        // Click update-a and update-b WITHOUT flushing between — simulates rapid
+        // input before a re-render. The submit handler must see latest values from
+        // both handles despite no re-render having occurred yet.
+        rust_wasm_binding::dispatch_event(btn_a, "click", true, true, false)
+            .expect("dispatch update-a");
+        rust_wasm_binding::dispatch_event(btn_b, "click", true, true, false)
+            .expect("dispatch update-b");
+        rust_wasm_binding::dispatch_event(btn_submit, "click", true, true, false)
+            .expect("dispatch submit");
 
-    // Flush any pending re-renders.
-    yew::scheduler::flush();
+        // Flush any pending re-renders.
+        yew::scheduler::flush();
 
-    let captured = CAPTURED_VALUES.with(|v| v.borrow().clone());
-    assert_eq!(
-        captured,
-        Some(("value_a".to_string(), "value_b".to_string())),
-        "submit handler must see latest values for both fields (got {captured:?})"
-    );
-    0
+        let captured = CAPTURED_VALUES.with(|v| v.borrow().clone());
+        assert_eq!(
+            captured,
+            Some(("value_a".to_string(), "value_b".to_string())),
+            "submit handler must see latest values for both fields (got {captured:?})"
+        );
+        0
+    }
 }

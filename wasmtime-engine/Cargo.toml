@@ -28,6 +28,15 @@ version = "43"
 default-features = false
 features = ["cranelift", "pulley", "runtime", "std", "wat", "component-model"]
 
+# Standard WASI p2 host implementations (`wasi:io`, `wasi:clocks`,
+# `wasi:random`, `wasi:filesystem`, etc.). Guests built for
+# `wasm32-wasip2` that transitively use `std` or async runtimes (tokio,
+# futures) import these interfaces; the host must provide
+# implementations or instantiation fails with "matching implementation
+# was not found in the linker". See `component_linker.rs`.
+[dependencies.wasmtime-wasi]
+version = "43"
+
 
 [dev-dependencies]
 codspeed-criterion-compat = "4.4.1"
