@@ -26,8 +26,16 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Add wasm32 target
-        run: rustup target add wasm32-wasip1
+      - name: Add wasm32 targets
+        # wasip1 for standalone + Yew guests on the core-module host path;
+        # wasip2 for component-model guests (see `COMPONENT_EXAMPLES` in
+        # wasmtime-engine/build.rs and `run_component` in lib.rs).
+        run: rustup target add wasm32-wasip1 wasm32-wasip2
+
+      - name: Install wasm-component-ld
+        # Required by the Rust wasm32-wasip2 linker flow to wrap the core
+        # module emitted by LLVM into a component binary.
+        run: cargo install wasm-component-ld --version "^0.5"
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
@@ -53,9 +61,9 @@ jobs:
       # is used for the coverage build. We just need to ensure WASM
       # targets and llvm-tools-preview are installed on it.
       # -----------------------------------------------------------------
-      - name: Install WASM target and llvm-tools for guest coverage
+      - name: Install WASM targets and llvm-tools for guest coverage
         run: |
-          rustup target add wasm32-wasip1 --toolchain nightly-2026-04-07
+          rustup target add wasm32-wasip1 wasm32-wasip2 --toolchain nightly-2026-04-07
           rustup component add llvm-tools-preview --toolchain nightly-2026-04-07
 
       - name: Run E2E tests with guest coverage extraction

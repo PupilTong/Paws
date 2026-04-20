@@ -16,6 +16,17 @@ const EXAMPLES: &[&str] = &[
     "example-event-dispatch",
 ];
 
+/// Component-model examples that compile to `wasm32-wasip2` and are
+/// packaged as components. These feed the `run_component` host path
+/// introduced in PR2a. Kept separate from `EXAMPLES` because:
+///   - the target is different (`wasm32-wasip2` vs `wasm32-wasip1`)
+///   - their output is a component binary, not a core module
+///   - they intentionally do not depend on `rust-wasm-binding` yet
+///     (that crate is migrated to `wit-bindgen` in a follow-up PR)
+const COMPONENT_EXAMPLES: &[&str] = &["example-basic-element-component"];
+
+const COMPONENT_WASM_TARGET: &str = "wasm32-wasip2";
+
 /// Yew-based test fixtures under `Paws/examples/yew/`. Source lives in
 /// the Paws repo; each crate is a member of the yew submodule's
 /// workspace (see `yew/Cargo.toml`) so `yew/packages/yew`'s
@@ -177,6 +188,29 @@ fn main() {
             &crate_dir,
             &wasm_src_dir,
             WASM_TARGET,
+            None,
+            &out_dir,
+            &coverage,
+        ));
+    }
+
+    // Build component-model examples. Each is its own mini-workspace
+    // targeting `wasm32-wasip2`; `wasm-component-ld` wraps the output
+    // as a component, which the host loads via `run_component`.
+    for name in COMPONENT_EXAMPLES {
+        let crate_dir = examples_dir.join(name);
+        if !crate_dir.exists() {
+            panic!("component example crate not found: {}", crate_dir.display());
+        }
+        let wasm_src_dir = crate_dir
+            .join("target")
+            .join(COMPONENT_WASM_TARGET)
+            .join("release");
+        wasm_paths.push(build_wasm_example(
+            name,
+            &crate_dir,
+            &wasm_src_dir,
+            COMPONENT_WASM_TARGET,
             None,
             &out_dir,
             &coverage,

@@ -81,6 +81,33 @@ fn test_basic_element_dom_structure() {
 }
 
 // -----------------------------------------------------------------------
+// basic-element-component: identical behaviour to basic-element, but
+// loaded via the component-model host path (PR2a). Proves `run_component`
+// + bindgen-generated `PawsGuest` + host_impl on `RuntimeState` compose
+// correctly end-to-end.
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_basic_element_component_dom_structure() {
+    let wasm = load_example("example_basic_element_component");
+    let mut runner = Runner::builder().build();
+    runner
+        .run_component(&wasm, "run")
+        .expect("component execution failed");
+
+    let state = runner.state();
+    let div = state
+        .doc
+        .get_node(NodeId::from(1_u64))
+        .expect("div should exist");
+    assert!(div.is_element());
+    assert_eq!(div.parent, Some(NodeId::from(0_u64)));
+
+    let root = state.doc.get_node(NodeId::from(0_u64)).expect("root");
+    assert!(root.children.contains(&NodeId::from(1_u64)));
+}
+
+// -----------------------------------------------------------------------
 // styled-element: div with width=200px, height=100px
 // -----------------------------------------------------------------------
 
