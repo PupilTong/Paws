@@ -148,36 +148,65 @@ fn register_events_interface<R: EngineRenderer>(
 
     let mut inst = linker.instance("paws:host/events@0.1.0")?;
 
-    inst.func_wrap(
+    // Thirteen of the fourteen event functions are straight
+    // delegations to an `EventsHost::<method>(&mut state, args...)`
+    // call — exactly the shape `paws_host::events::add_to_linker`
+    // would have generated. Two macro arms cover them all: `delegate!`
+    // binds a component-ABI name to an `EventsHost` method with a
+    // matching parameter tuple. Keeping the arms typed in the
+    // invocation means a signature drift in the WIT schema will fail
+    // at the macro call-site, not at some later runtime mismatch.
+    //
+    // `dispatch-event` is the odd one out — it needs the store to
+    // re-enter the guest — so it's wrapped manually below.
+    macro_rules! delegate {
+        // Accessor / mutator with args, returning i32.
+        ($name:literal, $method:ident ( $( $arg:ident : $ty:ty ),+ $(,)? ) -> i32) => {
+            inst.func_wrap(
+                $name,
+                |mut caller: StoreContextMut<'_, HostData<R>>,
+                 ( $( $arg ),+ ,): ( $( $ty ),+ ,)|
+                 -> wasmtime::Result<(i32,)> {
+                    let host = &mut caller.data_mut().state;
+                    Ok((EventsHost::$method(host $(, $arg)+),))
+                },
+            )?;
+        };
+        // Zero-arg accessor returning a scalar (i32 or f64).
+        ($name:literal, $method:ident () -> $ret:ty) => {
+            inst.func_wrap(
+                $name,
+                |mut caller: StoreContextMut<'_, HostData<R>>, (): ()|
+                 -> wasmtime::Result<($ret,)> {
+                    Ok((EventsHost::$method(&mut caller.data_mut().state),))
+                },
+            )?;
+        };
+    }
+
+    delegate!(
         "add-event-listener",
-        |mut caller: StoreContextMut<'_, HostData<R>>,
-         (target_id, event_type, callback_id, options_flags): (i32, String, i32, i32)|
-         -> wasmtime::Result<(i32,)> {
-            let host = &mut caller.data_mut().state;
-            Ok((EventsHost::add_event_listener(
-                host,
-                target_id,
-                event_type,
-                callback_id,
-                options_flags,
-            ),))
-        },
-    )?;
-    inst.func_wrap(
+        add_event_listener(target_id: i32, event_type: String, callback_id: i32, options_flags: i32) -> i32
+    );
+    delegate!(
         "remove-event-listener",
-        |mut caller: StoreContextMut<'_, HostData<R>>,
-         (target_id, event_type, callback_id, options_flags): (i32, String, i32, i32)|
-         -> wasmtime::Result<(i32,)> {
-            let host = &mut caller.data_mut().state;
-            Ok((EventsHost::remove_event_listener(
-                host,
-                target_id,
-                event_type,
-                callback_id,
-                options_flags,
-            ),))
-        },
-    )?;
+        remove_event_listener(target_id: i32, event_type: String, callback_id: i32, options_flags: i32) -> i32
+    );
+    delegate!("stop-propagation", stop_propagation() -> i32);
+    delegate!("stop-immediate-propagation", stop_immediate_propagation() -> i32);
+    delegate!("prevent-default", prevent_default() -> i32);
+    delegate!("target", target() -> i32);
+    delegate!("current-target", current_target() -> i32);
+    delegate!("phase", phase() -> i32);
+    delegate!("bubbles", bubbles() -> i32);
+    delegate!("cancelable", cancelable() -> i32);
+    delegate!("default-prevented", default_prevented() -> i32);
+    delegate!("composed", composed() -> i32);
+    delegate!("timestamp", timestamp() -> f64);
+
+    // `dispatch-event`: the three-phase algorithm needs the store so
+    // it can call back into the guest via the captured typed
+    // `invoke-listener` func. Handled inline, not through the macro.
     inst.func_wrap(
         "dispatch-event",
         |mut caller: StoreContextMut<'_, HostData<R>>,
@@ -198,74 +227,6 @@ fn register_events_interface<R: EngineRenderer>(
                 composed,
             )?;
             Ok((code,))
-        },
-    )?;
-    inst.func_wrap(
-        "stop-propagation",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::stop_propagation(&mut caller.data_mut().state),))
-        },
-    )?;
-    inst.func_wrap(
-        "stop-immediate-propagation",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::stop_immediate_propagation(
-                &mut caller.data_mut().state,
-            ),))
-        },
-    )?;
-    inst.func_wrap(
-        "prevent-default",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::prevent_default(&mut caller.data_mut().state),))
-        },
-    )?;
-    inst.func_wrap(
-        "target",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::target(&mut caller.data_mut().state),))
-        },
-    )?;
-    inst.func_wrap(
-        "current-target",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::current_target(&mut caller.data_mut().state),))
-        },
-    )?;
-    inst.func_wrap(
-        "phase",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::phase(&mut caller.data_mut().state),))
-        },
-    )?;
-    inst.func_wrap(
-        "bubbles",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::bubbles(&mut caller.data_mut().state),))
-        },
-    )?;
-    inst.func_wrap(
-        "cancelable",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::cancelable(&mut caller.data_mut().state),))
-        },
-    )?;
-    inst.func_wrap(
-        "default-prevented",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::default_prevented(&mut caller.data_mut().state),))
-        },
-    )?;
-    inst.func_wrap(
-        "composed",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(i32,)> {
-            Ok((EventsHost::composed(&mut caller.data_mut().state),))
-        },
-    )?;
-    inst.func_wrap(
-        "timestamp",
-        |mut caller: StoreContextMut<'_, HostData<R>>, (): ()| -> wasmtime::Result<(f64,)> {
-            Ok((EventsHost::timestamp(&mut caller.data_mut().state),))
         },
     )?;
 
@@ -452,13 +413,27 @@ fn fire_listeners_on_node<R: EngineRenderer>(
         // The listener may have been removed during an earlier
         // iteration of the same dispatch (via `stop_immediate_propagation`
         // or an explicit `remove_event_listener` call from a handler).
-        let active = caller
+        let entry = caller
             .data()
             .state
             .doc
             .get_node(node_id)
-            .and_then(|n| n.event_listeners.get(snap.index))
-            .is_some_and(|l| !l.removed);
+            .and_then(|n| n.event_listeners.get(snap.index));
+
+        // Index-stability invariant: `remove_event_listener` during
+        // an active dispatch sets `removed = true` instead of
+        // physically deleting the entry (the retain happens once
+        // after the whole algorithm finishes). If that ever changes
+        // and entries get re-packed during dispatch, `snap.index`
+        // becomes stale and we could misfire the wrong handler —
+        // fail loudly in debug rather than silently corrupt dispatch.
+        debug_assert!(
+            entry.is_none_or(|l| l.callback_id == snap.callback_id),
+            "listener at snap.index does not match snapshot callback_id \
+             — did remove_event_listener start physically reordering entries?",
+        );
+
+        let active = entry.is_some_and(|l| !l.removed);
         if !active {
             continue;
         }
