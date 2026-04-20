@@ -42,16 +42,42 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Format
-        run: cargo fmt --check
+        run: cargo fmt --check -p engine -p wasmtime-engine -p paws-runner -p rust-wasm-binding -p paws-style-ir -p view-macros -p ios-renderer-backend
 
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      # Strict clippy on Paws-owned crates only. The yew fork + its
+      # example fixtures live in the same workspace (so `cargo test`
+      # exercises yew's unit tests, per the Paws absorption) but we
+      # don't gate Paws CI on upstream yew's clippy hygiene — yew's
+      # own `clippy.yml` workflow is preserved at
+      # `yew/.github/workflows.backup/clippy.yml` for reference.
+      - name: Clippy (Paws crates only)
+        run: cargo clippy
+             -p engine -p wasmtime-engine -p paws-runner
+             -p rust-wasm-binding -p paws-style-ir -p view-macros
+             -p ios-renderer-backend
+             --all-targets --all-features -- -D warnings
+
+      # Full-workspace unit-test run. Includes yew's 46 unit tests
+      # across `yew/packages/yew` — the point of absorbing yew's
+      # workspace into Paws's. `--lib --tests` skips the 10 upstream
+      # yew doctests that reference browser-only crates (`gloo`,
+      # `web-sys`); those belong to yew's SSR/CSR story and aren't
+      # meaningful under Paws's component-model wasi target.
+      - name: Run workspace tests (Paws + yew unit tests)
+        run: cargo test --workspace --lib --tests
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate host code coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+        # Scope coverage to Paws crates (yew's tests still ran in the
+        # previous step but we keep the Codecov `host` flag pointed
+        # at Paws-owned code so coverage numbers aren't diluted by
+        # yew's internals).
+        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+             -p engine -p wasmtime-engine -p paws-runner
+             -p rust-wasm-binding -p paws-style-ir -p view-macros
+             -p ios-renderer-backend
 
       # -----------------------------------------------------------------
       # WASM guest coverage (minicov + llvm-tools-preview).

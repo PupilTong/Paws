@@ -6,6 +6,21 @@ members = [
     "paws-runner",
     "rust-wasm-binding", "paws-style-ir", "view-macros",
     "ios-renderer-backend",
+    # yew fork (formerly its own workspace; now consumed by Paws so
+    # `cargo test --all` covers yew's unit tests — see the backed-up
+    # `yew/Cargo.toml.backup`).
+    "yew/packages/yew",
+    "yew/packages/yew-macro",
+    # Paws-side WASM component fixtures that link against yew. Their
+    # `[package] workspace = "../../../yew"` line was dropped in the
+    # same submodule bump; they now auto-join the Paws workspace.
+    "examples/yew/example-yew-counter",
+    "examples/yew/example-yew-use-state-counter",
+    "examples/yew/example-yew-multi-state-setters",
+    "examples/yew/example-yew-use-state-eq",
+    "examples/yew/example-yew-ub-deref",
+    "examples/yew/example-yew-stale-read",
+    "examples/yew/example-yew-child-rerender",
 ]
 exclude = [
     "examples/example-basic-element",
@@ -23,5 +38,54 @@ version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
 
+# ---------------------------------------------------------------------------
+# Shared dependency versions.
+#
+# The entries below the divider are inherited from `yew/Cargo.toml.backup`
+# — yew's package manifests use `workspace = true` on them so the
+# enclosing workspace (now Paws) must publish matching versions.
+# ---------------------------------------------------------------------------
 [workspace.dependencies]
-# Shared dependency versions can be centralized here later if needed.
+tokio = { version = "1.50.0" }
+implicit-clone = { version = "0.6.0" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2" }
+trybuild = "1"
+clap = { version = "4", features = ["derive"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wasm-bindgen-test = "0.3"
+js-sys = "0.3"
+web-sys = "0.3"
+gloo = "0.11"
+serde = "1"
+serde_json = "1"
+futures = { version = "0.3", default-features = false }
+log = "0.4"
+wasm-logger = "0.2"
+tracing-web = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+rand = "0.9"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+rustversion = "1"
+strum = "0.28"
+strum_macros = "0.28"
+anyhow = "1"
+chrono = "0.4"
+thiserror = "2.0"
+bincode = { version = "2.0.0-rc.3", features = ["serde"] }
+reqwest = "0.13"
+
+# Inherited from `yew/Cargo.toml.backup`. yew's source uses these `cfg`
+# names internally; without the allowlist rustc warns
+# `unexpected_cfgs`.
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(documenting)",
+    "cfg(verbose_tests)",
+    "cfg(yew_lints)",
+    "cfg(nightly_yew)",
+    "cfg(wasm_bindgen_unstable_test_coverage)",
+]}
