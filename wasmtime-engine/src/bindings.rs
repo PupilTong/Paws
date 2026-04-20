@@ -13,8 +13,10 @@
 //! the old `env::__*` host functions made) and preserve the
 //! non-negative-id / negative-error-code `s32` return convention.
 
+// Paws host functions are synchronous. wasmtime 43's `bindgen!` does
+// not accept an `async` option (see error list in the macro source) —
+// the sync default is what we want, so no override is configured.
 wasmtime::component::bindgen!({
     path: "../wit",
     world: "paws-guest",
-    // Enable async = false — Paws host functions are synchronous.
 });

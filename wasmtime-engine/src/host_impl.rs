@@ -31,7 +31,8 @@ use engine::{EngineRenderer, HostErrorCode, RuntimeState};
 /// Returns `Some(err_code)` if `id` is negative (after recording an
 /// `InvalidChild` error on `self`), or `None` if `id` is a valid
 /// non-negative id. Use at the top of every method that accepts a node
-/// id argument.
+/// id argument. Most callers prefer the `check_id!` macro below which
+/// wraps the `if let Some(err) { return err; }` boilerplate.
 fn reject_negative_id<R: EngineRenderer>(
     state: &mut RuntimeState<R>,
     id: i32,
@@ -42,6 +43,17 @@ fn reject_negative_id<R: EngineRenderer>(
     } else {
         None
     }
+}
+
+/// Early-return with an `InvalidChild` error code if `$id` is negative.
+/// Mirrors the `try_read_cstr!` pattern the old core-module closures
+/// used for their own repeated-boilerplate step.
+macro_rules! check_id {
+    ($state:expr, $id:expr, $msg:expr) => {
+        if let Some(err) = reject_negative_id($state, $id, $msg) {
+            return err;
+        }
+    };
 }
 
 /// Maps a `Result<(), HostErrorCode>` to the `s32` ABI: 0 on success (and
@@ -113,17 +125,13 @@ impl<R: EngineRenderer> dom::Host for RuntimeState<R> {
     }
 
     fn set_inline_style(&mut self, id: i32, name: String, value: String) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::set_inline_style(self, id as u32, name, value);
         encode_unit_result(self, result)
     }
 
     fn set_attribute(&mut self, id: i32, name: String, value: String) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::set_attribute(self, id as u32, name, value);
         encode_unit_result(self, result)
     }
@@ -155,9 +163,7 @@ impl<R: EngineRenderer> dom::Host for RuntimeState<R> {
     }
 
     fn destroy_element(&mut self, id: i32) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::destroy_element(self, id as u32);
         encode_unit_result(self, result)
     }
@@ -175,82 +181,58 @@ impl<R: EngineRenderer> dom::Host for RuntimeState<R> {
     }
 
     fn get_first_child(&mut self, id: i32) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::get_first_child(self, id as u32);
         encode_option_id_result(self, result)
     }
 
     fn get_last_child(&mut self, id: i32) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::get_last_child(self, id as u32);
         encode_option_id_result(self, result)
     }
 
     fn get_next_sibling(&mut self, id: i32) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::get_next_sibling(self, id as u32);
         encode_option_id_result(self, result)
     }
 
     fn get_previous_sibling(&mut self, id: i32) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::get_previous_sibling(self, id as u32);
         encode_option_id_result(self, result)
     }
 
     fn get_parent_element(&mut self, id: i32) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::get_parent_element(self, id as u32);
         encode_option_id_result(self, result)
     }
 
     fn get_parent_node(&mut self, id: i32) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::get_parent_node(self, id as u32);
         encode_option_id_result(self, result)
     }
 
     fn is_connected(&mut self, id: i32) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         match RuntimeState::<R>::is_connected(self, id as u32) {
             Ok(connected) => {
                 self.clear_error();
-                if connected {
-                    1
-                } else {
-                    0
-                }
+                connected as i32
             }
             Err(code) => self.set_error(code, code.message()),
         }
     }
 
     fn has_attribute(&mut self, id: i32, name: String) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         match RuntimeState::<R>::has_attribute(self, id as u32, &name) {
             Ok(has) => {
                 self.clear_error();
-                if has {
-                    1
-                } else {
-                    0
-                }
+                has as i32
             }
             Err(code) => self.set_error(code, code.message()),
         }
@@ -270,9 +252,7 @@ impl<R: EngineRenderer> dom::Host for RuntimeState<R> {
     }
 
     fn remove_attribute(&mut self, id: i32, name: String) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::remove_attribute(self, id as u32, &name);
         encode_unit_result(self, result)
     }
@@ -302,13 +282,14 @@ impl<R: EngineRenderer> dom::Host for RuntimeState<R> {
         if parent < 0 || new_child < 0 {
             return self.set_error(HostErrorCode::InvalidChild, "negative element id");
         }
-        // `ref_child == -1` means "append at end" (no reference child).
-        let ref_child_opt = if ref_child == -1 {
-            None
-        } else if ref_child < 0 {
-            return self.set_error(HostErrorCode::InvalidChild, "negative ref_child id");
-        } else {
-            Some(ref_child as u32)
+        // `ref_child == -1` is the sentinel "append at end"; any other
+        // negative value is an actual bad id.
+        let ref_child_opt = match ref_child {
+            -1 => None,
+            id if id < 0 => {
+                return self.set_error(HostErrorCode::InvalidChild, "negative ref_child id");
+            }
+            id => Some(id as u32),
         };
         let result =
             RuntimeState::<R>::insert_before(self, parent as u32, new_child as u32, ref_child_opt);
@@ -316,9 +297,7 @@ impl<R: EngineRenderer> dom::Host for RuntimeState<R> {
     }
 
     fn clone_node(&mut self, id: i32, deep: bool) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         match RuntimeState::<R>::clone_node(self, id as u32, deep) {
             Ok(new_id) => {
                 self.clear_error();
@@ -329,17 +308,13 @@ impl<R: EngineRenderer> dom::Host for RuntimeState<R> {
     }
 
     fn set_node_value(&mut self, id: i32, value: String) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         let result = RuntimeState::<R>::set_node_value(self, id as u32, value);
         encode_unit_result(self, result)
     }
 
     fn get_node_type(&mut self, id: i32) -> i32 {
-        if let Some(err) = reject_negative_id(self, id, "negative node id") {
-            return err;
-        }
+        check_id!(self, id, "negative node id");
         match RuntimeState::<R>::get_node_type(self, id as u32) {
             Ok(type_code) => {
                 self.clear_error();
@@ -391,7 +366,7 @@ impl<R: EngineRenderer> events::Host for RuntimeState<R> {
             return self.set_error(HostErrorCode::InvalidEventTarget, "negative target id");
         }
         self.clear_error();
-        let capture = (options_flags as u32) & 0b001 != 0;
+        let capture = engine::events::ListenerOptions::from_bits(options_flags as u32).capture;
         match RuntimeState::<R>::remove_event_listener(
             self,
             target_id as u32,
