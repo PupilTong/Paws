@@ -41,6 +41,10 @@ version = "43"
 [dev-dependencies]
 codspeed-criterion-compat = "4.4.1"
 paws-runner = { path = "../paws-runner" }
+# Owns the build-time compilation of the wasm guest fixtures under
+# `examples/` and exposes `example_wasm_path()` for e2e tests to
+# resolve `.wasm` paths.
+paws-examples = { path = "../examples" }
 
 [[bench]]
 name = "engine_bench"

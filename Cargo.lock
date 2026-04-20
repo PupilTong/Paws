@@ -2107,6 +2107,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "paws-examples"
+version = "0.1.0"
+
+[[package]]
 name = "paws-runner"
 version = "0.1.0"
 dependencies = [
@@ -3840,6 +3844,7 @@ version = "0.1.0"
 dependencies = [
  "codspeed-criterion-compat",
  "engine",
+ "paws-examples",
  "paws-runner",
  "stylo_atoms",
  "taffy",

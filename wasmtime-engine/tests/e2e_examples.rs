@@ -1,11 +1,12 @@
 //! End-to-end tests that load compiled WASM example modules and verify
 //! DOM structure, layout dimensions, and computed styles.
 //!
-//! The `.wasm` files are built by `build.rs` from the `examples/` crates.
-
-include!(concat!(env!("OUT_DIR"), "/wasm_examples.rs"));
+//! The `.wasm` files are built by `examples/build.rs` (the
+//! `paws-examples` crate) and located at runtime through
+//! [`paws_examples::example_wasm_path`].
 
 use engine::{CSSStyleValue, NodeId};
+use paws_examples::example_wasm_path;
 use paws_runner::Runner;
 
 /// Loads an example WASM binary by name.

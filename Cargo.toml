@@ -6,6 +6,7 @@ members = [
     "paws-runner",
     "rust-wasm-binding", "paws-style-ir", "view-macros",
     "ios-renderer-backend",
+    "examples",
     "yew/packages/yew",
     "yew/packages/yew-macro",
 ]

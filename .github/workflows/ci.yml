@@ -58,6 +58,7 @@ jobs:
             -p paws-style-ir \
             -p view-macros \
             -p ios-renderer-backend \
+            -p paws-examples \
             -- -D warnings
 
       - name: Install cargo-llvm-cov

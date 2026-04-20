@@ -131,9 +131,11 @@ fn build_wasm_example(
 }
 
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let workspace_root = manifest_dir.parent().expect("workspace root");
-    let examples_dir = workspace_root.join("examples");
+    // `CARGO_MANIFEST_DIR` is this crate's root (i.e. `examples/`), so
+    // its parent is the Paws workspace root and `examples_dir` is the
+    // manifest directory itself.
+    let examples_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let workspace_root = examples_dir.parent().expect("workspace root");
     let yew_examples_dir = examples_dir.join("yew");
     let yew_dir = workspace_root.join("yew");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
