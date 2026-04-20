@@ -8,18 +8,22 @@ license.workspace = true
 path = "src/lib.rs"
 
 [features]
-# Enables LLVM coverage instrumentation via minicov. Guest WASM modules
-# compiled with this feature export `__paws_dump_coverage` /
-# `__paws_coverage_ptr` so the host can extract profraw bytes after execution.
-coverage = ["minicov"]
+# TODO: coverage instrumentation (formerly via `minicov` + the
+# `__paws_dump_coverage` / `__paws_coverage_ptr` exports) was removed
+# during the component-model migration — those exports would have to
+# live inside the wrapped core module, not at the component boundary,
+# which needs a different probe path to plumb through. Kept as an empty
+# feature for now so the many downstream example crates that enable it
+# (`rust-wasm-binding/coverage`) keep resolving until the follow-up
+# restores real coverage under the component model.
+coverage = []
 
 [dependencies]
 view-macros = { path = "../view-macros" }
-minicov = { version = "0.3", optional = true, default-features = false, features = ["alloc"] }
 # wit-bindgen generates the guest-side import declarations that replace
 # the old hand-written `#[link(wasm_import_module = "env")]` extern
 # block. The `Guest` trait it emits is re-exported so example crates
-# can implement `run` / `invoke-listener` and call `export!`.
+# can implement `run` / `invoke-listener` and call `export_paws_app!`.
 wit-bindgen = "0.45"
 
 [dev-dependencies]

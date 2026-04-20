@@ -259,11 +259,11 @@ pub trait ElementOps: NodeOps {
         has_attribute(self.id(), name)
     }
 
-    /// Reads an attribute value into `buf`. See the standalone
-    /// [`crate::get_attribute`] for the length semantics.
+    /// Reads an attribute value. Returns `Ok(Some(value))` if the attribute
+    /// is set, `Ok(None)` if it is not, and `Err(code)` on host error.
     #[inline]
-    fn get_attribute(&self, name: &str, buf: &mut [u8]) -> Result<Option<usize>, i32> {
-        get_attribute(self.id(), name, buf)
+    fn get_attribute(&self, name: &str) -> Result<Option<String>, i32> {
+        get_attribute(self.id(), name)
     }
 
     /// Removes the named attribute from this element.
@@ -282,11 +282,11 @@ pub trait ElementOps: NodeOps {
 
     // -- namespace & cloning ------------------------------------------------
 
-    /// Reads the namespace URI into `buf`. See the standalone
-    /// [`crate::get_namespace_uri`] for length semantics.
+    /// Returns the namespace URI of this element, or `Ok(None)` if unset.
+    /// Returns `Err(code)` on host error.
     #[inline]
-    fn get_namespace_uri(&self, buf: &mut [u8]) -> Result<Option<usize>, i32> {
-        get_namespace_uri(self.id(), buf)
+    fn get_namespace_uri(&self) -> Result<Option<String>, i32> {
+        get_namespace_uri(self.id())
     }
 
     /// Clones this element. If `deep` is `true`, descendants are cloned

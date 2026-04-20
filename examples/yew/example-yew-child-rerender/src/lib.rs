@@ -42,40 +42,40 @@ fn ParentComponent() -> Html {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn run() -> i32 {
-    CHILD_RENDER_COUNT.store(0, Ordering::Relaxed);
-    rust_wasm_binding::reset_scratch();
+rust_wasm_binding::paws_main! {
+    fn run() -> i32 {
+        CHILD_RENDER_COUNT.store(0, Ordering::Relaxed);
 
-    let root = Rc::new(Element::new("div").expect("create root"));
-    let root_id = root.id();
-    rust_wasm_binding::append_element(0, root_id).expect("append root");
+        let root = Rc::new(Element::new("div").expect("create root"));
+        let root_id = root.id();
+        rust_wasm_binding::append_element(0, root_id).expect("append root");
 
-    let _app = yew::Renderer::<ParentComponent>::with_root(root).render();
+        let _app = yew::Renderer::<ParentComponent>::with_root(root).render();
 
-    assert_eq!(
-        CHILD_RENDER_COUNT.load(Ordering::Relaxed),
-        1,
-        "child should render once on mount"
-    );
+        assert_eq!(
+            CHILD_RENDER_COUNT.load(Ordering::Relaxed),
+            1,
+            "child should render once on mount"
+        );
 
-    // Traverse: root → ChildComponent output div → button (first child)
-    let comp_div = rust_wasm_binding::get_first_child(root_id)
-        .expect("component output div");
-    let btn_increment = rust_wasm_binding::get_first_child(comp_div)
-        .expect("increment button");
+        // Traverse: root → ChildComponent output div → button (first child)
+        let comp_div = rust_wasm_binding::get_first_child(root_id)
+            .expect("component output div");
+        let btn_increment = rust_wasm_binding::get_first_child(comp_div)
+            .expect("increment button");
 
-    rust_wasm_binding::dispatch_event(btn_increment, "click", true, true, false)
-        .expect("dispatch click");
+        rust_wasm_binding::dispatch_event(btn_increment, "click", true, true, false)
+            .expect("dispatch click");
 
-    // Flush re-renders: the state change in ChildComponent must propagate and
-    // trigger a re-render of the child (issue #4058).
-    yew::scheduler::flush();
+        // Flush re-renders: the state change in ChildComponent must propagate and
+        // trigger a re-render of the child (issue #4058).
+        yew::scheduler::flush();
 
-    let count = CHILD_RENDER_COUNT.load(Ordering::Relaxed);
-    assert!(
-        count >= 2,
-        "child must re-render after UseStateHandle prop changes (got {count})"
-    );
-    0
+        let count = CHILD_RENDER_COUNT.load(Ordering::Relaxed);
+        assert!(
+            count >= 2,
+            "child must re-render after UseStateHandle prop changes (got {count})"
+        );
+        0
+    }
 }

@@ -2,7 +2,9 @@
 
 use engine::{EngineRenderer, RuntimeState};
 use wasmtime::Engine as WasmEngine;
-use wasmtime_engine::{create_engine, run_wasm_with_coverage_and_engine, run_wasm_with_engine};
+use wasmtime_engine::{
+    create_engine, run_component, run_wasm_with_coverage_and_engine, run_wasm_with_engine,
+};
 
 use crate::error::RunnerError;
 
@@ -102,6 +104,36 @@ impl<R: EngineRenderer> Runner<R> {
     pub fn run(&mut self, wasm: &[u8], func: &str) -> Result<(), RunnerError> {
         let state = self.take_state();
         match run_wasm_with_engine(&self.engine, state, wasm, func) {
+            Ok(state) => {
+                self.state = Some(state);
+                Ok(())
+            }
+            Err(run_err) => {
+                let boxed = *run_err;
+                self.state = Some(boxed.state);
+                Err(RunnerError { error: boxed.error })
+            }
+        }
+    }
+
+    /// Executes a WASM **component** (produced by `wasm32-wasip2` builds)
+    /// by calling its `run` export. Uses the component-model linker path
+    /// in [`wasmtime_engine::run_component`], not the core-module linker
+    /// used by [`run`](Self::run).
+    ///
+    /// `func` is accepted for API symmetry with [`run`](Self::run) but
+    /// ignored: the component's world (`paws-guest` from `wit/paws.wit`)
+    /// names the entry point `run`, so there is only one valid value.
+    /// A `debug_assert_eq!` guards against callers passing something
+    /// else by mistake — surfaces the surprise during development
+    /// rather than silently running the wrong-looking call.
+    pub fn run_component(&mut self, wasm: &[u8], func: &str) -> Result<(), RunnerError> {
+        debug_assert_eq!(
+            func, "run",
+            "component-model guests only export `run`; got `{func}`",
+        );
+        let state = self.take_state();
+        match run_component(&self.engine, state, wasm, func) {
             Ok(state) => {
                 self.state = Some(state);
                 Ok(())

@@ -29,26 +29,25 @@ fn Counter() -> Html {
     }
 }
 
-/// Entry point called by the Paws host.
-///
-/// Creates a root `<div>` element, appends it to the document, and
-/// mounts the yew counter component into it. After `render()` returns
-/// the virtual DOM has been reconciled and the physical DOM tree is
-/// populated.
-#[no_mangle]
-pub extern "C" fn run() -> i32 {
-    rust_wasm_binding::reset_scratch();
+// Entry point called by the Paws host.
+//
+// Creates a root `<div>` element, appends it to the document, and
+// mounts the yew counter component into it. After `render()` returns
+// the virtual DOM has been reconciled and the physical DOM tree is
+// populated.
+rust_wasm_binding::paws_main! {
+    fn run() -> i32 {
+        let root = match Element::new("div") {
+            Ok(element) => Rc::new(element),
+            Err(error_code) => return error_code,
+        };
 
-    let root = match Element::new("div") {
-        Ok(element) => Rc::new(element),
-        Err(error_code) => return error_code,
-    };
+        if let Err(error_code) = rust_wasm_binding::append_element(0, root.id()) {
+            return error_code;
+        }
 
-    if let Err(error_code) = rust_wasm_binding::append_element(0, root.id()) {
-        return error_code;
+        let _app = yew::Renderer::<Counter>::with_root(root).render();
+
+        0
     }
-
-    let _app = yew::Renderer::<Counter>::with_root(root).render();
-
-    0
 }

@@ -3,6 +3,8 @@ use std::process::Command;
 use std::{env, fs};
 
 /// Examples under `Paws/examples/` — each is its own mini-workspace.
+/// All guests are component-model modules built for `wasm32-wasip2`,
+/// loaded at runtime via [`wasmtime_engine::run_component`].
 const EXAMPLES: &[&str] = &[
     "example-basic-element",
     "example-styled-element",
@@ -32,7 +34,13 @@ const YEW_EXAMPLES: &[&str] = &[
     "example-yew-child-rerender",
 ];
 
-const WASM_TARGET: &str = "wasm32-wasip1";
+/// Single target for every guest. `wasm-component-ld` wraps the core
+/// module emitted by LLVM into a component, which the host loads via
+/// [`wasmtime_engine::run_component`] (see `wasmtime-engine/src/lib.rs`).
+/// `wasm32-wasip3` is not a viable target yet — as of nightly-2026-04-18
+/// it has no shipped `libc.a`, and its linker (`wasm-component-ld`) is
+/// shared with wasip2 anyway.
+const WASM_TARGET: &str = "wasm32-wasip2";
 
 /// Shared coverage configuration for guest WASM builds.
 struct CoverageConfig {

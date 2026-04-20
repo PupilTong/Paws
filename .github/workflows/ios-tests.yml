@@ -26,7 +26,11 @@ jobs:
       - name: Add targets to project toolchain
         run: |
           rustup target add aarch64-apple-ios-sim
-          rustup target add wasm32-wasip1
+          rustup target add wasm32-wasip2
+
+      - name: Install wasm-component-ld
+        # Required by the wasm32-wasip2 linker flow.
+        run: cargo install wasm-component-ld --version "^0.5.22"
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

@@ -59,34 +59,34 @@ fn UBTestComponent() -> Html {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn run() -> i32 {
-    DEREF_RESULT.with(|r| *r.borrow_mut() = None);
-    rust_wasm_binding::reset_scratch();
+rust_wasm_binding::paws_main! {
+    fn run() -> i32 {
+        DEREF_RESULT.with(|r| *r.borrow_mut() = None);
 
-    let root = Rc::new(Element::new("div").expect("create root"));
-    let root_id = root.id();
-    rust_wasm_binding::append_element(0, root_id).expect("append root");
+        let root = Rc::new(Element::new("div").expect("create root"));
+        let root_id = root.id();
+        rust_wasm_binding::append_element(0, root_id).expect("append root");
 
-    let _app = yew::Renderer::<UBTestComponent>::with_root(root).render();
+        let _app = yew::Renderer::<UBTestComponent>::with_root(root).render();
 
-    // Traverse: root → component div → button (first child)
-    let comp_div = rust_wasm_binding::get_first_child(root_id)
-        .expect("component output div");
-    let button_id = rust_wasm_binding::get_first_child(comp_div)
-        .expect("trigger button");
+        // Traverse: root → component div → button (first child)
+        let comp_div = rust_wasm_binding::get_first_child(root_id)
+            .expect("component output div");
+        let button_id = rust_wasm_binding::get_first_child(comp_div)
+            .expect("trigger button");
 
-    rust_wasm_binding::dispatch_event(button_id, "click", true, true, false)
-        .expect("dispatch click");
+        rust_wasm_binding::dispatch_event(button_id, "click", true, true, false)
+            .expect("dispatch click");
 
-    // Flush re-renders scheduled by the two set() calls in the callback.
-    yew::scheduler::flush();
+        // Flush re-renders scheduled by the two set() calls in the callback.
+        yew::scheduler::flush();
 
-    let captured = DEREF_RESULT.with(|r| r.borrow().clone());
-    assert_eq!(
-        captured,
-        Some("first_dispatch".to_string()),
-        "deref() must remain valid across subsequent dispatches (got {captured:?})"
-    );
-    0
+        let captured = DEREF_RESULT.with(|r| r.borrow().clone());
+        assert_eq!(
+            captured,
+            Some("first_dispatch".to_string()),
+            "deref() must remain valid across subsequent dispatches (got {captured:?})"
+        );
+        0
+    }
 }

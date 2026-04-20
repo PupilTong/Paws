@@ -27,19 +27,19 @@ fn UseComponent() -> Html {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn run() -> i32 {
-    FINAL_COUNT.store(-1, Ordering::Relaxed);
-    rust_wasm_binding::reset_scratch();
+rust_wasm_binding::paws_main! {
+    fn run() -> i32 {
+        FINAL_COUNT.store(-1, Ordering::Relaxed);
 
-    let root = Rc::new(Element::new("div").expect("create root"));
-    rust_wasm_binding::append_element(0, root.id()).expect("append root");
+        let root = Rc::new(Element::new("div").expect("create root"));
+        rust_wasm_binding::append_element(0, root.id()).expect("append root");
 
-    // render() drives the scheduler synchronously; all re-renders from
-    // counter.set() complete before render() returns.
-    let _app = yew::Renderer::<UseComponent>::with_root(root).render();
+        // render() drives the scheduler synchronously; all re-renders from
+        // counter.set() complete before render() returns.
+        let _app = yew::Renderer::<UseComponent>::with_root(root).render();
 
-    let final_count = FINAL_COUNT.load(Ordering::Relaxed);
-    assert_eq!(final_count, 5, "counter must stabilise at 5, got {final_count}");
-    0
+        let final_count = FINAL_COUNT.load(Ordering::Relaxed);
+        assert_eq!(final_count, 5, "counter must stabilise at 5, got {final_count}");
+        0
+    }
 }

@@ -27,7 +27,13 @@ jobs:
           components: rustfmt, clippy
 
       - name: Add wasm32 target
-        run: rustup target add wasm32-wasip1
+        # All Paws guests are component-model modules. `wasm32-wasip2` is
+        # the single target; `wasm-component-ld` (installed below) wraps
+        # LLVM's core-module output into a component.
+        run: rustup target add wasm32-wasip2
+
+      - name: Install wasm-component-ld
+        run: cargo install wasm-component-ld --version "^0.5.22"
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
@@ -48,41 +54,26 @@ jobs:
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
       # -----------------------------------------------------------------
-      # WASM guest coverage (minicov + llvm-tools-preview)
-      # The project toolchain (rust-toolchain.toml = nightly-2026-04-07)
-      # is used for the coverage build. We just need to ensure WASM
-      # targets and llvm-tools-preview are installed on it.
+      # WASM guest coverage is temporarily disabled during the
+      # component-model migration. The previous pipeline relied on
+      # `minicov` instrumenting the guest + `#[export_name]` exports
+      # (`__paws_dump_coverage` / `__paws_coverage_ptr`) for the host
+      # to probe. Under the component model those exports live inside
+      # the wrapped core module, not at the component boundary, so the
+      # old probe path no longer applies and `-Cinstrument-coverage`
+      # fails to link (undefined `__llvm_profile_runtime` after
+      # `minicov` was dropped from `rust-wasm-binding`). Re-enabling
+      # guest coverage is tracked as follow-up work.
       # -----------------------------------------------------------------
-      - name: Install WASM target and llvm-tools for guest coverage
-        run: |
-          rustup target add wasm32-wasip1 --toolchain nightly-2026-04-07
-          rustup component add llvm-tools-preview --toolchain nightly-2026-04-07
 
-      - name: Run E2E tests with guest coverage extraction
-        env:
-          PAWS_WASM_COVERAGE: "1"
-        run: cargo +nightly-2026-04-07 test -p wasmtime-engine --test e2e_examples --features wasm-coverage
-
-      - name: Generate guest coverage report
-        run: bash scripts/wasm-coverage.sh
-
-      # Upload each lcov file under its own flag so host and guest coverage
-      # are tracked independently in the Codecov dashboard. A single upload
-      # call with multiple files+flags assigns ALL flags to ALL files.
+      # Upload host coverage to Codecov. Guest coverage upload is
+      # skipped until the component-model probe path is wired up.
       - name: Upload host coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           flags: host
-          fail_ci_if_error: true
-
-      - name: Upload guest coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/wasm-coverage/guest-lcov.info
-          flags: guest
           fail_ci_if_error: true
 
       - name: Install cargo-codspeed

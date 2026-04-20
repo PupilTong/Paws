@@ -5,25 +5,24 @@
 
 use rust_wasm_binding::*;
 
-#[no_mangle]
-pub extern "C" fn run() -> i32 {
-    reset_scratch();
+rust_wasm_binding::paws_main! {
+    fn run() -> i32 {
+        let result: Result<i32, i32> = (|| {
+            let parent = create_element("div")?;
+            append_element(0, parent)?;
 
-    let result: Result<i32, i32> = (|| {
-        let parent = create_element("div")?;
-        append_element(0, parent)?;
+            // First child — single append
+            let child1 = create_element("span")?;
+            append_element(parent, child1)?;
 
-        // First child — single append
-        let child1 = create_element("span")?;
-        append_element(parent, child1)?;
+            // Second and third children — batch append
+            let child2 = create_element("span")?;
+            let child3 = create_element("span")?;
+            append_elements(parent, &[child2, child3])?;
 
-        // Second and third children — batch append
-        let child2 = create_element("span")?;
-        let child3 = create_element("span")?;
-        append_elements(parent, &[child2, child3])?;
+            Ok(0)
+        })();
 
-        Ok(0)
-    })();
-
-    result.unwrap_or_else(|e| e)
+        result.unwrap_or_else(|e| e)
+    }
 }

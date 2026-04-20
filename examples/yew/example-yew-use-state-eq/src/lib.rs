@@ -29,17 +29,17 @@ fn UseComponent() -> Html {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn run() -> i32 {
-    RENDER_COUNT.store(0, Ordering::Relaxed);
-    rust_wasm_binding::reset_scratch();
+rust_wasm_binding::paws_main! {
+    fn run() -> i32 {
+        RENDER_COUNT.store(0, Ordering::Relaxed);
 
-    let root = Rc::new(Element::new("div").expect("create root"));
-    rust_wasm_binding::append_element(0, root.id()).expect("append root");
+        let root = Rc::new(Element::new("div").expect("create root"));
+        rust_wasm_binding::append_element(0, root.id()).expect("append root");
 
-    let _app = yew::Renderer::<UseComponent>::with_root(root).render();
+        let _app = yew::Renderer::<UseComponent>::with_root(root).render();
 
-    let count = RENDER_COUNT.load(Ordering::Relaxed);
-    assert_eq!(count, 2, "use_state_eq must render exactly twice, got {count}");
-    0
+        let count = RENDER_COUNT.load(Ordering::Relaxed);
+        assert_eq!(count, 2, "use_state_eq must render exactly twice, got {count}");
+        0
+    }
 }
