@@ -32,19 +32,7 @@ const YEW_EXAMPLES: &[&str] = &[
     "example-yew-child-rerender",
 ];
 
-const WASM_TARGET: &str = "wasm32-wasip1-threads";
-
-/// Yew fixtures build for the non-threads WASI target. Under
-/// `wasm32-wasip1-threads`, wasi-libc's pthread TLS bootstrap doesn't
-/// pin a stable main-thread `pthread_t` without a real wasi-threads
-/// host, and yew's `thread_local!` recursion guard in
-/// `scheduler::start_now` breaks (the scheduler loop re-enters itself,
-/// 100% CPU). Fixing this requires integrating
-/// `wasmtime-wasi-threads`, which in turn requires `T: Clone + Send +
-/// 'static` on the store data — a `RuntimeState<R>` → `Arc<Mutex<>>`
-/// refactor across `wasmtime-engine/src/wasm.rs`. Tracked separately;
-/// until then, yew fixtures stay on the non-threads target.
-const YEW_WASM_TARGET: &str = "wasm32-wasip1";
+const WASM_TARGET: &str = "wasm32-wasip1";
 
 /// Shared coverage configuration for guest WASM builds.
 struct CoverageConfig {
@@ -90,12 +78,10 @@ fn build_wasm_example(
     // Disable LTO unconditionally for guest WASM builds. Yew's
     // workspace profile turns on `lto = true` + `opt-level = "z"` +
     // `codegen-units = 1`, which strips/merges symbols aggressively —
-    // causing (a) `wasi_thread_start` to be removed from the
-    // `wasm32-wasip1-threads` binary even though wasi-libc's pthread
-    // init expects it, and (b) coverage records with empty function
-    // names that `llvm-cov export` then refuses to read. Disabling LTO
-    // sidesteps both issues at small runtime cost (these are test
-    // fixtures, not production binaries).
+    // producing coverage records with empty function names that
+    // `llvm-cov export` then refuses to read. Disabling LTO sidesteps
+    // this at small runtime cost (these are test fixtures, not
+    // production binaries).
     cmd.env("CARGO_PROFILE_RELEASE_LTO", "false");
     if coverage.enabled {
         cmd.arg("--features").arg("coverage");
@@ -200,7 +186,7 @@ fn main() {
     // Build yew examples. Each crate is a member of the yew submodule's
     // workspace, so we run `cargo build` from the yew workspace root
     // with `-p <name>` and pick up the artifact from yew/target/.
-    let yew_wasm_src_dir = yew_dir.join("target").join(YEW_WASM_TARGET).join("release");
+    let yew_wasm_src_dir = yew_dir.join("target").join(WASM_TARGET).join("release");
     for name in YEW_EXAMPLES {
         let crate_dir = yew_examples_dir.join(name);
         if !crate_dir.exists() {
@@ -210,7 +196,7 @@ fn main() {
             name,
             &yew_dir,
             &yew_wasm_src_dir,
-            YEW_WASM_TARGET,
+            WASM_TARGET,
             Some(name),
             &out_dir,
             &coverage,

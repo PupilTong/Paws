@@ -18,11 +18,6 @@ pub enum HostErrorCode {
     InvalidEventTarget = -6,
     NoActiveEvent = -7,
     EventAlreadyDispatching = -8,
-    /// Host function that touches [`RuntimeState`] was called from a wasm
-    /// thread other than the main thread. Paws reserves DOM/style/layout
-    /// access to the main thread; worker threads receive this error and
-    /// must message-pass through guest-level channels instead.
-    WrongThread = -9,
 }
 
 impl HostErrorCode {
@@ -42,7 +37,6 @@ impl HostErrorCode {
             HostErrorCode::InvalidEventTarget => "invalid event target id",
             HostErrorCode::NoActiveEvent => "no event is currently being dispatched",
             HostErrorCode::EventAlreadyDispatching => "an event is already being dispatched",
-            HostErrorCode::WrongThread => "host function called from non-main wasm thread",
         }
     }
 }

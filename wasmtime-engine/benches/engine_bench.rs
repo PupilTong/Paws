@@ -3,19 +3,18 @@ use taffy::prelude::TaffyMaxContent;
 
 use engine::RuntimeState;
 use wasmtime::{Engine as WasmEngine, Module, Store};
-use wasmtime_engine::{build_linker, MainThreadToken, StoreData};
+use wasmtime_engine::build_linker;
 
 // ---------------------------------------------------------------------------
 // Helper: compile a WAT module & instantiate with a fresh RuntimeState + linker
 // ---------------------------------------------------------------------------
-fn setup_wasm(wat: &str) -> (Store<StoreData<()>>, wasmtime::Instance) {
+fn setup_wasm(wat: &str) -> (Store<RuntimeState>, wasmtime::Instance) {
     let engine = WasmEngine::default();
     let module = Module::new(&engine, wat).expect("compile wasm module");
     let linker = build_linker(&engine);
-    MainThreadToken::install();
     let mut store = Store::new(
         &engine,
-        StoreData::new(RuntimeState::new("https://example.com".to_string())),
+        RuntimeState::new("https://example.com".to_string()),
     );
     let instance = linker
         .instantiate(&mut store, &module)
@@ -568,10 +567,9 @@ fn bench_wasm_add_large_stylesheet(c: &mut Criterion) {
     let engine = WasmEngine::default();
     let module = Module::new(&engine, &wat).expect("compile wasm module");
     let linker = build_linker(&engine);
-    MainThreadToken::install();
     let mut store = Store::new(
         &engine,
-        StoreData::new(RuntimeState::new("https://example.com".to_string())),
+        RuntimeState::new("https://example.com".to_string()),
     );
     let instance = linker
         .instantiate(&mut store, &module)
@@ -724,10 +722,9 @@ fn bench_wasm_complex_selectors(c: &mut Criterion) {
     let engine = WasmEngine::default();
     let module = Module::new(&engine, &wat).expect("compile wasm module");
     let linker = build_linker(&engine);
-    MainThreadToken::install();
     let mut store = Store::new(
         &engine,
-        StoreData::new(RuntimeState::new("https://example.com".to_string())),
+        RuntimeState::new("https://example.com".to_string()),
     );
     let instance = linker
         .instantiate(&mut store, &module)

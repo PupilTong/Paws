@@ -3,10 +3,10 @@
 //! Provides safe wrappers around all host-imported functions that WASM guests
 //! can call to manipulate the DOM, set styles, and trigger layout.
 //!
-//! Targets `wasm32-wasip1-threads` (or `wasm32-wasip1`) and links `std`
-//! (wasi-libc). Earlier revisions were `#![no_std]`, but minicov coverage
-//! instrumentation and the yew fork both needed `std` anyway — keeping
-//! two build modes added complexity for no real binary-size savings.
+//! Targets `wasm32-wasip1` and links `std` (wasi-libc). Earlier revisions
+//! were `#![no_std]`, but minicov coverage instrumentation and the yew fork
+//! both needed `std` anyway — keeping two build modes added complexity for
+//! no real binary-size savings.
 
 pub use view_macros::css;
 
