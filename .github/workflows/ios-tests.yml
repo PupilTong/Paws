@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -20,19 +24,13 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
 
-      - name: Add targets to project toolchain
-        run: |
-          rustup target add aarch64-apple-ios-sim
-          rustup target add wasm32-wasip2
+      - name: Add iOS simulator target
+        run: rustup target add aarch64-apple-ios-sim
 
-      - name: Install wasm-component-ld
-        # Required by the wasm32-wasip2 linker flow.
-        run: cargo install wasm-component-ld --version "^0.5.22"
-
-      - name: Rust cache
+      - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Build Rust static library for iOS Simulator
@@ -56,6 +54,7 @@ jobs:
 
       - name: Run Xcode tests
         run: |
+          set -o pipefail
           xcodebuild test \
             -project ios-example-app/PawsExample.xcodeproj \
             -scheme PawsExample \
@@ -63,7 +62,7 @@ jobs:
             -resultBundlePath TestResults \
             CODE_SIGNING_ALLOWED=NO \
             LIBRARY_SEARCH_PATHS="$(pwd)/target/aarch64-apple-ios-sim/release" \
-            | xcpretty || true
+            | xcpretty
 
       - name: Upload test results on failure
         if: failure()
