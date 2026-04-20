@@ -8,13 +8,22 @@ license.workspace = true
 path = "src/lib.rs"
 
 [features]
-# LLVM source-based coverage for guest WASM modules. When active, the
-# `paws_main!` macro's generated `Guest::dump_coverage` impl calls
-# `minicov::capture_coverage` and returns the resulting profraw bytes
-# over the component ABI; the host (`wasmtime-engine::run_component_*`)
-# then forwards them to `scripts/wasm-coverage.sh` for lcov
-# conversion. When the feature is off the default impl returns empty
-# bytes so the WIT contract is still satisfied.
+# LLVM source-based coverage for guest WASM modules. When active on a
+# wasm32 build, the `paws_main!` macro's generated `Guest::dump_coverage`
+# impl calls `minicov::capture_coverage` and returns the resulting
+# profraw bytes over the component ABI; the host
+# (`wasmtime-engine::run_component_*`) then forwards them to
+# `scripts/wasm-coverage.sh` for lcov conversion.
+#
+# `minicov` is target-gated to `wasm32` (see `[target.…]` block below)
+# AND optional — Cargo treats `dep:minicov` in a feature list as a
+# no-op on targets where the dep is excluded, so enabling this feature
+# for the host `cargo llvm-cov --all-features` run is safe. Without
+# the target gate, minicov's `__llvm_profile_runtime` symbol collides
+# with compiler-rt's `profiler_builtins` and the host build fails.
+# On non-wasm builds the `__dump_coverage` body short-circuits to an
+# empty `Vec<u8>` — see `cfg(all(target_arch = "wasm32", feature =
+# "coverage"))` in `src/lib.rs`.
 coverage = ["dep:minicov"]
 
 [dependencies]
@@ -24,9 +33,8 @@ view-macros = { path = "../view-macros" }
 # block. The `Guest` trait it emits is re-exported so example crates
 # can implement `run` / `invoke-listener` and call `export_paws_app!`.
 wit-bindgen = "0.45"
-# minicov provides the `__llvm_profile_runtime` shim + an API to drain
-# profraw bytes for LLVM source-based coverage. Only pulled in when
-# the `coverage` feature is enabled (see above).
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 minicov = { version = "0.3", optional = true, default-features = false, features = ["alloc"] }
 
 [dev-dependencies]

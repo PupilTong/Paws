@@ -584,14 +584,20 @@ pub fn __dispatch_listener(callback_id: i32) {
 
 /// Default `Guest::dump_coverage` body used by [`paws_main!`].
 ///
-/// When the `coverage` Cargo feature is on, returns a fresh profraw
-/// snapshot via `minicov::capture_coverage`. When the feature is off,
-/// returns an empty `Vec<u8>` — the WIT export still exists (every
-/// `paws-guest` component has it) but the host's extraction step
-/// sees zero bytes and short-circuits.
+/// Returns a fresh profraw snapshot via `minicov::capture_coverage`
+/// when both `target_arch = "wasm32"` and the `coverage` Cargo feature
+/// are active. Otherwise returns an empty `Vec<u8>` — the WIT export
+/// still exists (every `paws-guest` component has it) but the host's
+/// extraction step sees zero bytes and short-circuits.
+///
+/// The `target_arch = "wasm32"` gate is important: enabling `coverage`
+/// for a host `cargo llvm-cov --all-features` run would otherwise
+/// pull in minicov's `__llvm_profile_runtime`, which collides with
+/// compiler-rt's copy. On host builds this function always returns
+/// empty bytes regardless of the feature flag.
 #[doc(hidden)]
 pub fn __dump_coverage() -> Vec<u8> {
-    #[cfg(feature = "coverage")]
+    #[cfg(all(target_arch = "wasm32", feature = "coverage"))]
     {
         let mut buffer = Vec::new();
         // SAFETY: `capture_coverage` requires single-threaded use and
@@ -605,7 +611,7 @@ pub fn __dump_coverage() -> Vec<u8> {
         }
         buffer
     }
-    #[cfg(not(feature = "coverage"))]
+    #[cfg(not(all(target_arch = "wasm32", feature = "coverage")))]
     {
         Vec::new()
     }
