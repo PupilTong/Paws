@@ -1,18 +1,11 @@
 //! Wasm Bridge: threads together wasmtime, stylo, and taffy.
 
-#![deny(unsafe_code)]
-
-#[allow(unsafe_code)]
-mod shared_memory_access;
-
-pub mod store_data;
 pub mod wasm;
 
-pub use store_data::{MainThreadToken, StoreData};
 pub use wasm::{build_linker, read_cstr};
 
 use engine::{EngineRenderer, RuntimeState};
-use wasmtime::{AsContextMut, Engine as WasmEngine, MemoryType, Module, SharedMemory, Store};
+use wasmtime::{AsContextMut, Engine as WasmEngine, Module, Store};
 
 /// Create a [`wasmtime::Engine`] configured for the current platform.
 ///
@@ -20,9 +13,8 @@ use wasmtime::{AsContextMut, Engine as WasmEngine, MemoryType, Module, SharedMem
 /// Pulley — wasmtime's portable interpreter. On all other platforms we
 /// use the default (Cranelift) configuration.
 pub fn create_engine() -> WasmEngine {
+    #[allow(unused_mut)]
     let mut config = wasmtime::Config::new();
-    config.wasm_threads(true);
-    config.shared_memory(true);
     #[cfg(target_os = "ios")]
     config.target("pulley64").expect("set pulley64 target");
     WasmEngine::new(&config).expect("create wasmtime engine")
@@ -141,30 +133,14 @@ fn run_wasm_inner<R: EngineRenderer>(
     func_name: &str,
     mode: RunMode,
 ) -> WasmCoverageResult<R> {
-    // Mark this OS thread as the Paws main thread. Host functions will
-    // hand out `MainThreadToken`s only from here. Idempotent across runs.
-    MainThreadToken::install();
-
     let module = match Module::new(engine, wasm_bytes) {
         Ok(m) => m,
         Err(e) => {
             return Err(Box::new(RunWasmError { state, error: e }));
         }
     };
-    let mut linker = build_linker(engine);
-    let mut store = Store::new(engine, StoreData::new(state));
-
-    // Modules compiled with wasm32-wasip1-threads import shared memory
-    // from "env::memory". Provide it via the linker before instantiation.
-    if let Err(e) = (|| -> wasmtime::Result<()> {
-        let mem_ty = MemoryType::shared(17, 16384);
-        let shared_mem = SharedMemory::new(engine, mem_ty)?;
-        linker.define(&mut store, "env", "memory", shared_mem)?;
-        Ok(())
-    })() {
-        let state = store.into_data().into_state();
-        return Err(Box::new(RunWasmError { state, error: e }));
-    }
+    let linker = build_linker(engine);
+    let mut store = Store::new(engine, state);
 
     let result = (|| -> wasmtime::Result<(wasmtime::Instance, ())> {
         let instance = linker.instantiate(&mut store, &module)?;
@@ -187,11 +163,11 @@ fn run_wasm_inner<R: EngineRenderer>(
                 RunMode::WithCoverage => extract_guest_coverage(&instance, &mut store),
                 RunMode::Plain => None,
             };
-            let state = store.into_data().into_state();
+            let state = store.into_data();
             Ok((state, coverage))
         }
         Err(e) => {
-            let state = store.into_data().into_state();
+            let state = store.into_data();
             Err(Box::new(RunWasmError { state, error: e }))
         }
     }
@@ -211,7 +187,7 @@ const MEMORY_EXPORT: &str = "memory";
 /// or if the guest reports zero coverage bytes.
 fn extract_guest_coverage<R: EngineRenderer>(
     instance: &wasmtime::Instance,
-    store: &mut Store<StoreData<R>>,
+    store: &mut Store<RuntimeState<R>>,
 ) -> Option<Vec<u8>> {
     let dump_function = instance
         .get_typed_func::<(), i32>(store.as_context_mut(), COVERAGE_DUMP_EXPORT)
@@ -225,32 +201,17 @@ fn extract_guest_coverage<R: EngineRenderer>(
     let raw_pointer = ptr_function.call(store.as_context_mut(), ()).ok()?;
     let pointer = (raw_pointer > 0).then_some(raw_pointer as usize)?;
 
-    // Read bytes from WASM linear memory. Handle both regular Memory
-    // (WAT tests) and SharedMemory (wasm32-wasip1-threads modules).
-    if let Some(memory) = instance.get_memory(store.as_context_mut(), MEMORY_EXPORT) {
-        let data = memory.data(&store);
-        if pointer + length > data.len() {
-            return None;
-        }
-        Some(data[pointer..pointer + length].to_vec())
-    } else if let Some(wasmtime::Extern::SharedMemory(shared)) =
-        instance.get_export(store.as_context_mut(), MEMORY_EXPORT)
-    {
-        crate::shared_memory_access::with_shared_bytes(&shared, |data| {
-            if pointer + length > data.len() {
-                None
-            } else {
-                Some(data[pointer..pointer + length].to_vec())
-            }
-        })
-    } else {
-        None
+    let memory = instance.get_memory(store.as_context_mut(), MEMORY_EXPORT)?;
+    let data = memory.data(&store);
+    if pointer + length > data.len() {
+        return None;
     }
+    Some(data[pointer..pointer + length].to_vec())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_linker, create_engine, run_wasm, MainThreadToken, StoreData};
+    use super::{build_linker, create_engine, run_wasm};
     use engine::{HostErrorCode, RuntimeState};
     use wasmtime::{Engine as WasmEngine, Module, Store};
 
@@ -301,10 +262,9 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -315,8 +275,7 @@ mod tests {
             .expect("get run function");
         let id = run.call(&mut store, ()).expect("run wasm"); // Capture the returned ID
 
-        let token = MainThreadToken::current().expect("main thread");
-        let mut state = store.data().lock(&token);
+        let state = store.data_mut();
         state.commit();
         let node = state
             .doc
@@ -348,10 +307,9 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -363,8 +321,7 @@ mod tests {
         let status = run.call(&mut store, ()).expect("run wasm");
         assert_eq!(status, 0);
 
-        let token = MainThreadToken::current().expect("main thread");
-        let state = store.data().lock(&token);
+        let state = store.data();
         let parent = engine::NodeId::from(1_u64);
         let child = engine::NodeId::from(2_u64);
 
@@ -407,10 +364,9 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -422,8 +378,7 @@ mod tests {
         let status = run.call(&mut store, ()).expect("run wasm");
         assert_eq!(status, HostErrorCode::InvalidParent.as_i32());
 
-        let token = MainThreadToken::current().expect("main thread");
-        let state = store.data().lock(&token);
+        let state = store.data();
         let error = state.last_error.as_ref().expect("last error set");
         assert_eq!(error.code, HostErrorCode::InvalidParent.as_i32());
     }
@@ -454,10 +409,9 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -469,8 +423,7 @@ mod tests {
         let status = run.call(&mut store, ()).expect("run wasm");
         assert_eq!(status, 0);
 
-        let token = MainThreadToken::current().expect("main thread");
-        let state = store.data().lock(&token);
+        let state = store.data();
         let parent = engine::NodeId::from(1_u64);
         if let Some(parent_node) = state.doc.get_node(parent) {
             if parent_node.is_element() {
@@ -509,10 +462,9 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -524,8 +476,7 @@ mod tests {
         let status = run.call(&mut store, ()).expect("run wasm");
         assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
 
-        let token = MainThreadToken::current().expect("main thread");
-        let state = store.data().lock(&token);
+        let state = store.data();
         let parent_element_opt = state.doc.get_node(engine::NodeId::from(1_u64));
         if let Some(node) = parent_element_opt {
             if node.is_element() {
@@ -560,10 +511,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -577,8 +527,7 @@ mod tests {
         let status = run.call(&mut store, ()).expect("run wasm");
         assert_eq!(status, HostErrorCode::InvalidChild.as_i32());
 
-        let token = MainThreadToken::current().expect("main thread");
-        let state = store.data().lock(&token);
+        let state = store.data();
         // Check that child (id 2) is removed from the map
         assert!(state.doc.get_node(engine::NodeId::from(2_u64)).is_none());
     }
@@ -598,10 +547,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -638,10 +586,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -652,8 +599,7 @@ mod tests {
             .expect("get run function");
         let id = run.call(&mut store, ()).expect("run wasm");
 
-        let token = MainThreadToken::current().expect("main thread");
-        let mut state = store.data().lock(&token);
+        let state = store.data_mut();
         state.commit();
         let node = state
             .doc
@@ -681,10 +627,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -713,10 +658,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -824,10 +768,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile wasm module");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -840,35 +783,29 @@ mod tests {
         assert_eq!(result, 0, "__commit should return 0 on success");
 
         // Verify that commit resolved styles by reading a computed property
-        {
-            let token = MainThreadToken::current().expect("main thread");
-            let mut state = store.data().lock(&token);
-            let state: &mut RuntimeState = &mut state;
-            let map = state
-                .computed_style_map(1)
-                .expect("computed style map for div");
-            let width = map
-                .get("width", &mut state.doc, &state.style_context)
-                .expect("should have computed width");
-            match width {
-                engine::CSSStyleValue::Unit(u) => assert_eq!(u.value, 150.0),
-                engine::CSSStyleValue::Unparsed(s) => {
-                    assert!(s.contains("150"), "expected 150 in {s}")
-                }
-                other => panic!("unexpected width value: {other:?}"),
-            }
+        let state = store.data_mut();
+        let map = state
+            .computed_style_map(1)
+            .expect("computed style map for div");
+        let width = map
+            .get("width", &mut state.doc, &state.style_context)
+            .expect("should have computed width");
+        match width {
+            engine::CSSStyleValue::Unit(u) => assert_eq!(u.value, 150.0),
+            engine::CSSStyleValue::Unparsed(s) => assert!(s.contains("150"), "expected 150 in {s}"),
+            other => panic!("unexpected width value: {other:?}"),
         }
 
         // Verify that commit also computed layout (re-commit is a no-op
         // style-wise but returns the same layout tree)
-        {
-            let token = MainThreadToken::current().expect("main thread");
-            let mut state = store.data().lock(&token);
-            state.commit();
-            let node = state.doc.get_node(engine::NodeId::from(1_u64)).unwrap();
-            assert_eq!(node.layout().size.width, 150.0);
-            assert_eq!(node.layout().size.height, 75.0);
-        }
+        store.data_mut().commit();
+        let node = store
+            .data()
+            .doc
+            .get_node(engine::NodeId::from(1_u64))
+            .unwrap();
+        assert_eq!(node.layout().size.width, 150.0);
+        assert_eq!(node.layout().size.height, 75.0);
     }
 
     // -----------------------------------------------------------------------
@@ -911,10 +848,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -974,10 +910,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1033,10 +968,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1100,10 +1034,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1174,10 +1107,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1260,10 +1192,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1332,10 +1263,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1407,10 +1337,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1484,10 +1413,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1562,10 +1490,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1626,10 +1553,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1677,10 +1603,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1751,10 +1676,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -1779,19 +1703,15 @@ mod tests {
             .unwrap();
 
         // Verify text node exists in the DOM
-        {
-            let token = MainThreadToken::current().expect("main thread");
-            let state = store.data().lock(&token);
-            let text_node = state
-                .doc
-                .get_node(engine::NodeId::from(txt_id as u64))
-                .expect("text node should exist");
-            assert!(text_node.is_text_node());
-        }
+        let state = store.data();
+        let text_node = state
+            .doc
+            .get_node(engine::NodeId::from(txt_id as u64))
+            .expect("text node should exist");
+        assert!(text_node.is_text_node());
 
         // Verify layout includes text node with non-zero dimensions
-        let token = MainThreadToken::current().expect("main thread");
-        let mut state = store.data().lock(&token);
+        let state = store.data_mut();
         state.commit();
         let text_node = state
             .doc
@@ -1839,11 +1759,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -1854,8 +1770,7 @@ mod tests {
         let status = run.call(&mut store, ()).expect("run");
         assert_eq!(status, 0);
 
-        let token = MainThreadToken::current().expect("main thread");
-        let state = store.data().lock(&token);
+        let state = store.data();
         let parent = state.doc.get_node(engine::NodeId::from(1_u64)).unwrap();
         assert_eq!(
             parent.children,
@@ -1877,11 +1792,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -1914,11 +1825,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -1962,11 +1869,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -1977,15 +1880,15 @@ mod tests {
         let cloned_id = run.call(&mut store, ()).expect("run");
         assert!(cloned_id > 0, "clone should return a positive ID");
 
-        let token = MainThreadToken::current().expect("main thread");
-        let state = store.data().lock(&token);
+        let state = store.data();
         let cloned = state
             .doc
             .get_node(engine::NodeId::from(cloned_id as u64))
             .expect("cloned node should exist");
         assert!(cloned.is_element());
         // Verify attribute was cloned via RuntimeState's public API
-        let attr = state
+        let attr = store
+            .data()
             .get_attribute(cloned_id as u32, "id")
             .expect("get_attribute should work");
         assert_eq!(attr.as_deref(), Some("myid"));
@@ -2020,11 +1923,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -2035,8 +1934,7 @@ mod tests {
         let cloned_id = run.call(&mut store, ()).expect("run");
         assert!(cloned_id > 0);
 
-        let token = MainThreadToken::current().expect("main thread");
-        let state = store.data().lock(&token);
+        let state = store.data();
         let cloned = state
             .doc
             .get_node(engine::NodeId::from(cloned_id as u64))
@@ -2071,11 +1969,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -2108,11 +2002,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -2123,8 +2013,7 @@ mod tests {
         let status = run.call(&mut store, ()).expect("run");
         assert_eq!(status, 0);
 
-        let token = MainThreadToken::current().expect("main thread");
-        let state = store.data().lock(&token);
+        let state = store.data();
         let text = state
             .doc
             .get_node(engine::NodeId::from(1_u64))
@@ -2151,11 +2040,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -2183,11 +2068,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -2219,11 +2100,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -2253,11 +2130,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -2284,11 +2157,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -2314,11 +2183,7 @@ mod tests {
 
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
-        let mut store = Store::new(
-            &engine,
-            StoreData::new(RuntimeState::new("https://example.com".into())),
-        );
+        let mut store = Store::new(&engine, RuntimeState::new("https://example.com".into()));
         let linker = build_linker(&engine);
         let instance = linker
             .instantiate(&mut store, &module)
@@ -2364,10 +2229,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2417,10 +2281,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2474,10 +2337,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2519,10 +2381,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2588,10 +2449,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2689,10 +2549,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2738,10 +2597,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2791,10 +2649,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2838,10 +2695,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2899,10 +2755,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2942,10 +2797,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -2973,10 +2827,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -3004,10 +2857,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -3036,10 +2888,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -3077,10 +2928,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -3131,10 +2981,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -3177,10 +3026,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -3212,10 +3060,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker
@@ -3243,10 +3090,9 @@ mod tests {
 "#;
         let engine = WasmEngine::default();
         let module = Module::new(&engine, wat).expect("compile");
-        MainThreadToken::install();
         let mut store = Store::new(
             &engine,
-            StoreData::new(RuntimeState::new("https://example.com".to_string())),
+            RuntimeState::new("https://example.com".to_string()),
         );
         let linker = build_linker(&engine);
         let instance = linker

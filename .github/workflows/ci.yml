@@ -26,11 +26,8 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Add wasm32 targets
-        # wasm32-wasip1-threads for standalone Paws examples; plain
-        # wasm32-wasip1 for yew fixtures (see build.rs notes on the
-        # wasi-libc pthread-TLS bootstrap hang).
-        run: rustup target add wasm32-wasip1-threads wasm32-wasip1
+      - name: Add wasm32 target
+        run: rustup target add wasm32-wasip1
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
@@ -56,9 +53,9 @@ jobs:
       # is used for the coverage build. We just need to ensure WASM
       # targets and llvm-tools-preview are installed on it.
       # -----------------------------------------------------------------
-      - name: Install WASM targets and llvm-tools for guest coverage
+      - name: Install WASM target and llvm-tools for guest coverage
         run: |
-          rustup target add wasm32-wasip1-threads wasm32-wasip1 --toolchain nightly-2026-04-07
+          rustup target add wasm32-wasip1 --toolchain nightly-2026-04-07
           rustup component add llvm-tools-preview --toolchain nightly-2026-04-07
 
       - name: Run E2E tests with guest coverage extraction
