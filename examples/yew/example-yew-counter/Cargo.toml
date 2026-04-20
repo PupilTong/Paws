@@ -2,10 +2,6 @@
 name = "example-yew-counter"
 version = "0.1.0"
 edition = "2021"
-# This fixture's source lives in Paws but it must be built as a member
-# of the yew workspace so yew/packages/yew's `workspace = true` deps
-# resolve. The yew-side change is in yew/Cargo.toml's workspace.members.
-workspace = "../../../yew"
 
 [lib]
 crate-type = ["cdylib"]
@@ -16,4 +12,9 @@ yew = { path = "../../../yew/packages/yew", features = ["csr"] }
 
 [features]
 coverage = ["rust-wasm-binding/coverage"]
+
+# Declare a 1-crate workspace so `cargo` does not climb upward and find
+# Paws' root workspace. The yew path dep below resolves its own
+# `workspace = true` entries through Paws' root workspace independently.
+[workspace]
 

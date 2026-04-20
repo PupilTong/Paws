@@ -45,7 +45,20 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        # Scoped to Paws' own crates. Yew (vendored at `yew/packages/*`)
+        # is a member of the workspace for testing, but it does not pass
+        # Paws' `-D warnings` lint bar — keep lint enforcement on Paws
+        # code only to avoid carrying a growing pile of upstream patches.
+        run: |
+          cargo clippy --all-targets --all-features \
+            -p engine \
+            -p wasmtime-engine \
+            -p paws-runner \
+            -p rust-wasm-binding \
+            -p paws-style-ir \
+            -p view-macros \
+            -p ios-renderer-backend \
+            -- -D warnings
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov

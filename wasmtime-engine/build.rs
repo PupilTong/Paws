@@ -19,10 +19,11 @@ const EXAMPLES: &[&str] = &[
 ];
 
 /// Yew-based test fixtures under `Paws/examples/yew/`. Source lives in
-/// the Paws repo; each crate is a member of the yew submodule's
-/// workspace (see `yew/Cargo.toml`) so `yew/packages/yew`'s
-/// `workspace = true` dependencies resolve. Built artifacts land in
-/// `yew/target/` (shared so yew itself only compiles once).
+/// the Paws repo; each crate is now a standalone package (yew's own
+/// workspace has been retired). Their `yew = { path = ... }` dep resolves
+/// `*.workspace = true` through Paws' root workspace, which owns
+/// `yew/packages/yew` as a member. Built artifacts share
+/// `yew/target/` via `CARGO_TARGET_DIR` so yew itself compiles once.
 const YEW_EXAMPLES: &[&str] = &[
     "example-yew-counter",
     // Ported from tests-archive/integration/use_state.rs
@@ -56,18 +57,18 @@ struct CoverageConfig {
 /// Builds a single WASM guest crate and copies its `.wasm` output into
 /// `out_dir`, returning `(rust_name, copied_wasm_path)`.
 ///
-/// - `crate_dir` is where `cargo` runs (the example's own workspace root).
+/// - `crate_dir` is where `cargo` runs (the example's own crate root).
 /// - `wasm_src_dir` is where the `.wasm` output lands. For standalone
 ///   examples this is `<crate_dir>/target/<target>/release/`; for yew
 ///   examples it is `<workspace>/yew/target/<target>/release/`.
-/// - `package` is `Some(name)` when the invocation needs `-p <name>`
-///   (yew's multi-package workspace), `None` otherwise.
+/// - `target_dir_override` sets `CARGO_TARGET_DIR` when `Some`, so
+///   multiple example builds can share a single target directory (yew).
 fn build_wasm_example(
     name: &str,
     crate_dir: &Path,
     wasm_src_dir: &Path,
     target: &str,
-    package: Option<&str>,
+    target_dir_override: Option<&Path>,
     out_dir: &Path,
     coverage: &CoverageConfig,
 ) -> (String, PathBuf) {
@@ -80,8 +81,8 @@ fn build_wasm_example(
         .arg(target)
         .arg("--release")
         .current_dir(crate_dir);
-    if let Some(pkg) = package {
-        cmd.arg("-p").arg(pkg);
+    if let Some(dir) = target_dir_override {
+        cmd.env("CARGO_TARGET_DIR", dir);
     }
     // Disable LTO unconditionally for guest WASM builds. Yew's
     // workspace profile turns on `lto = true` + `opt-level = "z"` +
@@ -191,10 +192,12 @@ fn main() {
         ));
     }
 
-    // Build yew examples. Each crate is a member of the yew submodule's
-    // workspace, so we run `cargo build` from the yew workspace root
-    // with `-p <name>` and pick up the artifact from yew/target/.
-    let yew_wasm_src_dir = yew_dir.join("target").join(WASM_TARGET).join("release");
+    // Build yew examples. Each crate is standalone (excluded from the
+    // Paws workspace); we run `cargo build` inside the crate directory
+    // and share `yew/target/` via `CARGO_TARGET_DIR` so the `yew` path
+    // dep only compiles once across the seven fixtures.
+    let yew_target_dir = yew_dir.join("target");
+    let yew_wasm_src_dir = yew_target_dir.join(WASM_TARGET).join("release");
     for name in YEW_EXAMPLES {
         let crate_dir = yew_examples_dir.join(name);
         if !crate_dir.exists() {
@@ -202,10 +205,10 @@ fn main() {
         }
         wasm_paths.push(build_wasm_example(
             name,
-            &yew_dir,
+            &crate_dir,
             &yew_wasm_src_dir,
             WASM_TARGET,
-            Some(name),
+            Some(yew_target_dir.as_path()),
             &out_dir,
             &coverage,
         ));
