@@ -121,10 +121,17 @@ impl<R: EngineRenderer> Runner<R> {
     /// in [`wasmtime_engine::run_component`], not the core-module linker
     /// used by [`run`](Self::run).
     ///
-    /// `func` is accepted for API symmetry but ignored: the component's
-    /// world (`paws-guest` from `wit/paws.wit`) names the entry point
-    /// `run`.
+    /// `func` is accepted for API symmetry with [`run`](Self::run) but
+    /// ignored: the component's world (`paws-guest` from `wit/paws.wit`)
+    /// names the entry point `run`, so there is only one valid value.
+    /// A `debug_assert_eq!` guards against callers passing something
+    /// else by mistake — surfaces the surprise during development
+    /// rather than silently running the wrong-looking call.
     pub fn run_component(&mut self, wasm: &[u8], func: &str) -> Result<(), RunnerError> {
+        debug_assert_eq!(
+            func, "run",
+            "component-model guests only export `run`; got `{func}`",
+        );
         let state = self.take_state();
         match run_component(&self.engine, state, wasm, func) {
             Ok(state) => {
