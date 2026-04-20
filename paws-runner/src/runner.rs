@@ -3,7 +3,8 @@
 use engine::{EngineRenderer, RuntimeState};
 use wasmtime::Engine as WasmEngine;
 use wasmtime_engine::{
-    create_engine, run_component, run_wasm_with_coverage_and_engine, run_wasm_with_engine,
+    create_engine, run_component, run_component_with_coverage, run_wasm_with_coverage_and_engine,
+    run_wasm_with_engine,
 };
 
 use crate::error::RunnerError;
@@ -151,6 +152,10 @@ impl<R: EngineRenderer> Runner<R> {
     /// `rust-wasm-binding`'s `coverage` feature.
     ///
     /// When the guest lacks the coverage exports, returns `Ok(None)`.
+    ///
+    /// NOTE: this variant uses the core-module linker and is retained
+    /// only for internal WAT unit tests. Production guests are
+    /// components — see [`run_component_with_coverage`](Self::run_component_with_coverage).
     pub fn run_with_coverage(
         &mut self,
         wasm: &[u8],
@@ -158,6 +163,38 @@ impl<R: EngineRenderer> Runner<R> {
     ) -> Result<Option<Vec<u8>>, RunnerError> {
         let state = self.take_state();
         match run_wasm_with_coverage_and_engine(&self.engine, state, wasm, func) {
+            Ok((state, profraw)) => {
+                self.state = Some(state);
+                Ok(profraw)
+            }
+            Err(run_err) => {
+                let boxed = *run_err;
+                self.state = Some(boxed.state);
+                Err(RunnerError { error: boxed.error })
+            }
+        }
+    }
+
+    /// Executes a WASM **component** like [`run_component`](Self::run_component)
+    /// and additionally returns profraw bytes extracted from the
+    /// component's `dump-coverage` export. Returns `Ok(None)` when the
+    /// guest was built without the `coverage` feature (the export
+    /// exists but yields zero bytes).
+    ///
+    /// `func` is accepted for API symmetry but ignored: the component
+    /// always uses `run`. A `debug_assert_eq!` guards against stale
+    /// callers passing something else.
+    pub fn run_component_with_coverage(
+        &mut self,
+        wasm: &[u8],
+        func: &str,
+    ) -> Result<Option<Vec<u8>>, RunnerError> {
+        debug_assert_eq!(
+            func, "run",
+            "component-model guests only export `run`; got `{func}`",
+        );
+        let state = self.take_state();
+        match run_component_with_coverage(&self.engine, state, wasm, func) {
             Ok((state, profraw)) => {
                 self.state = Some(state);
                 Ok(profraw)

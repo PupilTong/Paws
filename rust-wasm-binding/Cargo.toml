@@ -8,15 +8,23 @@ license.workspace = true
 path = "src/lib.rs"
 
 [features]
-# TODO: coverage instrumentation (formerly via `minicov` + the
-# `__paws_dump_coverage` / `__paws_coverage_ptr` exports) was removed
-# during the component-model migration — those exports would have to
-# live inside the wrapped core module, not at the component boundary,
-# which needs a different probe path to plumb through. Kept as an empty
-# feature for now so the many downstream example crates that enable it
-# (`rust-wasm-binding/coverage`) keep resolving until the follow-up
-# restores real coverage under the component model.
-coverage = []
+# LLVM source-based coverage for guest WASM modules. When active on a
+# wasm32 build, the `paws_main!` macro's generated `Guest::dump_coverage`
+# impl calls `minicov::capture_coverage` and returns the resulting
+# profraw bytes over the component ABI; the host
+# (`wasmtime-engine::run_component_*`) then forwards them to
+# `scripts/wasm-coverage.sh` for lcov conversion.
+#
+# `minicov` is target-gated to `wasm32` (see `[target.…]` block below)
+# AND optional — Cargo treats `dep:minicov` in a feature list as a
+# no-op on targets where the dep is excluded, so enabling this feature
+# for the host `cargo llvm-cov --all-features` run is safe. Without
+# the target gate, minicov's `__llvm_profile_runtime` symbol collides
+# with compiler-rt's `profiler_builtins` and the host build fails.
+# On non-wasm builds the `__dump_coverage` body short-circuits to an
+# empty `Vec<u8>` — see `cfg(all(target_arch = "wasm32", feature =
+# "coverage"))` in `src/lib.rs`.
+coverage = ["dep:minicov"]
 
 [dependencies]
 view-macros = { path = "../view-macros" }
@@ -25,6 +33,9 @@ view-macros = { path = "../view-macros" }
 # block. The `Guest` trait it emits is re-exported so example crates
 # can implement `run` / `invoke-listener` and call `export_paws_app!`.
 wit-bindgen = "0.45"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+minicov = { version = "0.3", optional = true, default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 rkyv = { version = "0.8.9" }

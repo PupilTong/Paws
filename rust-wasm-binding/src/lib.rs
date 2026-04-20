@@ -582,6 +582,41 @@ pub fn __dispatch_listener(callback_id: i32) {
     }
 }
 
+/// Default `Guest::dump_coverage` body used by [`paws_main!`].
+///
+/// Returns a fresh profraw snapshot via `minicov::capture_coverage`
+/// when both `target_arch = "wasm32"` and the `coverage` Cargo feature
+/// are active. Otherwise returns an empty `Vec<u8>` — the WIT export
+/// still exists (every `paws-guest` component has it) but the host's
+/// extraction step sees zero bytes and short-circuits.
+///
+/// The `target_arch = "wasm32"` gate is important: enabling `coverage`
+/// for a host `cargo llvm-cov --all-features` run would otherwise
+/// pull in minicov's `__llvm_profile_runtime`, which collides with
+/// compiler-rt's copy. On host builds this function always returns
+/// empty bytes regardless of the feature flag.
+#[doc(hidden)]
+pub fn __dump_coverage() -> Vec<u8> {
+    #[cfg(all(target_arch = "wasm32", feature = "coverage"))]
+    {
+        let mut buffer = Vec::new();
+        // SAFETY: `capture_coverage` requires single-threaded use and
+        // that every static global-constructor has already run. Paws
+        // guests are single-threaded WASM, and this helper is only
+        // reachable from `Guest::dump_coverage`, which the host calls
+        // AFTER `Guest::run()` returns — so every `#[ctor]`/`lazy_static`
+        // has been initialised by then.
+        unsafe {
+            minicov::capture_coverage(&mut buffer).expect("capture_coverage");
+        }
+        buffer
+    }
+    #[cfg(not(all(target_arch = "wasm32", feature = "coverage")))]
+    {
+        Vec::new()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shadow DOM
 // ---------------------------------------------------------------------------
@@ -646,6 +681,9 @@ macro_rules! paws_main {
             fn run() -> i32 $body
             fn invoke_listener(callback_id: i32) {
                 $crate::__dispatch_listener(callback_id);
+            }
+            fn dump_coverage() -> ::std::vec::Vec<u8> {
+                $crate::__dump_coverage()
             }
         }
         $crate::export_paws_app!(__PawsApp);
