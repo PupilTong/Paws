@@ -197,6 +197,20 @@ fn main() {
     // Build component-model examples. Each is its own mini-workspace
     // targeting `wasm32-wasip2`; `wasm-component-ld` wraps the output
     // as a component, which the host loads via `run_component`.
+    //
+    // Coverage instrumentation is piggy-backed on `rust-wasm-binding`'s
+    // `coverage` feature (minicov). The component examples do not
+    // depend on `rust-wasm-binding` — cargo would reject
+    // `--features coverage` with "this package does not contain this
+    // feature". Pass a force-disabled `CoverageConfig` so the profraw
+    // bytes from the legacy examples stay the sole coverage source for
+    // now; wiring guest coverage through the component boundary is
+    // follow-up work.
+    let component_coverage = CoverageConfig {
+        enabled: false,
+        toolchain: coverage.toolchain.clone(),
+        rustflags: String::new(),
+    };
     for name in COMPONENT_EXAMPLES {
         let crate_dir = examples_dir.join(name);
         if !crate_dir.exists() {
@@ -213,7 +227,7 @@ fn main() {
             COMPONENT_WASM_TARGET,
             None,
             &out_dir,
-            &coverage,
+            &component_coverage,
         ));
     }
 
