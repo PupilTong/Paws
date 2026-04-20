@@ -1,0 +1,17 @@
+[package]
+name = "paws-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Each `examples/example-*` subdirectory is its own standalone crate
+# (built as a wasm32-wasip2 cdylib by this crate's build.rs). Without
+# these, cargo tries to auto-register them as `[[example]]` targets
+# of this crate and then fails to interpret their Cargo.toml files.
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lib]
+path = "src/lib.rs"
