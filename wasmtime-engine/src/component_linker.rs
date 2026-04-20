@@ -13,19 +13,18 @@
 //! the core module as a component. The resulting binary is what
 //! [`run_component`] consumes.
 
-use crate::bindings::PawsGuest;
-use engine::{EngineRenderer, RuntimeState};
-use wasmtime::component::{Component, Linker as ComponentLinker, ResourceTable};
-use wasmtime::{Engine as WasmEngine, Store};
+use crate::bindings::paws::host as paws_host;
+use engine::{EngineRenderer, HostErrorCode, RuntimeState};
+use stylo_atoms::Atom;
+use wasmtime::component::{Component, Linker as ComponentLinker, ResourceTable, TypedFunc};
+use wasmtime::{AsContextMut, Engine as WasmEngine, Store, StoreContextMut};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::{RunWasmError, WasmCoverageResult};
 
 /// Store-data wrapper that bundles Paws's [`RuntimeState`] with the
-/// per-instance WASI context and resource table. Required because
-/// standard guest components (via `std` / `tokio` / `futures`) import
-/// `wasi:io`, `wasi:clocks`, etc.; their host impls in
-/// `wasmtime-wasi` need somewhere to stash their own state.
+/// per-instance WASI context, resource table, and (once the guest is
+/// instantiated) a handle to the guest's `invoke-listener` export.
 ///
 /// Implements [`Deref`](std::ops::Deref) / [`DerefMut`] to
 /// [`RuntimeState`] so code that inspects state after a run (tests,
@@ -35,6 +34,12 @@ pub struct HostData<R: EngineRenderer> {
     pub state: RuntimeState<R>,
     wasi: WasiCtx,
     table: ResourceTable,
+    /// Typed handle to the guest's `invoke-listener` export, captured
+    /// right after instantiation in [`run_component_inner`]. The
+    /// custom `dispatch-event` linker registration below pulls this
+    /// out to re-enter the guest during the W3C three-phase dispatch
+    /// algorithm.
+    invoke_listener: Option<TypedFunc<(i32,), ()>>,
 }
 
 impl<R: EngineRenderer> HostData<R> {
@@ -43,6 +48,7 @@ impl<R: EngineRenderer> HostData<R> {
             state,
             wasi: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
+            invoke_listener: None,
         }
     }
 
@@ -84,18 +90,387 @@ impl<R: EngineRenderer> WasiView for HostData<R> {
     }
 }
 
-/// Builds a [`wasmtime::component::Linker`] with every host import from
-/// `wit/paws.wit` wired in, plus the standard WASI p2 implementations.
-/// The Paws-specific `Host` traits are implemented on [`RuntimeState`]
-/// (see [`crate::host_impl`]); the getter projects
-/// `&mut HostData<R>` → `&mut RuntimeState<R>` via `&mut h.state`.
+/// Builds a [`wasmtime::component::Linker`] with every host import
+/// wired in.
+///
+/// All four Paws interfaces (`dom`, `events`, `shadow`, `stylesheet`)
+/// have their bindgen-generated `add_to_linker` implementations
+/// invoked, EXCEPT we override `paws:host/events/dispatch-event`: the
+/// default registration routes through the `events::Host::dispatch_event`
+/// trait method on [`RuntimeState`], but that method has only `&mut
+/// self` access and cannot re-enter the guest to invoke listener
+/// callbacks. Our replacement closure takes a
+/// [`StoreContextMut`](wasmtime::StoreContextMut) and runs the W3C
+/// three-phase algorithm, calling the guest's `invoke-listener`
+/// export (captured in [`HostData::invoke_listener`]) for every
+/// matched listener.
 pub fn build_component_linker<R: EngineRenderer>(
     engine: &WasmEngine,
 ) -> wasmtime::Result<ComponentLinker<HostData<R>>> {
     let mut linker: ComponentLinker<HostData<R>> = ComponentLinker::new(engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-    PawsGuest::add_to_linker::<HostData<R>, RuntimeStateData<R>>(&mut linker, |h| &mut h.state)?;
+
+    // dom / shadow / stylesheet: bindgen auto-registrations are fine.
+    paws_host::dom::add_to_linker::<HostData<R>, RuntimeStateData<R>>(&mut linker, |h| {
+        &mut h.state
+    })?;
+    paws_host::shadow::add_to_linker::<HostData<R>, RuntimeStateData<R>>(&mut linker, |h| {
+        &mut h.state
+    })?;
+    paws_host::stylesheet::add_to_linker::<HostData<R>, RuntimeStateData<R>>(&mut linker, |h| {
+        &mut h.state
+    })?;
+
+    // events: wasmtime's component `Linker` does not allow two
+    // registrations of the same instance name (it errors with "map
+    // entry `paws:host/events@0.1.0` defined twice"), so we cannot
+    // call bindgen's `add_to_linker` AND then re-open the instance
+    // to override `dispatch-event`. Instead, register all 14 event
+    // functions manually here: the 13 simple ones delegate to the
+    // [`events::Host`] trait impl on [`RuntimeState`] (same pattern
+    // bindgen generates), and `dispatch-event` is our custom three-
+    // phase dispatcher that re-enters the guest via the captured
+    // `invoke-listener` typed func.
+    register_events_interface::<R>(&mut linker)?;
+
     Ok(linker)
+}
+
+/// Hand-rolled equivalent of `paws_host::events::add_to_linker` that
+/// swaps out `dispatch-event` for a store-aware implementation. Every
+/// other function delegates to the `events::Host` trait on
+/// [`RuntimeState`] via the same host-getter projection bindgen would
+/// have used (`|h| &mut h.state`).
+fn register_events_interface<R: EngineRenderer>(
+    linker: &mut ComponentLinker<HostData<R>>,
+) -> wasmtime::Result<()> {
+    use paws_host::events::Host as EventsHost;
+
+    let mut inst = linker.instance("paws:host/events@0.1.0")?;
+
+    // Thirteen of the fourteen event functions are straight
+    // delegations to an `EventsHost::<method>(&mut state, args...)`
+    // call — exactly the shape `paws_host::events::add_to_linker`
+    // would have generated. Two macro arms cover them all: `delegate!`
+    // binds a component-ABI name to an `EventsHost` method with a
+    // matching parameter tuple. Keeping the arms typed in the
+    // invocation means a signature drift in the WIT schema will fail
+    // at the macro call-site, not at some later runtime mismatch.
+    //
+    // `dispatch-event` is the odd one out — it needs the store to
+    // re-enter the guest — so it's wrapped manually below.
+    macro_rules! delegate {
+        // Accessor / mutator with args, returning i32.
+        ($name:literal, $method:ident ( $( $arg:ident : $ty:ty ),+ $(,)? ) -> i32) => {
+            inst.func_wrap(
+                $name,
+                |mut caller: StoreContextMut<'_, HostData<R>>,
+                 ( $( $arg ),+ ,): ( $( $ty ),+ ,)|
+                 -> wasmtime::Result<(i32,)> {
+                    let host = &mut caller.data_mut().state;
+                    Ok((EventsHost::$method(host $(, $arg)+),))
+                },
+            )?;
+        };
+        // Zero-arg accessor returning a scalar (i32 or f64).
+        ($name:literal, $method:ident () -> $ret:ty) => {
+            inst.func_wrap(
+                $name,
+                |mut caller: StoreContextMut<'_, HostData<R>>, (): ()|
+                 -> wasmtime::Result<($ret,)> {
+                    Ok((EventsHost::$method(&mut caller.data_mut().state),))
+                },
+            )?;
+        };
+    }
+
+    delegate!(
+        "add-event-listener",
+        add_event_listener(target_id: i32, event_type: String, callback_id: i32, options_flags: i32) -> i32
+    );
+    delegate!(
+        "remove-event-listener",
+        remove_event_listener(target_id: i32, event_type: String, callback_id: i32, options_flags: i32) -> i32
+    );
+    delegate!("stop-propagation", stop_propagation() -> i32);
+    delegate!("stop-immediate-propagation", stop_immediate_propagation() -> i32);
+    delegate!("prevent-default", prevent_default() -> i32);
+    delegate!("target", target() -> i32);
+    delegate!("current-target", current_target() -> i32);
+    delegate!("phase", phase() -> i32);
+    delegate!("bubbles", bubbles() -> i32);
+    delegate!("cancelable", cancelable() -> i32);
+    delegate!("default-prevented", default_prevented() -> i32);
+    delegate!("composed", composed() -> i32);
+    delegate!("timestamp", timestamp() -> f64);
+
+    // `dispatch-event`: the three-phase algorithm needs the store so
+    // it can call back into the guest via the captured typed
+    // `invoke-listener` func. Handled inline, not through the macro.
+    inst.func_wrap(
+        "dispatch-event",
+        |mut caller: StoreContextMut<'_, HostData<R>>,
+         (target_id, event_type, bubbles, cancelable, composed): (
+            i32,
+            String,
+            bool,
+            bool,
+            bool,
+        )|
+         -> wasmtime::Result<(i32,)> {
+            let code = dispatch_event_component::<R>(
+                &mut caller,
+                target_id,
+                Atom::from(event_type.as_str()),
+                bubbles,
+                cancelable,
+                composed,
+            )?;
+            Ok((code,))
+        },
+    )?;
+
+    Ok(())
+}
+
+/// Implements the three-phase W3C event dispatch algorithm for the
+/// component-model host path. Mirrors the core-module
+/// `wasm::dispatch_event_wasm` but drives guest re-entry through
+/// [`PawsGuest::call_invoke_listener`] (via the captured
+/// [`HostData::invoke_listener`]`TypedFunc`) instead of a raw
+/// `wasmtime::Func` fetched from a `Caller`.
+fn dispatch_event_component<R: EngineRenderer>(
+    caller: &mut StoreContextMut<'_, HostData<R>>,
+    target_id: i32,
+    event_type: Atom,
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+) -> wasmtime::Result<i32> {
+    use engine::events::dispatch::build_event_path;
+    use engine::events::event::EventPhase;
+    use engine::events::Event;
+
+    if target_id < 0 {
+        let code = caller
+            .data_mut()
+            .state
+            .set_error(HostErrorCode::InvalidEventTarget, "negative target id");
+        return Ok(code);
+    }
+
+    if caller
+        .data()
+        .state
+        .current_event
+        .as_ref()
+        .is_some_and(|e| e.dispatch_flag)
+    {
+        let code = caller.data_mut().state.set_error(
+            HostErrorCode::EventAlreadyDispatching,
+            HostErrorCode::EventAlreadyDispatching.message(),
+        );
+        return Ok(code);
+    }
+
+    let target_nid = taffy::NodeId::from(target_id as u64);
+
+    let path = match build_event_path(&caller.data().state.doc, target_nid) {
+        Some(p) => p,
+        None => {
+            let code = caller.data_mut().state.set_error(
+                HostErrorCode::InvalidEventTarget,
+                "target not found in tree",
+            );
+            return Ok(code);
+        }
+    };
+    let target_index = path.len() - 1;
+
+    caller.data_mut().state.clear_error();
+
+    // Initialise the event on `RuntimeState` so listeners' host-side
+    // accessor calls (event_target / event_phase / etc.) observe a
+    // coherent snapshot.
+    let mut event = Event::new(event_type.clone(), bubbles, cancelable, composed);
+    event.target = Some(target_nid);
+    event.dispatch_flag = true;
+    caller.data_mut().state.current_event = Some(event);
+
+    let invoke = caller
+        .data()
+        .invoke_listener
+        .ok_or_else(|| wasmtime::format_err!("guest invoke-listener export not captured"))?;
+
+    // Capture phase: every ancestor except the target itself.
+    for &node_id in &path[..target_index] {
+        if caller
+            .data()
+            .state
+            .current_event
+            .as_ref()
+            .unwrap()
+            .stop_propagation_flag
+        {
+            break;
+        }
+        {
+            let ev = caller.data_mut().state.current_event.as_mut().unwrap();
+            ev.event_phase = EventPhase::Capturing;
+            ev.current_target = Some(node_id);
+        }
+        fire_listeners_on_node::<R>(caller, &invoke, node_id, &event_type, EventPhase::Capturing)?;
+    }
+
+    // At-target phase.
+    if !caller
+        .data()
+        .state
+        .current_event
+        .as_ref()
+        .unwrap()
+        .stop_propagation_flag
+    {
+        {
+            let ev = caller.data_mut().state.current_event.as_mut().unwrap();
+            ev.event_phase = EventPhase::AtTarget;
+            ev.current_target = Some(target_nid);
+        }
+        fire_listeners_on_node::<R>(
+            caller,
+            &invoke,
+            target_nid,
+            &event_type,
+            EventPhase::AtTarget,
+        )?;
+    }
+
+    // Bubble phase (if the event bubbles).
+    if bubbles {
+        for i in (0..target_index).rev() {
+            if caller
+                .data()
+                .state
+                .current_event
+                .as_ref()
+                .unwrap()
+                .stop_propagation_flag
+            {
+                break;
+            }
+            {
+                let ev = caller.data_mut().state.current_event.as_mut().unwrap();
+                ev.event_phase = EventPhase::Bubbling;
+                ev.current_target = Some(path[i]);
+            }
+            fire_listeners_on_node::<R>(
+                caller,
+                &invoke,
+                path[i],
+                &event_type,
+                EventPhase::Bubbling,
+            )?;
+        }
+    }
+
+    // Finalise and tear down the event.
+    let canceled = {
+        let ev = caller.data_mut().state.current_event.as_mut().unwrap();
+        ev.dispatch_flag = false;
+        ev.event_phase = EventPhase::None;
+        ev.current_target = None;
+        ev.default_prevented()
+    };
+    caller.data_mut().state.current_event = None;
+
+    // Drop `once` listeners that were marked during dispatch.
+    for &node_id in &path {
+        if let Some(node) = caller.data_mut().state.doc.get_node_mut(node_id) {
+            node.event_listeners.retain(|l| !l.removed);
+        }
+    }
+
+    Ok(if canceled { 0 } else { 1 })
+}
+
+/// Fires every listener registered on `node_id` that matches
+/// `event_type` + `phase`, invoking each via the typed
+/// `invoke-listener` export. Mirrors
+/// `wasm::dispatch_listeners_on_node` but uses component-model APIs.
+fn fire_listeners_on_node<R: EngineRenderer>(
+    caller: &mut StoreContextMut<'_, HostData<R>>,
+    invoke: &TypedFunc<(i32,), ()>,
+    node_id: taffy::NodeId,
+    event_type: &Atom,
+    phase: engine::events::event::EventPhase,
+) -> wasmtime::Result<()> {
+    use engine::events::dispatch::collect_matching_listeners;
+
+    let listeners =
+        collect_matching_listeners(&caller.data().state.doc, node_id, event_type, phase);
+
+    for snap in &listeners {
+        // The listener may have been removed during an earlier
+        // iteration of the same dispatch (via `stop_immediate_propagation`
+        // or an explicit `remove_event_listener` call from a handler).
+        let entry = caller
+            .data()
+            .state
+            .doc
+            .get_node(node_id)
+            .and_then(|n| n.event_listeners.get(snap.index));
+
+        // Index-stability invariant: `remove_event_listener` during
+        // an active dispatch sets `removed = true` instead of
+        // physically deleting the entry (the retain happens once
+        // after the whole algorithm finishes). If that ever changes
+        // and entries get re-packed during dispatch, `snap.index`
+        // becomes stale and we could misfire the wrong handler —
+        // fail loudly in debug rather than silently corrupt dispatch.
+        debug_assert!(
+            entry.is_none_or(|l| l.callback_id == snap.callback_id),
+            "listener at snap.index does not match snapshot callback_id \
+             — did remove_event_listener start physically reordering entries?",
+        );
+
+        let active = entry.is_some_and(|l| !l.removed);
+        if !active {
+            continue;
+        }
+
+        if snap.once {
+            if let Some(node) = caller.data_mut().state.doc.get_node_mut(node_id) {
+                if let Some(entry) = node.event_listeners.get_mut(snap.index) {
+                    entry.removed = true;
+                }
+            }
+        }
+
+        {
+            let ev = caller.data_mut().state.current_event.as_mut().unwrap();
+            ev.in_passive_listener = snap.passive;
+        }
+
+        invoke.call(caller.as_context_mut(), (snap.callback_id as i32,))?;
+
+        {
+            let ev = caller.data_mut().state.current_event.as_mut().unwrap();
+            ev.in_passive_listener = false;
+        }
+
+        if caller
+            .data()
+            .state
+            .current_event
+            .as_ref()
+            .unwrap()
+            .stop_immediate_propagation_flag
+        {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 /// `HasData` impl whose `Data<'a>` is `&'a mut RuntimeState<R>`.
@@ -154,8 +529,22 @@ fn run_component_inner<R: EngineRenderer>(
     let mut store = Store::new(engine, HostData::new(state));
 
     let result = (|| -> wasmtime::Result<()> {
-        let guest = PawsGuest::instantiate(&mut store, &component, &linker)?;
-        let _exit_code = guest.call_run(&mut store)?;
+        // Instantiate the component directly against the linker so we
+        // can pull typed handles to BOTH `invoke-listener` (needed by
+        // the custom `dispatch-event` registration for guest re-entry
+        // during three-phase dispatch) and `run` (the entry point).
+        // `PawsGuest::instantiate` would give us the same `run`
+        // accessor but not expose the underlying `invoke-listener`
+        // `Func`, so we skip the convenience wrapper.
+        let instance = linker.instantiate(&mut store, &component)?;
+        let invoke = instance.get_typed_func::<(i32,), ()>(&mut store, "invoke-listener")?;
+        let run = instance.get_typed_func::<(), (i32,)>(&mut store, "run")?;
+
+        // Stash invoke-listener BEFORE calling run so any event
+        // dispatched during the initial `run()` reaches its listeners.
+        store.data_mut().invoke_listener = Some(invoke);
+
+        let (_exit_code,) = run.call(&mut store, ())?;
         Ok(())
     })();
 

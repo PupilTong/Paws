@@ -280,7 +280,6 @@ fn test_namespace_dom_structure_and_uris() {
 // -----------------------------------------------------------------------
 
 #[test]
-#[ignore = "dispatch_event can't re-enter guest via component::Linker yet — see host_impl::events::Host::dispatch_event and the PR2a TODO; follow-up needs a custom linker.root().func_wrap(..) registration with StoreContextMut access to call PawsGuest::call_invoke_listener."]
 fn test_event_dispatch_callback_fires() {
     let runner = run_example("example_event_dispatch");
     let state = runner.state();
@@ -382,29 +381,17 @@ fn test_yew_use_state_eq() {
     run_example("example_yew_use_state_eq");
 }
 
-// The three Yew tests below and `test_all_examples_run_successfully`
-// exercise event-driven re-renders (button click → state update) that
-// go through the host-side `dispatch_event` path. That path cannot
-// currently re-enter the guest via `PawsGuest::call_invoke_listener`
-// from inside a bindgen-generated `Host` trait method — same root
-// cause as `test_event_dispatch_callback_fires` above. Follow-up PR
-// will register a custom linker entry for `paws:host/events/dispatch-event`
-// that has access to `StoreContextMut` and can drive re-entry.
-
 #[test]
-#[ignore = "event-driven re-render needs dispatch_event re-entry; see test_event_dispatch_callback_fires"]
 fn test_yew_ub_deref() {
     run_example("example_yew_ub_deref");
 }
 
 #[test]
-#[ignore = "event-driven re-render needs dispatch_event re-entry; see test_event_dispatch_callback_fires"]
 fn test_yew_stale_read() {
     run_example("example_yew_stale_read");
 }
 
 #[test]
-#[ignore = "event-driven re-render needs dispatch_event re-entry; see test_event_dispatch_callback_fires"]
 fn test_yew_child_rerender() {
     run_example("example_yew_child_rerender");
 }
@@ -414,7 +401,6 @@ fn test_yew_child_rerender() {
 // -----------------------------------------------------------------------
 
 #[test]
-#[ignore = "aggregates three event-driven examples whose re-entry path is ignored above"]
 fn test_all_examples_run_successfully() {
     let examples = [
         "example_basic_element",
