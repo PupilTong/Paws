@@ -16,6 +16,11 @@ coverage = ["minicov"]
 [dependencies]
 view-macros = { path = "../view-macros" }
 minicov = { version = "0.3", optional = true, default-features = false, features = ["alloc"] }
+# wit-bindgen generates the guest-side import declarations that replace
+# the old hand-written `#[link(wasm_import_module = "env")]` extern
+# block. The `Guest` trait it emits is re-exported so example crates
+# can implement `run` / `invoke-listener` and call `export!`.
+wit-bindgen = "0.45"
 
 [dev-dependencies]
 rkyv = { version = "0.8.9" }

@@ -1,7 +1,11 @@
 //! Wasm Bridge: threads together wasmtime, stylo, and taffy.
 
+pub mod bindings;
+pub mod component_linker;
+pub mod host_impl;
 pub mod wasm;
 
+pub use component_linker::{build_component_linker, run_component, run_component_with_coverage};
 pub use wasm::{build_linker, read_cstr};
 
 use engine::{EngineRenderer, RuntimeState};
