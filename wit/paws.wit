@@ -1,0 +1,106 @@
+// Paws host interface — component-model version of the former `env::__*`
+// FFI surface. Consumed by `rust-wasm-binding` (guest) via `wit-bindgen`
+// and by `wasmtime-engine` (host) via `wasmtime::component::bindgen!`.
+//
+// Convention: non-negative `s32` return values carry the produced id,
+// size, or boolean (0/1). Negative values encode a `HostErrorCode` from
+// `engine/src/runtime.rs` (e.g. `-1` = InvalidParent). Preserving the
+// old i32 return convention — rather than folding errors into
+// `result<_, _>` everywhere — is deliberate: it lets
+// `rust-wasm-binding`'s public wrapper API stay identical across the
+// core-module → component-model migration so downstream crates
+// (examples, Yew fork) do not need call-site rewrites.
+//
+// Exception: functions whose success value is legitimately nullable
+// (an absent attribute, an absent namespace URI) use
+// `result<option<string>, s32>`. The old ABI collapsed "absent" and
+// "error" onto `-1`, colliding with `HostErrorCode::InvalidParent` and
+// silently swallowing that error in the guest wrapper. The WIT schema
+// is where that bug is fixed.
+//
+// This file is the schema-only deliverable. The code migration that
+// consumes it happens in a follow-up PR; until then the schema is not
+// referenced by any Cargo build, it is only validated by
+// `wasm-tools component wit wit/paws.wit`.
+
+package paws:host@0.1.0;
+
+/// Core DOM mutation and traversal.
+interface dom {
+    create-element: func(name: string) -> s32;
+    create-element-ns: func(ns: string, tag: string) -> s32;
+    get-namespace-uri: func(id: s32) -> result<option<string>, s32>;
+    create-text-node: func(text: string) -> s32;
+    set-inline-style: func(id: s32, name: string, value: string) -> s32;
+    set-attribute: func(id: s32, name: string, value: string) -> s32;
+    append-element: func(parent: s32, child: s32) -> s32;
+    append-elements: func(parent: s32, children: list<s32>) -> s32;
+    destroy-element: func(id: s32) -> s32;
+    add-stylesheet: func(css: string) -> s32;
+    commit: func() -> s32;
+    get-first-child: func(id: s32) -> s32;
+    get-last-child: func(id: s32) -> s32;
+    get-next-sibling: func(id: s32) -> s32;
+    get-previous-sibling: func(id: s32) -> s32;
+    get-parent-element: func(id: s32) -> s32;
+    get-parent-node: func(id: s32) -> s32;
+    is-connected: func(id: s32) -> s32;
+    has-attribute: func(id: s32, name: string) -> s32;
+    get-attribute: func(id: s32, name: string) -> result<option<string>, s32>;
+    remove-attribute: func(id: s32, name: string) -> s32;
+    remove-child: func(parent: s32, child: s32) -> s32;
+    replace-child: func(parent: s32, new-child: s32, old-child: s32) -> s32;
+    insert-before: func(parent: s32, new-child: s32, ref-child: s32) -> s32;
+    clone-node: func(id: s32, deep: bool) -> s32;
+    set-node-value: func(id: s32, value: string) -> s32;
+    get-node-type: func(id: s32) -> s32;
+}
+
+/// Event listener registration and dispatch-path accessors.
+interface events {
+    add-event-listener: func(target-id: s32, event-type: string, callback-id: s32, options-flags: s32) -> s32;
+    remove-event-listener: func(target-id: s32, event-type: string, callback-id: s32, options-flags: s32) -> s32;
+    dispatch-event: func(target-id: s32, event-type: string, bubbles: bool, cancelable: bool, composed: bool) -> s32;
+    stop-propagation: func() -> s32;
+    stop-immediate-propagation: func() -> s32;
+    prevent-default: func() -> s32;
+    target: func() -> s32;
+    current-target: func() -> s32;
+    phase: func() -> s32;
+    bubbles: func() -> s32;
+    cancelable: func() -> s32;
+    default-prevented: func() -> s32;
+    composed: func() -> s32;
+    timestamp: func() -> f64;
+}
+
+/// Shadow DOM attachment and per-shadow stylesheets.
+interface shadow {
+    attach-shadow: func(host-id: s32, mode: string) -> s32;
+    get-shadow-root: func(host-id: s32) -> s32;
+    add-shadow-stylesheet: func(shadow-root-id: s32, css: string) -> s32;
+}
+
+/// Pre-parsed stylesheet submission (rkyv-encoded IR from the `css!`
+/// macro). Does not return an error — parse failures are guest-side.
+interface stylesheet {
+    add-parsed-stylesheet: func(bytes: list<u8>);
+}
+
+/// The standard Paws guest world: imports everything the host exposes
+/// and exports the two entry points the host calls into — the main
+/// `run` function and `invoke-listener`, invoked by the host for each
+/// matching listener during event dispatch.
+///
+/// Coverage exports (`__paws_dump_coverage`, `__paws_coverage_ptr`)
+/// intentionally live outside the WIT contract so they can remain
+/// optional under a guest Cargo feature without splitting the world.
+world paws-guest {
+    import dom;
+    import events;
+    import shadow;
+    import stylesheet;
+
+    export run: func() -> s32;
+    export invoke-listener: func(callback-id: s32);
+}
