@@ -36,29 +36,16 @@ jobs:
       - name: Build Rust static library for iOS Simulator
         run: cargo build -p ios-renderer-backend --target aarch64-apple-ios-sim --release
 
-      - name: Boot iOS Simulator
-        run: |
-          DEVICE=$(xcrun simctl list devices available -j | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          for runtime, devices in data['devices'].items():
-              if 'iOS' in runtime:
-                  for d in devices:
-                      if 'iPhone' in d['name'] and d['isAvailable']:
-                          print(d['udid'])
-                          sys.exit(0)
-          sys.exit(1)
-          ")
-          xcrun simctl boot "$DEVICE" || true
-          echo "DEVICE_UDID=$DEVICE" >> "$GITHUB_ENV"
-
       - name: Run Xcode tests
+        # xcodebuild handles simulator selection and boot via the destination
+        # spec. We pin the device name to avoid drift when runner images add
+        # new models; OS=latest floats to the newest runtime the runner ships.
         run: |
           set -o pipefail
           xcodebuild test \
             -project ios-example-app/PawsExample.xcodeproj \
             -scheme PawsExample \
-            -destination "platform=iOS Simulator,id=$DEVICE_UDID" \
+            -destination "platform=iOS Simulator,name=iPhone 16,OS=latest" \
             -resultBundlePath TestResults \
             CODE_SIGNING_ALLOWED=NO \
             LIBRARY_SEARCH_PATHS="$(pwd)/target/aarch64-apple-ios-sim/release" \
