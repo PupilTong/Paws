@@ -17,21 +17,23 @@ import PawsRendererFFI
 
 /// C completion callback — called from the Rust background thread.
 ///
-/// Copies the op buffer and string table, then dispatches to the main
-/// queue for execution via `OpExecutor`.
-private func pawsCompletionCallback(
-    opsPtr: UnsafePointer<UInt8>?,
-    opsLen: Int,
-    stringsPtr: UnsafePointer<UInt8>?,
-    stringsLen: Int,
-    ctx: UnsafeMutableRawPointer?
-) {
+/// `UInt` params match Rust's `usize` in `CompletionFn`; the `@convention(c)`
+/// closure form is required for passing to a C function pointer argument.
+private let pawsCompletionCallback: @convention(c) (
+    UnsafePointer<UInt8>?,
+    UInt,
+    UnsafePointer<UInt8>?,
+    UInt,
+    UnsafeMutableRawPointer?
+) -> Void = { opsPtr, opsLen, stringsPtr, stringsLen, ctx in
     guard let opsPtr = opsPtr, let ctx = ctx, opsLen > 0 else { return }
 
-    // Copy both buffers — they're only valid during this callback invocation.
-    let opsData = Data(bytes: opsPtr, count: opsLen)
+    let opsLenInt = Int(opsLen)
+    let stringsLenInt = Int(stringsLen)
+
+    let opsData = Data(bytes: opsPtr, count: opsLenInt)
     let stringsData: Data? = if let stringsPtr = stringsPtr, stringsLen > 0 {
-        Data(bytes: stringsPtr, count: stringsLen)
+        Data(bytes: stringsPtr, count: stringsLenInt)
     } else {
         nil
     }
@@ -46,13 +48,13 @@ private func pawsCompletionCallback(
                 stringsData.withUnsafeBytes { strBuf in
                     let strPtr = strBuf.baseAddress?.assumingMemoryBound(to: UInt8.self)
                     executor.execute(
-                        ptr: basePtr, byteCount: opsLen,
-                        stringsPtr: strPtr, stringsLen: stringsLen
+                        ptr: basePtr, byteCount: opsLenInt,
+                        stringsPtr: strPtr, stringsLen: stringsLenInt
                     )
                 }
             } else {
                 executor.execute(
-                    ptr: basePtr, byteCount: opsLen,
+                    ptr: basePtr, byteCount: opsLenInt,
                     stringsPtr: nil, stringsLen: 0
                 )
             }
@@ -121,7 +123,7 @@ public final class PawsRendererInstance {
                 return -1
             }
             return functionName.withCString { funcPtr in
-                paws_renderer_post_run_wasm(handle, basePtr, wasmData.count, funcPtr)
+                paws_renderer_post_run_wasm(handle, basePtr, UInt(wasmData.count), funcPtr)
             }
         }
         precondition(result == 0, "postRunWasm failed with error code \(result)")
