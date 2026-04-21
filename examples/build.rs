@@ -233,4 +233,21 @@ fn main() {
     code.push_str("    }\n");
     code.push_str("}\n");
     fs::write(&generated, &code).expect("write wasm_examples.rs");
+
+    // Stage wasm files into a deterministic workspace-level directory so
+    // external build systems (e.g. the Xcode build phase for
+    // ios-example-app) can locate them without OUT_DIR hash discovery.
+    let stage_dir = workspace_root.join("target").join("wasm-examples");
+    fs::create_dir_all(&stage_dir).expect("create wasm-examples stage dir");
+    for entry in fs::read_dir(&stage_dir).expect("read stage dir").flatten() {
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("wasm") {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    for (_, wasm_path) in &wasm_paths {
+        let filename = wasm_path
+            .file_name()
+            .expect("wasm path has filename component");
+        fs::copy(wasm_path, stage_dir.join(filename)).expect("stage wasm into wasm-examples");
+    }
 }

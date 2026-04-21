@@ -62,16 +62,7 @@ final class ExampleRunnerViewController: UIViewController {
         runWasm()
     }
 
-    override func willMove(toParent parent: UIViewController?) {
-        super.willMove(toParent: parent)
-        if parent == nil {
-            rendererView?.removeFromSuperview()
-            rendererView = nil
-        }
-    }
-
     private func runWasm() {
-        guard let host = rendererView else { return }
         let resource = entry.wasmResourceName
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let url = Bundle.main.url(
@@ -91,7 +82,7 @@ final class ExampleRunnerViewController: UIViewController {
                 return
             }
             DispatchQueue.main.async {
-                host.renderer.postRunWasm(data, functionName: WasmEntryPoint.run)
+                self?.rendererView?.renderer.postRunWasm(data, functionName: WasmEntryPoint.run)
             }
         }
     }
