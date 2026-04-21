@@ -40,6 +40,8 @@ jobs:
         # xcodebuild handles simulator selection and boot via the destination
         # spec. We pin the device name to avoid drift when runner images add
         # new models; OS=latest floats to the newest runtime the runner ships.
+        # Tee the full log so build-phase errors (hidden by xcpretty) are
+        # uploadable on failure.
         run: |
           set -o pipefail
           xcodebuild test \
@@ -49,11 +51,13 @@ jobs:
             -resultBundlePath TestResults \
             CODE_SIGNING_ALLOWED=NO \
             LIBRARY_SEARCH_PATHS="$(pwd)/target/aarch64-apple-ios-sim/release" \
-            | xcpretty
+            2>&1 | tee xcodebuild.log | xcpretty
 
-      - name: Upload test results on failure
+      - name: Upload test artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ios-test-results
-          path: TestResults
+          path: |
+            TestResults
+            xcodebuild.log
