@@ -6,14 +6,17 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   rust:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,25 +24,19 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Add wasm32 target
-        # All Paws guests are component-model modules. `wasm32-wasip2` is
-        # the single target; `wasm-component-ld` (installed below) wraps
-        # LLVM's core-module output into a component.
-        run: rustup target add wasm32-wasip2
-
-      - name: Install wasm-component-ld
-        run: cargo install wasm-component-ld --version "^0.5.22"
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install toolchain and system dependencies
+        run: |
+          rustup show
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig-dev
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-codspeed
 
       - name: Format
         run: cargo fmt --check
@@ -61,9 +58,6 @@ jobs:
             -p paws-examples \
             -- -D warnings
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
       - name: Generate host code coverage
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
@@ -73,41 +67,26 @@ jobs:
       # through the component's `dump-coverage` export, plumbed through
       # `Runner::run_component_with_coverage` → `e2e_examples::write_profraw`.
       # -----------------------------------------------------------------
-      - name: Install WASM target and llvm-tools for guest coverage
-        run: |
-          rustup target add wasm32-wasip2 --toolchain nightly-2026-04-07
-          rustup component add llvm-tools-preview --toolchain nightly-2026-04-07
-
       - name: Run E2E tests with guest coverage extraction
         env:
           PAWS_WASM_COVERAGE: "1"
-        run: cargo +nightly-2026-04-07 test -p wasmtime-engine --test e2e_examples --features wasm-coverage
+        run: cargo test -p wasmtime-engine --test e2e_examples --features wasm-coverage
 
       - name: Generate guest coverage report
         run: bash scripts/wasm-coverage.sh
 
-      # Upload each lcov file under its own flag so host and guest
-      # coverage are tracked independently in the Codecov dashboard.
-      - name: Upload host coverage to Codecov
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-          flags: host
+          files: lcov.info,target/wasm-coverage/guest-lcov.info
+          flags: host,guest
+          # Enumerate files inside submodules (yew/) so Codecov can match
+          # coverage records under yew/packages/... against real files —
+          # without this the git tree only sees a submodule pointer and
+          # yew records get dropped during ingestion.
+          recurse_submodules: true
           fail_ci_if_error: true
-
-      - name: Upload guest coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/wasm-coverage/guest-lcov.info
-          flags: guest
-          fail_ci_if_error: true
-
-      - name: Install cargo-codspeed
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-codspeed
 
       - name: Build the benchmark target(s)
         run: cargo codspeed build

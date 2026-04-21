@@ -327,8 +327,12 @@ final class PawsExampleTests: XCTestCase {
         )
         let expectation = expectation(description: "screenshot")
         view.renderer.executor.onExecute = {
-            // Capture the view hierarchy as a bitmap.
-            let renderer = UIGraphicsImageRenderer(size: view.bounds.size)
+            // Force scale=1 so bitmap pixels match view points — otherwise
+            // the simulator's native scale (2x or 3x) makes hard-coded pixel
+            // samples below land in the wrong child.
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let renderer = UIGraphicsImageRenderer(size: view.bounds.size, format: format)
             let image = renderer.image { ctx in
                 view.layer.render(in: ctx.cgContext)
             }

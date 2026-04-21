@@ -36,6 +36,7 @@ flags:
       - wasmtime-engine/
       - view-macros/
       - paws-style-ir/
+      - yew/
     carryforward: true
   guest:
     paths:

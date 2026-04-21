@@ -268,10 +268,12 @@ fn emit_full_node(node_id: u64, state: &IosNodeState, ops: &mut OpBuffer) {
         }
     }
 
-    // Attach to parent — root uses sentinel ROOT_PARENT_ID which Swift maps to rootView.
-    if state.parent_id != ROOT_PARENT_ID {
-        ops.push_attach(node_id, state.kind, state.parent_id, state.parent_kind);
-    }
+    // Attach to parent. ROOT_PARENT_ID is the sentinel for "attach to
+    // rootView" — the Swift `attachToParent` resolves it against
+    // `rootView` rather than the view map, so we must emit the op in
+    // that case too; otherwise the DOM root is created but never added
+    // to the host view hierarchy.
+    ops.push_attach(node_id, state.kind, state.parent_id, state.parent_kind);
 }
 
 // ── Helper functions ────────────────────────────────────────────────────
