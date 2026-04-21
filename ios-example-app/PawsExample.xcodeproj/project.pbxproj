@@ -8,9 +8,11 @@
 
 /* Begin PBXBuildFile section */
 		A10001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20001 /* AppDelegate.swift */; };
-		A10008 /* demo.wasm in Resources */ = {isa = PBXBuildFile; fileRef = A20010 /* demo.wasm */; };
+		A10009 /* Examples in Resources */ = {isa = PBXBuildFile; fileRef = A20011 /* Examples */; };
 		A10002 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20002 /* SceneDelegate.swift */; };
-		A10003 /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20003 /* ViewController.swift */; };
+		A1000C /* ExampleCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20014 /* ExampleCatalog.swift */; };
+		A1000A /* WelcomeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20012 /* WelcomeViewController.swift */; };
+		A1000B /* ExampleRunnerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20013 /* ExampleRunnerViewController.swift */; };
 		A10005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20005 /* Assets.xcassets */; };
 		A10006 /* PawsExampleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20006 /* PawsExampleTests.swift */; };
 		A10007 /* PawsRenderer in Frameworks */ = {isa = PBXBuildFile; productRef = A40001 /* PawsRenderer */; };
@@ -28,9 +30,11 @@
 
 /* Begin PBXFileReference section */
 		A20001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		A20010 /* demo.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = demo.wasm; sourceTree = "<group>"; };
+		A20011 /* Examples */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Examples; sourceTree = "<group>"; };
 		A20002 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
-		A20003 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
+		A20014 /* ExampleCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExampleCatalog.swift; sourceTree = "<group>"; };
+		A20012 /* WelcomeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeViewController.swift; sourceTree = "<group>"; };
+		A20013 /* ExampleRunnerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExampleRunnerViewController.swift; sourceTree = "<group>"; };
 		A20005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A20006 /* PawsExampleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PawsExampleTests.swift; sourceTree = "<group>"; };
 		A20007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -69,10 +73,12 @@
 		A80002 /* PawsExample */ = {
 			isa = PBXGroup;
 			children = (
-				A20010 /* demo.wasm */,
+				A20011 /* Examples */,
 				A20001 /* AppDelegate.swift */,
 				A20002 /* SceneDelegate.swift */,
-				A20003 /* ViewController.swift */,
+				A20014 /* ExampleCatalog.swift */,
+				A20012 /* WelcomeViewController.swift */,
+				A20013 /* ExampleRunnerViewController.swift */,
 				A20005 /* Assets.xcassets */,
 				A20007 /* Info.plist */,
 			);
@@ -174,7 +180,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10008 /* demo.wasm in Resources */,
+				A10009 /* Examples in Resources */,
 				A10005 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -195,7 +201,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n\n# Xcode strips the user PATH — ensure cargo is available.\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\n\n# Resolve DEVELOPER_DIR dynamically so builds work regardless of Xcode\n# install location (Xcode.app, Xcode-beta.app, custom path, etc.).\n# Fall back to xcode-select if DEVELOPER_DIR is not already set by Xcode.\nif [ -z \"$DEVELOPER_DIR\" ]; then\n    export DEVELOPER_DIR=$(xcode-select -p 2>/dev/null || echo /Applications/Xcode.app/Contents/Developer)\nfi\n\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    export SDKROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\nelse\n    export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    CARGO_FLAGS=\"--release\"\n    CARGO_PROFILE=\"release\"\nelse\n    CARGO_FLAGS=\"\"\n    CARGO_PROFILE=\"debug\"\nfi\n\nCARGO_TARGET_DIR=\"$SRCROOT/../target\"\ncd \"$SRCROOT/..\"\ncargo build --target \"$RUST_TARGET\" -p ios-renderer-backend $CARGO_FLAGS\n\n# Write the resolved library path so Xcode can find it without hardcoded search paths.\nmkdir -p \"$SRCROOT/../target/xcode\"\necho \"$CARGO_TARGET_DIR/$RUST_TARGET/$CARGO_PROFILE\" > \"$SRCROOT/../target/xcode/lib-path.txt\"\n\n# Build example WASM and inject it seamlessly as an Xcode resource payload\ncd \"$SRCROOT/../examples/example-styled-element\"\ncargo build --target wasm32-wasip2 $CARGO_FLAGS\ncp \"target/wasm32-wasip2/$CARGO_PROFILE/example_styled_element.wasm\" \"$SRCROOT/PawsExample/demo.wasm\"\n";
+			shellScript = "set -e\n\n# Xcode strips the user PATH — ensure cargo is available.\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\n\n# Resolve DEVELOPER_DIR dynamically so builds work regardless of Xcode\n# install location (Xcode.app, Xcode-beta.app, custom path, etc.).\nif [ -z \"$DEVELOPER_DIR\" ]; then\n    export DEVELOPER_DIR=$(xcode-select -p 2>/dev/null || echo /Applications/Xcode.app/Contents/Developer)\nfi\n\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n    export SDKROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\nelse\n    export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)\n    RUST_TARGET=\"aarch64-apple-ios\"\nfi\n\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    CARGO_FLAGS=\"--release\"\n    CARGO_PROFILE=\"release\"\nelse\n    CARGO_FLAGS=\"\"\n    CARGO_PROFILE=\"debug\"\nfi\n\nCARGO_TARGET_DIR=\"$SRCROOT/../target\"\ncd \"$SRCROOT/..\"\n\n# 1. iOS static library (honors Xcode Debug/Release).\ncargo build --target \"$RUST_TARGET\" -p ios-renderer-backend $CARGO_FLAGS\nmkdir -p \"$SRCROOT/../target/xcode\"\necho \"$CARGO_TARGET_DIR/$RUST_TARGET/$CARGO_PROFILE\" > \"$SRCROOT/../target/xcode/lib-path.txt\"\n\n# 2. Build every WASM example via the paws-examples crate's build.rs,\n#    then copy the resulting *.wasm into the bundle. Always --release for\n#    wasm (yew debug builds are huge); independent of Xcode config.\ncargo build -p paws-examples --release\n\n# The build script writes all *.wasm to its OUT_DIR:\n#   target/release/build/paws-examples-<hash>/out/\n# Pick the most recently modified match.\nOUT_DIR=$(ls -td \"$CARGO_TARGET_DIR\"/release/build/paws-examples-*/out 2>/dev/null | head -n1)\nif [ -z \"$OUT_DIR\" ] || [ ! -d \"$OUT_DIR\" ]; then\n    echo \"error: paws-examples OUT_DIR not found under $CARGO_TARGET_DIR/release/build\" >&2\n    exit 1\nfi\n\nDEST=\"$SRCROOT/PawsExample/Examples\"\nmkdir -p \"$DEST\"\nrm -f \"$DEST\"/*.wasm\ncp \"$OUT_DIR\"/*.wasm \"$DEST/\"\nCOUNT=$(ls \"$DEST\"/*.wasm 2>/dev/null | wc -l | tr -d ' ')\necho \"Copied $COUNT wasm examples from $OUT_DIR to $DEST\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -206,7 +212,9 @@
 			files = (
 				A10001 /* AppDelegate.swift in Sources */,
 				A10002 /* SceneDelegate.swift in Sources */,
-				A10003 /* ViewController.swift in Sources */,
+				A1000C /* ExampleCatalog.swift in Sources */,
+				A1000A /* WelcomeViewController.swift in Sources */,
+				A1000B /* ExampleRunnerViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
