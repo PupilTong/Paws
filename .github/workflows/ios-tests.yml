@@ -36,18 +36,38 @@ jobs:
       - name: Build Rust static library for iOS Simulator
         run: cargo build -p ios-renderer-backend --target aarch64-apple-ios-sim --release
 
+      - name: Create iOS simulator
+        # macos-15 runner images vary in which simulators are preinstalled.
+        # Create one explicitly from whatever iOS runtime + iPhone device
+        # type the runner's Xcode has, so the destination lookup below can't
+        # miss. UDID flows to the test step via GITHUB_ENV.
+        run: |
+          RUNTIME=$(xcrun simctl list runtimes available -j | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          runtimes = [r for r in data['runtimes'] if r.get('isAvailable') and 'iOS' in r['name']]
+          runtimes.sort(key=lambda r: r['version'], reverse=True)
+          if not runtimes: sys.exit('no iOS runtimes available')
+          print(runtimes[0]['identifier'])
+          ")
+          DEVICE_TYPE=$(xcrun simctl list devicetypes -j | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          types = [d for d in data['devicetypes'] if 'iPhone' in d['name']]
+          if not types: sys.exit('no iPhone device types')
+          print(types[0]['identifier'])
+          ")
+          SIM_UDID=$(xcrun simctl create "paws-ci-sim" "$DEVICE_TYPE" "$RUNTIME")
+          echo "Using simulator $SIM_UDID (runtime=$RUNTIME, type=$DEVICE_TYPE)"
+          echo "SIM_UDID=$SIM_UDID" >> "$GITHUB_ENV"
+
       - name: Run Xcode tests
-        # xcodebuild handles simulator selection and boot via the destination
-        # spec. We pin the device name to avoid drift when runner images add
-        # new models; OS=latest floats to the newest runtime the runner ships.
-        # Tee the full log so build-phase errors (hidden by xcpretty) are
-        # uploadable on failure.
         run: |
           set -o pipefail
           xcodebuild test \
             -project ios-example-app/PawsExample.xcodeproj \
             -scheme PawsExample \
-            -destination "platform=iOS Simulator,name=iPhone 16,OS=latest" \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -resultBundlePath TestResults \
             CODE_SIGNING_ALLOWED=NO \
             LIBRARY_SEARCH_PATHS="$(pwd)/target/aarch64-apple-ios-sim/release" \
