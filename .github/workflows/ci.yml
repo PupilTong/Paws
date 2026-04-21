@@ -81,6 +81,11 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info,target/wasm-coverage/guest-lcov.info
           flags: host,guest
+          # Enumerate files inside submodules (yew/) so Codecov can match
+          # coverage records under yew/packages/... against real files —
+          # without this the git tree only sees a submodule pointer and
+          # yew records get dropped during ingestion.
+          recurse_submodules: true
           fail_ci_if_error: true
 
       - name: Build the benchmark target(s)
