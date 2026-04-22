@@ -1,6 +1,8 @@
 //! Creates a `div` and applies a pre-parsed stylesheet via `css!()` + `apply_css()`.
 //!
-//! The stylesheet sets `display: flex` and `width: 200px` on all divs.
+//! The stylesheet sets `display: flex` and `width: 200px` on all divs;
+//! we also add an explicit `height` and `background-color` so the
+//! element is visible on rendering backends.
 
 use rust_wasm_binding::*;
 
@@ -15,6 +17,8 @@ rust_wasm_binding::paws_main! {
                 div {
                     display: flex;
                     width: 200px;
+                    height: 100px;
+                    background-color: #FFD60A;
                 }
                 "#
             ));

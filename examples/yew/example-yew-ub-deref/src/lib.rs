@@ -66,6 +66,11 @@ rust_wasm_binding::paws_main! {
         let root = Rc::new(Element::new("div").expect("create root"));
         let root_id = root.id();
         rust_wasm_binding::append_element(0, root_id).expect("append root");
+        rust_wasm_binding::add_stylesheet(
+            "div { padding: 8px; background-color: #FF3B30; color: #ffffff; font-size: 22px; font-weight: 600; } \
+             button { background-color: #0A84FF; color: #ffffff; padding: 12px 24px; font-size: 20px; font-weight: bold; }",
+        )
+        .expect("add stylesheet");
 
         let _app = yew::Renderer::<UBTestComponent>::with_root(root).render();
 

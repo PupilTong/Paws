@@ -30,9 +30,15 @@ rust_wasm_binding::paws_main! {
             let math_id = create_element_ns(MATHML_NS, "math")?;
             append_element(0, math_id)?;
 
-            // Create a regular HTML element for comparison
+            // Create a regular HTML element for comparison.
+            // Styled so the rendering backends paint a visible marker
+            // next to the (currently unpainted) SVG / MathML elements.
             let div_id = create_element("div")?;
             append_element(0, div_id)?;
+            set_inline_style(div_id, "width", "220px")?;
+            set_inline_style(div_id, "height", "80px")?;
+            set_inline_style(div_id, "background-color", "#5E5CE6")?;
+            commit()?;
 
             // Create a text node for the `Ok(None)` / "no namespace" path
             let text_id = create_text_node("hello")?;
