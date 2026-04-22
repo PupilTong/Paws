@@ -17,6 +17,14 @@ mod ops;
 mod renderer;
 mod thread;
 
+// Re-export the C FFI entry points so integration tests can reach them
+// through the Rust module path. Swift consumers link against the static
+// library via the cbindgen header and don't care about this re-export.
+pub use ffi::exports::{
+    paws_renderer_create, paws_renderer_destroy, paws_renderer_post_run_wasm,
+    paws_renderer_post_run_wat, paws_renderer_set_viewport,
+};
+
 /// Shared test utilities used by `thread::tests` and `ffi::exports::tests`.
 #[cfg(test)]
 pub(crate) mod test_util {
