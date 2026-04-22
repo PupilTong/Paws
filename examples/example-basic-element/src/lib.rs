@@ -1,4 +1,9 @@
 //! Creates a single `div` element and appends it to the document root.
+//!
+//! The element gets explicit dimensions + a background color so the
+//! rendering backends (iOS, future wgpu) paint a visible rectangle.
+//! Unstyled elements are transparent and invisible by design — matching
+//! browser behaviour — so demo fixtures add paint explicitly.
 
 use rust_wasm_binding::*;
 
@@ -7,6 +12,10 @@ rust_wasm_binding::paws_main! {
         let result: Result<i32, i32> = (|| {
             let div_id = create_element("div")?;
             append_element(0, div_id)?;
+            set_inline_style(div_id, "width", "200px")?;
+            set_inline_style(div_id, "height", "120px")?;
+            set_inline_style(div_id, "background-color", "#0A84FF")?;
+            commit()?;
             Ok(0)
         })();
 

@@ -459,6 +459,81 @@ mod tests {
         );
     }
 
+    /// The yew counter ships with an injected stylesheet that paints the
+    /// button (bg), the `.counter` wrapper (bg), and the `span` counter
+    /// display (color + font). If the stylesheet ever regresses or the
+    /// style → op pipeline drops one of those properties, the simulator
+    /// goes back to a featureless "+ / 0" column. Assert the op stream
+    /// carries at least one SetBgColor + SetTextColor + SetTextFont so
+    /// the regression fails at the test level, not on a visual review.
+    #[test]
+    fn test_yew_counter_emits_styled_paint_ops() {
+        use crate::ops::{OpTag, SLOT_SIZE};
+
+        // Reuse the recording scaffolding with a byte-level capture so we
+        // can inspect each 32-byte op slot.
+        struct CollectingState {
+            ops: std::sync::Mutex<Vec<u8>>,
+        }
+        extern "C" fn collect(
+            ops_ptr: *const u8,
+            ops_len: usize,
+            _strings_ptr: *const u8,
+            _strings_len: usize,
+            ctx: *mut c_void,
+        ) {
+            // SAFETY: ctx is kept alive by the test until `destroy` joins
+            // the engine thread. We copy the op bytes before returning;
+            // they are valid only for the duration of this callback.
+            let state = unsafe { &*(ctx as *const CollectingState) };
+            if ops_len > 0 {
+                // SAFETY: Rust side guarantees `ops_ptr` points to
+                // `ops_len` valid bytes.
+                let bytes = unsafe { std::slice::from_raw_parts(ops_ptr, ops_len) };
+                state.ops.lock().unwrap().extend_from_slice(bytes);
+            }
+        }
+
+        let state = std::sync::Arc::new(CollectingState {
+            ops: std::sync::Mutex::new(Vec::new()),
+        });
+        let ctx_ptr = std::sync::Arc::as_ptr(&state) as *mut c_void;
+
+        let wasm_path = paws_examples::example_wasm_path("example_yew_counter");
+        let wasm_bytes = std::fs::read(wasm_path).unwrap();
+        let url = CString::new("https://test.paws").unwrap();
+        let renderer = paws_renderer_create(url.as_ptr(), collect, ctx_ptr);
+        assert!(!renderer.is_null());
+        assert_eq!(paws_renderer_set_viewport(renderer, 375.0, 667.0), 0);
+        let func = CString::new("run").unwrap();
+        assert_eq!(
+            paws_renderer_post_run_wasm(
+                renderer,
+                wasm_bytes.as_ptr(),
+                wasm_bytes.len(),
+                func.as_ptr(),
+            ),
+            0
+        );
+        paws_renderer_destroy(renderer);
+
+        let ops = state.ops.lock().unwrap();
+        let tag_present =
+            |tag: OpTag| -> bool { ops.chunks(SLOT_SIZE).any(|slot| slot[0] == tag as u8) };
+        assert!(
+            tag_present(OpTag::SetBgColor),
+            "yew counter must emit SetBgColor (button / .counter backgrounds)"
+        );
+        assert!(
+            tag_present(OpTag::SetTextColor),
+            "yew counter must emit SetTextColor (white on button, dark on counter)"
+        );
+        assert!(
+            tag_present(OpTag::SetTextFont),
+            "yew counter must emit SetTextFont (28px button / 40px counter)"
+        );
+    }
+
     /// Hand-written component (non-yew) that calls `commit()` explicitly.
     /// Guards against regressions that would pass yew-specific paths but
     /// break the rust-wasm-binding + explicit-commit flow.
@@ -472,6 +547,82 @@ mod tests {
         assert!(
             state.total_ops_bytes.load(Ordering::SeqCst) > 0,
             "completion callback should deliver non-empty ops buffer"
+        );
+    }
+
+    /// The styled-element example sets width, height, and now
+    /// background-color — the minimum paint triad for a visible
+    /// rectangle. Assert that the op buffer carries a SetBgColor slot;
+    /// if a future change drops the paint property, the iOS host view
+    /// goes empty (which is exactly the regression this guards).
+    #[test]
+    fn test_styled_element_emits_bg_color_op() {
+        // Capture the raw ops buffer by moving the recording context to
+        // accumulate bytes into a shared Vec.
+        struct CollectingState {
+            ops: std::sync::Mutex<Vec<u8>>,
+        }
+        extern "C" fn collect(
+            ops_ptr: *const u8,
+            ops_len: usize,
+            _strings_ptr: *const u8,
+            _strings_len: usize,
+            ctx: *mut c_void,
+        ) {
+            // SAFETY: ctx is kept alive by the test until
+            // `paws_renderer_destroy` returns (which joins the engine
+            // thread). The ops buffer is only valid for the duration
+            // of this call — we copy before returning.
+            let state = unsafe { &*(ctx as *const CollectingState) };
+            if ops_len > 0 {
+                // SAFETY: Rust side guarantees `ops_ptr` points to
+                // `ops_len` bytes of valid u8 data.
+                let bytes = unsafe { std::slice::from_raw_parts(ops_ptr, ops_len) };
+                state.ops.lock().unwrap().extend_from_slice(bytes);
+            }
+        }
+
+        let state = std::sync::Arc::new(CollectingState {
+            ops: std::sync::Mutex::new(Vec::new()),
+        });
+        let ctx_ptr = std::sync::Arc::as_ptr(&state) as *mut c_void;
+
+        let wasm_path = paws_examples::example_wasm_path("example_styled_element");
+        let wasm_bytes = std::fs::read(wasm_path).unwrap();
+
+        let url = CString::new("https://test.paws").unwrap();
+        let renderer = paws_renderer_create(url.as_ptr(), collect, ctx_ptr);
+        assert!(!renderer.is_null());
+        assert_eq!(paws_renderer_set_viewport(renderer, 375.0, 667.0), 0);
+
+        let func = CString::new("run").unwrap();
+        let result = paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
+        );
+        assert_eq!(result, 0);
+        paws_renderer_destroy(renderer);
+
+        // Walk the op slots looking for SetBgColor. Pull the slot
+        // size and tag byte straight from `crate::ops` so if the wire
+        // format ever changes, this test catches it via a compile
+        // error instead of a silent skew.
+        use crate::ops::{OpTag, SLOT_SIZE};
+        let ops = state.ops.lock().unwrap();
+        assert!(
+            ops.len() >= SLOT_SIZE,
+            "styled element should emit at least one op slot, got {} bytes",
+            ops.len()
+        );
+        let has_bg = ops
+            .chunks(SLOT_SIZE)
+            .any(|slot| slot[0] == OpTag::SetBgColor as u8);
+        assert!(
+            has_bg,
+            "styled element must emit a SetBgColor op or the iOS \
+             PawsRendererView renders an invisible transparent box"
         );
     }
 }

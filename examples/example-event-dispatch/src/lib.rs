@@ -17,6 +17,11 @@ fn on_click(_callback_id: i32) {
     // The parent id (1) is the first element created by `run()`.
     let span = create_element("span").expect("create span");
     set_attribute(span, "data-clicked", "true").expect("set attr");
+    set_inline_style(span, "display", "block").expect("span display");
+    set_inline_style(span, "width", "200px").expect("span w");
+    set_inline_style(span, "height", "32px").expect("span h");
+    set_inline_style(span, "margin", "8px 0").expect("span m");
+    set_inline_style(span, "background-color", "#30D158").expect("span bg");
     append_element(1, span).expect("append span");
 }
 
@@ -26,9 +31,15 @@ rust_wasm_binding::paws_main! {
             // Create DOM structure: document(0) > div(1) > button(2)
             let parent = create_element("div")?;
             append_element(0, parent)?;
+            set_inline_style(parent, "padding", "16px")?;
+            set_inline_style(parent, "background-color", "#FF9500")?;
 
             let button = create_element("button")?;
             append_element(parent, button)?;
+            set_inline_style(button, "display", "block")?;
+            set_inline_style(button, "width", "200px")?;
+            set_inline_style(button, "height", "44px")?;
+            set_inline_style(button, "background-color", "#0A84FF")?;
 
             // Register the click listener on the button
             let callback_id = register_listener(on_click);
@@ -46,7 +57,7 @@ rust_wasm_binding::paws_main! {
             let _not_canceled = dispatch_event(button, "click", true, true, false)?;
 
             // Verify the side effect: the span should now exist as child of parent.
-            match get_first_child(parent) {
+            let verify_result = match get_first_child(parent) {
                 // First child is the button (id 2), next sibling should be the span
                 Some(first) => match get_next_sibling(first) {
                     Some(span) => {
@@ -59,7 +70,11 @@ rust_wasm_binding::paws_main! {
                     None => Ok(-2), // No span sibling — callback didn't fire
                 },
                 None => Ok(-3), // No children at all
-            }
+            };
+            // Flush ops to the rendering backend so the styled
+            // parent/button/span actually paint in the showcase app.
+            commit()?;
+            verify_result
         })();
 
         result.unwrap_or_else(|e| e)

@@ -101,6 +101,12 @@ fn test_styled_element_layout_dimensions() {
         100.0,
         "div height should be 100px"
     );
+
+    // The example also sets `background-color: #0A84FF` so rendering
+    // backends (iOS, future wgpu) paint a visible rectangle instead of
+    // an invisible transparent one. The paint side is verified at the
+    // iOS-backend level (see `ios_renderer_backend::ffi::exports::tests::
+    // test_styled_element_emits_bg_color_op`).
 }
 
 // -----------------------------------------------------------------------
