@@ -112,26 +112,47 @@ pub struct RuntimeState<R: EngineRenderer = ()> {
     pub current_event: Option<crate::events::Event>,
     /// Viewport size passed to Taffy when the guest calls `__commit`.
     ///
-    /// Defaults to `MAX_CONTENT` (content-sized layout), matching the
-    /// historical behaviour. Hosts that need to bound layout to a fixed
-    /// viewport (e.g. `paws-runner`, future window-based hosts) call
-    /// [`set_viewport`](Self::set_viewport) before running the guest.
+    /// Set at construction via [`RuntimeState::with_renderer_viewport`]
+    /// (or defaulted to `MAX_CONTENT` via [`RuntimeState::new`] /
+    /// [`RuntimeState::with_renderer`]). The viewport is immutable after
+    /// construction — callers that need a different size must create a
+    /// fresh `RuntimeState`.
     pub viewport: taffy::Size<taffy::AvailableSpace>,
 }
 
 impl RuntimeState<()> {
-    /// Creates a new runtime state with the no-op `()` renderer.
+    /// Creates a new runtime state with the no-op `()` renderer and
+    /// content-sized layout (`MAX_CONTENT`).
     ///
     /// Use this for tests and headless usage where no rendering backend
-    /// is needed.
+    /// is needed and layout should be driven by content size.
     pub fn new(url_str: String) -> Self {
         Self::with_renderer(url_str, ())
     }
 }
 
 impl<R: EngineRenderer> RuntimeState<R> {
-    /// Creates a new runtime state with a custom renderer backend.
+    /// Creates a new runtime state with a custom renderer backend and
+    /// content-sized layout (`MAX_CONTENT`).
+    ///
+    /// Equivalent to calling [`with_renderer_viewport`](Self::with_renderer_viewport)
+    /// with `taffy::Size::MAX_CONTENT`.
     pub fn with_renderer(url_str: String, renderer: R) -> Self {
+        Self::with_renderer_viewport(url_str, renderer, taffy::Size::MAX_CONTENT)
+    }
+
+    /// Creates a new runtime state with a custom renderer backend and an
+    /// explicit Taffy viewport used for every `__commit`-triggered layout.
+    ///
+    /// Hosts that bound layout to a fixed area (e.g. `paws-runner` with a
+    /// configured viewport, or the iOS renderer using the host view's
+    /// bounds) should use this constructor; for typical definite sizing
+    /// see [`Self::with_definite_viewport`].
+    pub fn with_renderer_viewport(
+        url_str: String,
+        renderer: R,
+        viewport: taffy::Size<taffy::AvailableSpace>,
+    ) -> Self {
         let url = url::Url::parse(&url_str).expect("Valid Document URL");
         let context = StyleContext::new(url.clone());
         let lock = context.lock.clone();
@@ -148,19 +169,19 @@ impl<R: EngineRenderer> RuntimeState<R> {
             stylesheet_cache,
             renderer,
             current_event: None,
-            viewport: taffy::Size::MAX_CONTENT,
+            viewport,
         }
     }
 
-    /// Sets the viewport that the guest's next `__commit` will use.
-    ///
-    /// Both dimensions become `AvailableSpace::Definite`. To restore the
-    /// default content-sized layout, set `self.viewport = Size::MAX_CONTENT`
-    /// directly.
-    ///
-    /// Dimensions must be finite and non-negative — Taffy treats NaN or
-    /// negative values as layout bugs that produce undefined output.
-    pub fn set_viewport(&mut self, width: f32, height: f32) {
+    /// Convenience: creates a new runtime state with a definite `width × height`
+    /// viewport. Panics in debug builds if either dimension is non-finite or
+    /// negative (Taffy treats those as layout bugs that produce undefined output).
+    pub fn with_definite_viewport(
+        url_str: String,
+        renderer: R,
+        width: f32,
+        height: f32,
+    ) -> Self {
         debug_assert!(
             width.is_finite() && width >= 0.0,
             "viewport width must be finite and non-negative, got {width}"
@@ -169,10 +190,11 @@ impl<R: EngineRenderer> RuntimeState<R> {
             height.is_finite() && height >= 0.0,
             "viewport height must be finite and non-negative, got {height}"
         );
-        self.viewport = taffy::Size {
+        let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(width),
             height: taffy::AvailableSpace::Definite(height),
         };
+        Self::with_renderer_viewport(url_str, renderer, viewport)
     }
 
     /// Creates a new HTML element with the given tag name. Returns the node ID.

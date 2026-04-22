@@ -213,10 +213,12 @@ fn run_engine(
         view_tree: ViewTree::new(),
         callback: cb,
     };
-    let mut state = RuntimeState::with_renderer(base_url, renderer);
-    if let Some((width, height)) = viewport {
-        state.set_viewport(width, height);
-    }
+    let state = match viewport {
+        Some((width, height)) => {
+            RuntimeState::with_definite_viewport(base_url, renderer, width, height)
+        }
+        None => RuntimeState::with_renderer(base_url, renderer),
+    };
 
     // Blocks until WASM's own event loop exits.
     let _ = wasmtime_engine::run_wasm(state, &wasm_bytes, &func_name);

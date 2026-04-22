@@ -596,11 +596,15 @@ mod tests {
     /// Used by the two tests below to exercise the unstyled-tree paint path.
     fn setup_yew_counter_doc(viewport: Option<(f32, f32)>) -> Document<IosNodeState> {
         let renderer = TestRenderer;
-        let mut state =
-            engine::RuntimeState::with_renderer("https://test.com".to_string(), renderer);
-        if let Some((w, h)) = viewport {
-            state.set_viewport(w, h);
-        }
+        let mut state = match viewport {
+            Some((w, h)) => engine::RuntimeState::with_definite_viewport(
+                "https://test.com".to_string(),
+                renderer,
+                w,
+                h,
+            ),
+            None => engine::RuntimeState::with_renderer("https://test.com".to_string(), renderer),
+        };
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();
 
@@ -673,8 +677,9 @@ mod tests {
     /// regression on the iOS simulator. Without a viewport Taffy lays every
     /// block out at its intrinsic content size, so an unstyled `<div>`
     /// collapses to the width of whatever text it contains (about 9 px for
-    /// "+" / "0"). Once the host passes its bounds via `set_viewport`,
-    /// block-level elements expand to the viewport width instead.
+    /// "+" / "0"). Constructing the `RuntimeState` via
+    /// `with_definite_viewport` instead expands block-level elements to the
+    /// viewport width.
     #[test]
     fn test_yew_counter_viewport_expands_unstyled_elements() {
         // Case 1: no viewport → root host collapses to content width.
