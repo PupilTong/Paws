@@ -225,6 +225,35 @@ pub struct StyleContext {
     pub(crate) url_data: UrlExtraData,
 }
 
+/// User-Agent stylesheet injected at `StyleContext` construction.
+///
+/// Mirrors the defaults every desktop-class browser ships with, so
+/// authored stylesheets don't have to restate them. Values chosen to
+/// match Chrome's UA sheet (`third_party/blink/renderer/core/html/
+/// resources/html.css`) on the root:
+/// - `color: #000000`    — opaque black, Blink's `initial` for `color`
+/// - `font-size: 16px`   — `medium`, Blink's initial computed value
+/// - `font-family: system-ui` — platform-native font, replaces Blink's
+///   platform-specific default (`Times` legacy / `-apple-system`
+///   through `-webkit-standard`) with one canonical value
+/// - `font-weight: 400`  — `normal`, Blink's initial
+///
+/// Installed with [`Origin::UserAgent`], so **any** author sheet wins
+/// without `!important`. Values inherit down the tree, so setting them
+/// on the root alone covers every element unless an author overrides.
+///
+/// `html` and `body` both listed because yew-style guests mount on a
+/// bare `<div>` that becomes the document root — no `<html>`/`<body>`
+/// wrapper exists, so the sheet targets both for compatibility with
+/// browser-shaped guests and headless guests alike.
+const UA_STYLESHEET_CSS: &str = "\
+html, body { \
+    color: #000000; \
+    font-size: 16px; \
+    font-family: system-ui; \
+    font-weight: 400; \
+}";
+
 impl StyleContext {
     /// Creates a new style context with default device settings (800x600 viewport).
     pub(crate) fn new(url: url::Url) -> Self {
@@ -236,13 +265,54 @@ impl StyleContext {
         // Initialize URL singletons
         let url_data = UrlExtraData::from(url.clone());
 
-        Self {
+        let mut context = Self {
             stylist,
             rule_tree,
             lock,
             url,
             url_data,
-        }
+        };
+        context.install_ua_stylesheet();
+        context
+    }
+
+    /// Parses [`UA_STYLESHEET_CSS`] with [`Origin::UserAgent`] and appends
+    /// it to the stylist so its declarations become the cascade's
+    /// lowest-priority layer. Called exactly once, from [`Self::new`].
+    ///
+    /// Parsing happens at runtime rather than via the `css!()` macro —
+    /// the sheet is ~5 declarations and runs once per `RuntimeState`
+    /// construction, so the parse cost is negligible and avoids
+    /// coupling `engine` to `view-macros`.
+    fn install_ua_stylesheet(&mut self) {
+        use std::sync::atomic::AtomicBool;
+        use stylo::media_queries::MediaList;
+        use stylo::stylesheets::{AllowImportRules, Stylesheet, StylesheetContents};
+
+        let contents = StylesheetContents::from_str(
+            UA_STYLESHEET_CSS,
+            self.url_data.clone(),
+            Origin::UserAgent,
+            &self.lock,
+            None, // loader
+            None, // error_reporter
+            QuirksMode::NoQuirks,
+            AllowImportRules::No, // UA sheet is self-contained
+            None,                 // sanitization_data
+        );
+        let sheet = Arc::new(Stylesheet {
+            contents: self.lock.wrap(contents),
+            shared_lock: self.lock.clone(),
+            media: Arc::new(self.lock.wrap(MediaList::empty())),
+            disabled: AtomicBool::new(false),
+        });
+
+        let document_stylesheet = stylo::stylesheets::DocumentStyleSheet(sheet);
+        let guard = self.lock.read();
+        self.stylist.append_stylesheet(document_stylesheet, &guard);
+        // Flush happens when author sheets arrive (or in `add_stylesheet`
+        // below); deferring avoids an extra cascade walk when no
+        // author content exists yet.
     }
 
     /// Appends a stylesheet to the stylist and flushes the cascade.
