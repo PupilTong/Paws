@@ -100,19 +100,33 @@ impl EngineHandle {
     }
 
     /// Sets the viewport that the engine will apply to `RuntimeState`
-    /// before running the WASM module. Must be called before
-    /// [`post_run_wasm`](Self::post_run_wasm) to take effect — changing
-    /// it after the engine thread has started is a no-op.
+    /// before running the WASM module. The viewport is captured once when
+    /// the background thread spawns in
+    /// [`post_run_wasm`](Self::post_run_wasm), so calls after that return
+    /// without mutating state.
     ///
-    /// Both dimensions must be finite and non-negative; non-conforming
-    /// values are ignored. Passing `0` for either dimension falls back
-    /// to `MAX_CONTENT`.
+    /// Both dimensions must be finite and strictly positive — Taffy
+    /// treats NaN / infinite / non-positive values as layout bugs.
+    /// Non-conforming inputs trigger a `debug_assert!` and are treated as
+    /// "no viewport" in release builds.
     pub(crate) fn set_viewport(&mut self, width: f32, height: f32) {
-        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
-            self.viewport = None;
+        if self.handle.is_some() {
+            // Engine already started — viewport is capture-once. Bail
+            // rather than silently holding a value that will never be
+            // read (see post_run_wasm below, which reads viewport once
+            // at thread-spawn time).
             return;
         }
-        self.viewport = Some((width, height));
+        let is_valid = width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0;
+        debug_assert!(
+            is_valid,
+            "viewport dimensions must be finite and positive, got {width}×{height}"
+        );
+        self.viewport = if is_valid {
+            Some((width, height))
+        } else {
+            None
+        };
     }
 
     /// Starts the engine by spawning a background thread that runs the WASM module.
