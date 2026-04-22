@@ -373,4 +373,105 @@ mod tests {
 
         paws_renderer_destroy(renderer);
     }
+
+    // ── Component-model integration regression guards ────────────────
+    //
+    // Paws example WASMs are wasm32-wasip2 components. The iOS backend
+    // previously used the core-module loader (`wasmtime::Module::new`)
+    // which silently rejects components, so every guest was a no-op
+    // and the host view ended up empty. These tests drive the real C
+    // FFI pipeline end-to-end and assert the completion callback fires
+    // with a non-empty op buffer — exactly the signal the old
+    // `let _ = run_wasm(...)` was suppressing.
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Context shared with the recording completion callback below.
+    struct CallbackState {
+        calls: AtomicUsize,
+        total_ops_bytes: AtomicUsize,
+    }
+
+    extern "C" fn recording_completion(
+        _ops_ptr: *const u8,
+        ops_len: usize,
+        _strings_ptr: *const u8,
+        _strings_len: usize,
+        ctx: *mut c_void,
+    ) {
+        // SAFETY: ctx is an `&CallbackState` handed in via Arc::as_ptr
+        // below; the Arc is kept alive for the renderer's full lifetime
+        // by the test (we drop the renderer — which joins the engine
+        // thread — before reading the counters).
+        let state = unsafe { &*(ctx as *const CallbackState) };
+        state.calls.fetch_add(1, Ordering::SeqCst);
+        state.total_ops_bytes.fetch_add(ops_len, Ordering::SeqCst);
+    }
+
+    fn run_component_example_via_ffi(resource_name: &str) -> Arc<CallbackState> {
+        let wasm_path = paws_examples::example_wasm_path(resource_name);
+        let wasm_bytes =
+            std::fs::read(wasm_path).unwrap_or_else(|e| panic!("failed to read {wasm_path}: {e}"));
+
+        let state = Arc::new(CallbackState {
+            calls: AtomicUsize::new(0),
+            total_ops_bytes: AtomicUsize::new(0),
+        });
+        let ctx_ptr = Arc::as_ptr(&state) as *mut c_void;
+
+        let url = CString::new("https://test.paws").unwrap();
+        let renderer = paws_renderer_create(url.as_ptr(), recording_completion, ctx_ptr);
+        assert!(!renderer.is_null(), "paws_renderer_create returned null");
+
+        // Match the iOS app's wiring: set a viewport before posting the wasm.
+        assert_eq!(paws_renderer_set_viewport(renderer, 375.0, 667.0), 0);
+
+        let func = CString::new("run").unwrap();
+        let result = paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
+        );
+        assert_eq!(result, 0, "post_run_wasm returned error code {result}");
+
+        // destroy joins the engine thread, so every callback that is
+        // ever going to fire has fired by the time it returns.
+        paws_renderer_destroy(renderer);
+
+        state
+    }
+
+    /// yew auto-commits after `render()`, so its `<div><button>+</button>
+    /// <span>0</span></div>` tree must deliver at least one non-empty
+    /// op buffer through the FFI. This fails on a core-module loader.
+    #[test]
+    fn test_yew_counter_component_delivers_ops_via_ffi() {
+        let state = run_component_example_via_ffi("example_yew_counter");
+        assert!(
+            state.calls.load(Ordering::SeqCst) >= 1,
+            "completion callback should fire for example_yew_counter"
+        );
+        assert!(
+            state.total_ops_bytes.load(Ordering::SeqCst) > 0,
+            "completion callback should deliver non-empty ops buffer"
+        );
+    }
+
+    /// Hand-written component (non-yew) that calls `commit()` explicitly.
+    /// Guards against regressions that would pass yew-specific paths but
+    /// break the rust-wasm-binding + explicit-commit flow.
+    #[test]
+    fn test_commit_full_component_delivers_ops_via_ffi() {
+        let state = run_component_example_via_ffi("example_commit_full");
+        assert!(
+            state.calls.load(Ordering::SeqCst) >= 1,
+            "completion callback should fire for example_commit_full"
+        );
+        assert!(
+            state.total_ops_bytes.load(Ordering::SeqCst) > 0,
+            "completion callback should deliver non-empty ops buffer"
+        );
+    }
 }

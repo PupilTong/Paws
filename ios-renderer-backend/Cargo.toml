@@ -13,5 +13,8 @@ wasmtime-engine = { path = "../wasmtime-engine" }
 stylo = "0.13"
 wat = "1"
 
+[dev-dependencies]
+paws-examples = { path = "../examples" }
+
 [build-dependencies]
 cbindgen = "0.27"

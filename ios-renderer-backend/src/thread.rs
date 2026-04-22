@@ -234,8 +234,37 @@ fn run_engine(
         None => RuntimeState::with_renderer(base_url, renderer),
     };
 
-    // Blocks until WASM's own event loop exits.
-    let _ = wasmtime_engine::run_wasm(state, &wasm_bytes, &func_name);
+    // Paws examples are wasm32-wasip2 components (see
+    // `Paws/examples/build.rs` — `WASM_TARGET = "wasm32-wasip2"`), but
+    // the existing FFI also accepts hand-written core modules (the WAT
+    // path used by `paws_renderer_post_run_wat` and the thread unit
+    // tests). Dispatch on the wasm header layer byte so both survive:
+    // core (layer 0) → `run_wasm`, component (layer 1) → `run_component`.
+    let engine = wasmtime_engine::create_engine();
+    let result = if is_wasm_component(&wasm_bytes) {
+        wasmtime_engine::run_component(&engine, state, &wasm_bytes, &func_name).map(|_| ())
+    } else {
+        wasmtime_engine::run_wasm_with_engine(&engine, state, &wasm_bytes, &func_name).map(|_| ())
+    };
+    if let Err(e) = result {
+        // Log and drop — the iOS backend has no error channel back to
+        // Swift today. Surfacing the failure in stderr at least makes
+        // simulator runs diagnosable instead of silently empty.
+        eprintln!("paws iOS engine: guest failed to run: {}", e.error);
+    }
+}
+
+/// Returns `true` when `bytes` look like a component-model binary
+/// (`layer == 1` in the wasm header), `false` for a core module.
+///
+/// Every wasm binary starts with the 4-byte magic `\0asm`. The next
+/// four bytes encode `(version: u16, layer: u16)` little-endian: core
+/// modules use `layer = 0`, components use `layer = 1` (see the
+/// component-model spec). Short or non-wasm inputs fall through as
+/// "not a component"; wasmtime will then produce a parse error, which
+/// surfaces the same way as before this dispatch existed.
+fn is_wasm_component(bytes: &[u8]) -> bool {
+    bytes.len() >= 8 && &bytes[..4] == b"\0asm" && u16::from_le_bytes([bytes[6], bytes[7]]) == 1
 }
 
 #[cfg(test)]
@@ -295,5 +324,39 @@ mod tests {
 
         // Drop joins the thread — should not hang or panic.
         drop(handle);
+    }
+
+    #[test]
+    fn test_is_wasm_component_routes_by_header() {
+        // Core module header: magic + (version=1, layer=0).
+        let core = [
+            b'\0', b'a', b's', b'm', // magic
+            0x01, 0x00, // version = 1
+            0x00, 0x00, // layer = 0 → core
+        ];
+        assert!(
+            !is_wasm_component(&core),
+            "core module must route to run_wasm"
+        );
+
+        // Component header: magic + (version=0x000D, layer=1). Byte 6–7
+        // is the layer (little-endian u16); byte 4–5 is the preview
+        // version and is free to change as the component spec evolves.
+        let component = [
+            b'\0', b'a', b's', b'm', // magic
+            0x0D, 0x00, // version
+            0x01, 0x00, // layer = 1 → component
+        ];
+        assert!(
+            is_wasm_component(&component),
+            "component must route to run_component"
+        );
+
+        // Too short / not wasm at all.
+        assert!(!is_wasm_component(b""), "empty input is not a component");
+        assert!(
+            !is_wasm_component(b"(module)"),
+            "WAT text is not a binary component"
+        );
     }
 }
