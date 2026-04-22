@@ -29,10 +29,14 @@ markup5ever = "0.38.0"
 rkyv = { version = "0.8.9" }
 parley = { version = "0.8", features = ["system"] }
 paws-style-ir = { path = "../paws-style-ir" }
+# Used at library-build time via the `css!()` proc-macro to embed the
+# User-Agent stylesheet as a static rkyv IR blob (see `runtime.rs`).
+# Keeping it as a non-dev dep so the UA sheet is compiled in for every
+# consumer (paws-runner, wasmtime-engine, ios-renderer-backend).
+view-macros = { path = "../view-macros" }
 
 [dev-dependencies]
 thin-vec = "0.2"
-view-macros = { path = "../view-macros" }
 codspeed-criterion-compat = "4.4.1"
 
 [[bench]]

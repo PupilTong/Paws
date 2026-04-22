@@ -1,8 +1,32 @@
 use markup5ever::{LocalName, Namespace, QualName};
 use taffy::prelude::TaffyMaxContent;
+use view_macros::css;
 
 use crate::dom::{Document, DomError};
 use crate::style::StyleContext;
+
+/// User-Agent stylesheet parsed at **compile time** by the `css!()`
+/// proc-macro into a static rkyv-encoded IR blob.
+///
+/// Mirrors Chrome's UA defaults on the root element — the values
+/// `canvastext` (opaque black), `medium` (16px), the platform's default
+/// font family, and `normal` (400) weight. Paws guests that mount on a
+/// bare `<div>` don't see the `html, body` selectors match anything and
+/// fall back to Stylo's identical `initial_values`; browser-shaped
+/// guests with an explicit `<html>` or `<body>` get the rules through
+/// the normal cascade.
+///
+/// Installed once at [`RuntimeState::with_renderer_viewport`] via
+/// [`RuntimeState::add_parsed_stylesheet_with_origin`] tagged
+/// [`Origin::UserAgent`](::style::stylesheets::Origin::UserAgent).
+static UA_STYLESHEET_IR: &[u8] = css!(
+    "html, body { \
+        color: #000000; \
+        font-size: 16px; \
+        font-family: system-ui; \
+        font-weight: 400; \
+    }"
+);
 
 /// Error codes returned from host functions to WASM guests.
 ///
@@ -162,7 +186,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
 
         let stylesheet_cache = crate::style::StylesheetCache::new(lock.clone());
 
-        Self {
+        let mut state = Self {
             doc,
             last_error: None,
             style_context: context,
@@ -170,7 +194,29 @@ impl<R: EngineRenderer> RuntimeState<R> {
             renderer,
             current_event: None,
             viewport,
-        }
+        };
+        state.install_ua_stylesheet();
+        state
+    }
+
+    /// Installs the engine's built-in User-Agent stylesheet.
+    ///
+    /// Contents match Chrome's UA defaults on the root — opaque black
+    /// text, 16px `medium` font size, `system-ui` family, `normal`
+    /// (400) weight. The sheet is parsed at **compile time** by the
+    /// `css!()` proc-macro and embedded as a static rkyv-encoded IR
+    /// blob (see [`UA_STYLESHEET_IR`]); runtime cost is a single rkyv
+    /// deserialize plus a rule-tree append, with no CSS tokenizer
+    /// involvement.
+    ///
+    /// Tagged [`Origin::UserAgent`] via
+    /// [`add_parsed_stylesheet_with_origin`](Self::add_parsed_stylesheet_with_origin),
+    /// so every author sheet wins without `!important`.
+    fn install_ua_stylesheet(&mut self) {
+        self.add_parsed_stylesheet_with_origin(
+            UA_STYLESHEET_IR,
+            ::style::stylesheets::Origin::UserAgent,
+        );
     }
 
     /// Convenience: creates a new runtime state with a definite `width × height`
@@ -277,7 +323,27 @@ impl<R: EngineRenderer> RuntimeState<R> {
     }
 
     /// Adds a pre-parsed stylesheet from rkyv-encoded IR bytes.
+    ///
+    /// Guest-facing entry point — the stylesheet is tagged
+    /// [`Origin::Author`] so it sits in the cascade above any
+    /// User-Agent or User-origin defaults. Use
+    /// [`add_parsed_stylesheet_with_origin`](Self::add_parsed_stylesheet_with_origin)
+    /// to install UA / User sheets from inside the engine.
     pub fn add_parsed_stylesheet(&mut self, bytes: &[u8]) {
+        self.add_parsed_stylesheet_with_origin(bytes, ::style::stylesheets::Origin::Author);
+    }
+
+    /// Decodes rkyv-encoded stylesheet IR bytes, constructs a real Stylo
+    /// `Stylesheet` tagged with the given origin, and appends it to the
+    /// document + stylist. Shared implementation for the public
+    /// [`add_parsed_stylesheet`](Self::add_parsed_stylesheet) and the
+    /// engine's own UA-sheet installer (see
+    /// [`with_renderer_viewport`](Self::with_renderer_viewport)).
+    pub(crate) fn add_parsed_stylesheet_with_origin(
+        &mut self,
+        bytes: &[u8],
+        origin: ::style::stylesheets::Origin,
+    ) {
         use paws_style_ir::ArchivedStyleSheetIR;
         use rkyv::rancor::Error;
 
@@ -294,7 +360,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
 
         use ::style::parser::ParserContext;
         use ::style::servo_arc::Arc;
-        use ::style::stylesheets::{CssRules, Origin, StylesheetContents};
+        use ::style::stylesheets::{CssRules, StylesheetContents};
         use ::stylo_traits::ParsingMode;
 
         let lock = self.style_context.lock.clone();
@@ -302,7 +368,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
         let quirks_mode = ::style::context::QuirksMode::NoQuirks;
 
         let context = ParserContext::new(
-            Origin::Author,
+            origin,
             &url_data,
             Some(::style::stylesheets::CssRuleType::Style),
             ParsingMode::DEFAULT,
@@ -325,7 +391,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
         };
         let contents = StylesheetContents::from_shared_data(
             css_rules,
-            Origin::Author,
+            origin,
             url_data.clone(),
             quirks_mode,
         );
