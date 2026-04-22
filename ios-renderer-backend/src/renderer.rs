@@ -591,6 +591,130 @@ mod tests {
         );
     }
 
+    /// Builds a DOM tree that mirrors the yew counter example:
+    /// `<div><div class="counter"><button>+</button><span>0</span></div></div>`.
+    /// Used by the two tests below to exercise the unstyled-tree paint path.
+    fn setup_yew_counter_doc(viewport: Option<(f32, f32)>) -> Document<IosNodeState> {
+        let renderer = TestRenderer;
+        let mut state = match viewport {
+            Some((w, h)) => engine::RuntimeState::with_definite_viewport(
+                "https://test.com".to_string(),
+                renderer,
+                w,
+                h,
+            ),
+            None => engine::RuntimeState::with_renderer("https://test.com".to_string(), renderer),
+        };
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+
+        let counter = state.create_element("div".to_string());
+        state
+            .set_attribute(counter, "class".into(), "counter".into())
+            .unwrap();
+        state.append_element(host, counter).unwrap();
+
+        let button = state.create_element("button".to_string());
+        state.append_element(counter, button).unwrap();
+        let btn_txt = state.create_text_node("+".to_string());
+        state.append_element(button, btn_txt).unwrap();
+
+        let span = state.create_element("span".to_string());
+        state.append_element(counter, span).unwrap();
+        let span_txt = state.create_text_node("0".to_string());
+        state.append_element(span, span_txt).unwrap();
+
+        state.commit();
+        state.doc
+    }
+
+    /// Reads the width of the `SetViewFrame` op for the given node id from
+    /// the test ops buffer, or `None` if none was emitted.
+    fn view_frame_width(ops: &crate::ops::OpBuffer, target_id: u64) -> Option<f32> {
+        for i in 0..ops.op_count() {
+            if ops.tag_at(i) != Some(OpTag::SetViewFrame as u8) {
+                continue;
+            }
+            let slot = ops.slot_at(i).unwrap();
+            let id = u64::from_le_bytes(slot[1..9].try_into().unwrap());
+            if id != target_id {
+                continue;
+            }
+            return Some(f32::from_le_bytes(slot[17..21].try_into().unwrap()));
+        }
+        None
+    }
+
+    /// Regression guard: the yew counter (all unstyled elements) must emit
+    /// `DeclareText` + `SetTextContent` ops for both text nodes, and the
+    /// string table must carry their contents. The iOS empty-host bug that
+    /// motivated this test was an easy miss because every other unit test
+    /// in this module sets explicit widths, so layout never collapses.
+    #[test]
+    fn test_yew_counter_structure_emits_text_ops() {
+        let mut doc = setup_yew_counter_doc(None);
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, root);
+
+        let tags = collect_tags(&tree);
+        let declare_text_count = tags
+            .iter()
+            .filter(|&&t| t == OpTag::DeclareText as u8)
+            .count();
+        assert_eq!(
+            declare_text_count, 2,
+            "yew counter has two text nodes (\"+\", \"0\"); both must emit DeclareText. \
+             Actual ops: {tags:?}"
+        );
+
+        let strings = std::str::from_utf8(tree.ops().strings_data()).unwrap();
+        assert!(
+            strings.contains('+'),
+            "string table missing '+': {strings:?}"
+        );
+        assert!(
+            strings.contains('0'),
+            "string table missing '0': {strings:?}"
+        );
+    }
+
+    /// Documents the viewport dependency that caused the empty-host
+    /// regression on the iOS simulator. Without a viewport Taffy lays every
+    /// block out at its intrinsic content size, so an unstyled `<div>`
+    /// collapses to the width of whatever text it contains (about 9 px for
+    /// "+" / "0"). Constructing the `RuntimeState` via
+    /// `with_definite_viewport` instead expands block-level elements to the
+    /// viewport width.
+    #[test]
+    fn test_yew_counter_viewport_expands_unstyled_elements() {
+        // Case 1: no viewport → root host collapses to content width.
+        let mut doc = setup_yew_counter_doc(None);
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, root);
+        let content_sized_width =
+            view_frame_width(tree.ops(), 1).expect("host root emits SetViewFrame");
+        assert!(
+            content_sized_width < 50.0,
+            "without viewport, unstyled root collapses to content width \
+             (expected < 50px, got {content_sized_width}) — this is the bug \
+             users see as an empty PawsRendererView on iOS"
+        );
+
+        // Case 2: viewport set → root expands to viewport width.
+        let mut doc = setup_yew_counter_doc(Some((375.0, 667.0)));
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, root);
+        let viewport_width = view_frame_width(tree.ops(), 1).expect("host root emits SetViewFrame");
+        assert!(
+            (viewport_width - 375.0).abs() < 0.5,
+            "with viewport 375×667, unstyled root should fill width \
+             (expected ≈ 375px, got {viewport_width})"
+        );
+    }
+
     #[test]
     fn test_text_with_computed_styles() {
         let mut doc = setup_styled_doc(|state| {

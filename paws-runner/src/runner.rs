@@ -58,10 +58,12 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
 
     /// Finalises the builder and returns a ready-to-use [`Runner`].
     pub fn build(self) -> Runner<R> {
-        let mut state = RuntimeState::with_renderer(self.url, self.renderer);
-        if let Some((width, height)) = self.viewport {
-            state.set_viewport(width, height);
-        }
+        let state = match self.viewport {
+            Some((width, height)) => {
+                RuntimeState::with_definite_viewport(self.url, self.renderer, width, height)
+            }
+            None => RuntimeState::with_renderer(self.url, self.renderer),
+        };
         Runner {
             state: Some(state),
             engine: create_engine(),
@@ -219,7 +221,18 @@ impl<R: EngineRenderer> Runner<R> {
     /// Updates the viewport size. The change takes effect on the next
     /// guest-initiated commit; it does not retrigger layout on its own.
     pub fn resize(&mut self, width: f32, height: f32) {
-        self.state_mut().set_viewport(width, height);
+        debug_assert!(
+            width.is_finite() && width >= 0.0,
+            "viewport width must be finite and non-negative, got {width}"
+        );
+        debug_assert!(
+            height.is_finite() && height >= 0.0,
+            "viewport height must be finite and non-negative, got {height}"
+        );
+        self.state_mut().viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(width),
+            height: taffy::AvailableSpace::Definite(height),
+        };
     }
 
     /// Returns the current viewport as stored on [`RuntimeState`].

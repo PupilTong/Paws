@@ -70,6 +70,12 @@ pub(crate) struct EngineHandle {
     handle: Option<thread::JoinHandle<()>>,
     base_url: String,
     callback: SendCallback,
+    /// Viewport (width, height) passed to Taffy for guest layout.
+    /// `None` means `MAX_CONTENT` (content-sized layout, the historical
+    /// default). Setting this to the host view's bounds makes unstyled
+    /// block elements fill the available width instead of collapsing to
+    /// their intrinsic content size.
+    viewport: Option<(f32, f32)>,
 }
 
 impl EngineHandle {
@@ -89,7 +95,38 @@ impl EngineHandle {
                 completion,
                 context,
             },
+            viewport: None,
         }
+    }
+
+    /// Sets the viewport that the engine will apply to `RuntimeState`
+    /// before running the WASM module. The viewport is captured once when
+    /// the background thread spawns in
+    /// [`post_run_wasm`](Self::post_run_wasm), so calls after that return
+    /// without mutating state.
+    ///
+    /// Both dimensions must be finite and strictly positive — Taffy
+    /// treats NaN / infinite / non-positive values as layout bugs.
+    /// Non-conforming inputs trigger a `debug_assert!` and are treated as
+    /// "no viewport" in release builds.
+    pub(crate) fn set_viewport(&mut self, width: f32, height: f32) {
+        if self.handle.is_some() {
+            // Engine already started — viewport is capture-once. Bail
+            // rather than silently holding a value that will never be
+            // read (see post_run_wasm below, which reads viewport once
+            // at thread-spawn time).
+            return;
+        }
+        let is_valid = width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0;
+        debug_assert!(
+            is_valid,
+            "viewport dimensions must be finite and positive, got {width}×{height}"
+        );
+        self.viewport = if is_valid {
+            Some((width, height))
+        } else {
+            None
+        };
     }
 
     /// Starts the engine by spawning a background thread that runs the WASM module.
@@ -112,10 +149,11 @@ impl EngineHandle {
             completion: self.callback.completion,
             context: self.callback.context,
         };
+        let viewport = self.viewport;
 
         let handle = thread::Builder::new()
             .name("paws-engine".to_string())
-            .spawn(move || run_engine(base_url, wasm_bytes, func_name, cb))
+            .spawn(move || run_engine(base_url, wasm_bytes, func_name, cb, viewport))
             .expect("failed to spawn paws-engine thread");
 
         self.handle = Some(handle);
@@ -178,12 +216,23 @@ impl EngineRenderer for IosRenderer {
 /// happen from within via the `__commit` host function, which calls
 /// [`EngineRenderer::on_commit`]. When the WASM loop exits, all engine state
 /// drops and the UIKit sub-tree is released.
-fn run_engine(base_url: String, wasm_bytes: Vec<u8>, func_name: String, cb: SendCallback) {
+fn run_engine(
+    base_url: String,
+    wasm_bytes: Vec<u8>,
+    func_name: String,
+    cb: SendCallback,
+    viewport: Option<(f32, f32)>,
+) {
     let renderer = IosRenderer {
         view_tree: ViewTree::new(),
         callback: cb,
     };
-    let state = RuntimeState::with_renderer(base_url, renderer);
+    let state = match viewport {
+        Some((width, height)) => {
+            RuntimeState::with_definite_viewport(base_url, renderer, width, height)
+        }
+        None => RuntimeState::with_renderer(base_url, renderer),
+    };
 
     // Blocks until WASM's own event loop exits.
     let _ = wasmtime_engine::run_wasm(state, &wasm_bytes, &func_name);
