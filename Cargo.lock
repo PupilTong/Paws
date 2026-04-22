@@ -1670,6 +1670,7 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "engine",
+ "paws-examples",
  "stylo",
  "wasmtime-engine",
  "wat",

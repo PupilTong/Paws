@@ -234,8 +234,20 @@ fn run_engine(
         None => RuntimeState::with_renderer(base_url, renderer),
     };
 
-    // Blocks until WASM's own event loop exits.
-    let _ = wasmtime_engine::run_wasm(state, &wasm_bytes, &func_name);
+    // Every Paws example is a wasm32-wasip2 component (see
+    // `Paws/examples/build.rs` — `WASM_TARGET = "wasm32-wasip2"`). Core-
+    // module loading via `run_wasm` silently rejects those binaries
+    // because `wasmtime::Module::new` only parses core modules — the
+    // guest never executes, which manifests as an empty host view on
+    // iOS. Use the component-model entry point so the guest's `run`
+    // export actually gets called.
+    let engine = wasmtime_engine::create_engine();
+    if let Err(e) = wasmtime_engine::run_component(&engine, state, &wasm_bytes, &func_name) {
+        // Log and drop — the iOS backend has no error channel back to
+        // Swift today. Surfacing the failure in stderr at least makes
+        // simulator runs diagnosable instead of silently empty.
+        eprintln!("paws iOS engine: run_component failed: {}", e.error);
+    }
 }
 
 #[cfg(test)]
