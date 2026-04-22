@@ -474,4 +474,77 @@ mod tests {
             "completion callback should deliver non-empty ops buffer"
         );
     }
+
+    /// The styled-element example sets width, height, and now
+    /// background-color — the minimum paint triad for a visible
+    /// rectangle. Assert that the op buffer carries a SetBgColor slot;
+    /// if a future change drops the paint property, the iOS host view
+    /// goes empty (which is exactly the regression this guards).
+    #[test]
+    fn test_styled_element_emits_bg_color_op() {
+        // Capture the raw ops buffer by moving the recording context to
+        // accumulate bytes into a shared Vec.
+        struct CollectingState {
+            ops: std::sync::Mutex<Vec<u8>>,
+        }
+        extern "C" fn collect(
+            ops_ptr: *const u8,
+            ops_len: usize,
+            _strings_ptr: *const u8,
+            _strings_len: usize,
+            ctx: *mut c_void,
+        ) {
+            // SAFETY: ctx is kept alive by the test until
+            // `paws_renderer_destroy` returns (which joins the engine
+            // thread). The ops buffer is only valid for the duration
+            // of this call — we copy before returning.
+            let state = unsafe { &*(ctx as *const CollectingState) };
+            if ops_len > 0 {
+                // SAFETY: Rust side guarantees `ops_ptr` points to
+                // `ops_len` bytes of valid u8 data.
+                let bytes = unsafe { std::slice::from_raw_parts(ops_ptr, ops_len) };
+                state.ops.lock().unwrap().extend_from_slice(bytes);
+            }
+        }
+
+        let state = std::sync::Arc::new(CollectingState {
+            ops: std::sync::Mutex::new(Vec::new()),
+        });
+        let ctx_ptr = std::sync::Arc::as_ptr(&state) as *mut c_void;
+
+        let wasm_path = paws_examples::example_wasm_path("example_styled_element");
+        let wasm_bytes = std::fs::read(wasm_path).unwrap();
+
+        let url = CString::new("https://test.paws").unwrap();
+        let renderer = paws_renderer_create(url.as_ptr(), collect, ctx_ptr);
+        assert!(!renderer.is_null());
+        assert_eq!(paws_renderer_set_viewport(renderer, 375.0, 667.0), 0);
+
+        let func = CString::new("run").unwrap();
+        let result = paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
+        );
+        assert_eq!(result, 0);
+        paws_renderer_destroy(renderer);
+
+        // Walk the 32-byte op slots looking for SetBgColor (tag 0x06).
+        // Matches the wire format in `src/ops.rs`.
+        const SLOT_SIZE: usize = 32;
+        const OP_SET_BG_COLOR: u8 = 0x06;
+        let ops = state.ops.lock().unwrap();
+        assert!(
+            ops.len() >= SLOT_SIZE,
+            "styled element should emit at least one op slot, got {} bytes",
+            ops.len()
+        );
+        let has_bg = ops.chunks(SLOT_SIZE).any(|slot| slot[0] == OP_SET_BG_COLOR);
+        assert!(
+            has_bg,
+            "styled element must emit a SetBgColor op or the iOS \
+             PawsRendererView renders an invisible transparent box"
+        );
+    }
 }
