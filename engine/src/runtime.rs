@@ -176,12 +176,7 @@ impl<R: EngineRenderer> RuntimeState<R> {
     /// Convenience: creates a new runtime state with a definite `width × height`
     /// viewport. Panics in debug builds if either dimension is non-finite or
     /// negative (Taffy treats those as layout bugs that produce undefined output).
-    pub fn with_definite_viewport(
-        url_str: String,
-        renderer: R,
-        width: f32,
-        height: f32,
-    ) -> Self {
+    pub fn with_definite_viewport(url_str: String, renderer: R, width: f32, height: f32) -> Self {
         debug_assert!(
             width.is_finite() && width >= 0.0,
             "viewport width must be finite and non-negative, got {width}"

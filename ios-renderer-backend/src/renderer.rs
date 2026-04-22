@@ -669,8 +669,14 @@ mod tests {
         );
 
         let strings = std::str::from_utf8(tree.ops().strings_data()).unwrap();
-        assert!(strings.contains('+'), "string table missing '+': {strings:?}");
-        assert!(strings.contains('0'), "string table missing '0': {strings:?}");
+        assert!(
+            strings.contains('+'),
+            "string table missing '+': {strings:?}"
+        );
+        assert!(
+            strings.contains('0'),
+            "string table missing '0': {strings:?}"
+        );
     }
 
     /// Documents the viewport dependency that caused the empty-host
@@ -687,8 +693,8 @@ mod tests {
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
         tree.process(&mut doc, root);
-        let content_sized_width = view_frame_width(tree.ops(), 1)
-            .expect("host root emits SetViewFrame");
+        let content_sized_width =
+            view_frame_width(tree.ops(), 1).expect("host root emits SetViewFrame");
         assert!(
             content_sized_width < 50.0,
             "without viewport, unstyled root collapses to content width \
@@ -701,8 +707,7 @@ mod tests {
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
         tree.process(&mut doc, root);
-        let viewport_width =
-            view_frame_width(tree.ops(), 1).expect("host root emits SetViewFrame");
+        let viewport_width = view_frame_width(tree.ops(), 1).expect("host root emits SetViewFrame");
         assert!(
             (viewport_width - 375.0).abs() < 0.5,
             "with viewport 375×667, unstyled root should fill width \
