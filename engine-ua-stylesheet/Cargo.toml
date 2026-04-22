@@ -1,0 +1,17 @@
+[package]
+name = "engine-ua-stylesheet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "User-Agent stylesheet for the Paws engine, parsed at compile time."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# `view-macros` provides the compile-time `css!()` proc-macro used to
+# parse the UA sheet into a static rkyv-encoded IR blob. This is the
+# only consumer of `view-macros` outside the view layer — it lives in
+# its own crate so the engine itself doesn't carry a direct
+# `view-macros` dependency.
+view-macros = { path = "../view-macros" }

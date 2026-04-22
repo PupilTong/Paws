@@ -29,15 +29,18 @@ markup5ever = "0.38.0"
 rkyv = { version = "0.8.9" }
 parley = { version = "0.8", features = ["system"] }
 paws-style-ir = { path = "../paws-style-ir" }
-# Used at library-build time via the `css!()` proc-macro to embed the
-# User-Agent stylesheet as a static rkyv IR blob (see `runtime.rs`).
-# Keeping it as a non-dev dep so the UA sheet is compiled in for every
-# consumer (paws-runner, wasmtime-engine, ios-renderer-backend).
-view-macros = { path = "../view-macros" }
+# Ships the compile-time-parsed User-Agent stylesheet as a static rkyv
+# IR blob. This crate wraps `view-macros::css!()` so `engine` doesn't
+# take a direct dependency on the view layer.
+engine-ua-stylesheet = { path = "../engine-ua-stylesheet" }
 
 [dev-dependencies]
 thin-vec = "0.2"
 codspeed-criterion-compat = "4.4.1"
+# Engine tests use `view_macros::css!()` directly to exercise the
+# parsed-stylesheet pipeline end-to-end. Non-test code goes through
+# `engine-ua-stylesheet` instead, so the view layer stays isolated.
+view-macros = { path = "../view-macros" }
 
 [[bench]]
 name = "layout_bench"

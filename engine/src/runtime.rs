@@ -1,32 +1,9 @@
+use engine_ua_stylesheet::UA_STYLESHEET_IR;
 use markup5ever::{LocalName, Namespace, QualName};
 use taffy::prelude::TaffyMaxContent;
-use view_macros::css;
 
 use crate::dom::{Document, DomError};
 use crate::style::StyleContext;
-
-/// User-Agent stylesheet parsed at **compile time** by the `css!()`
-/// proc-macro into a static rkyv-encoded IR blob.
-///
-/// Mirrors Chrome's UA defaults on the root element — the values
-/// `canvastext` (opaque black), `medium` (16px), the platform's default
-/// font family, and `normal` (400) weight. Paws guests that mount on a
-/// bare `<div>` don't see the `html, body` selectors match anything and
-/// fall back to Stylo's identical `initial_values`; browser-shaped
-/// guests with an explicit `<html>` or `<body>` get the rules through
-/// the normal cascade.
-///
-/// Installed once at [`RuntimeState::with_renderer_viewport`] via
-/// [`RuntimeState::add_parsed_stylesheet_with_origin`] tagged
-/// [`Origin::UserAgent`](::style::stylesheets::Origin::UserAgent).
-static UA_STYLESHEET_IR: &[u8] = css!(
-    "html, body { \
-        color: #000000; \
-        font-size: 16px; \
-        font-family: system-ui; \
-        font-weight: 400; \
-    }"
-);
 
 /// Error codes returned from host functions to WASM guests.
 ///
@@ -201,13 +178,11 @@ impl<R: EngineRenderer> RuntimeState<R> {
 
     /// Installs the engine's built-in User-Agent stylesheet.
     ///
-    /// Contents match Chrome's UA defaults on the root — opaque black
-    /// text, 16px `medium` font size, `system-ui` family, `normal`
-    /// (400) weight. The sheet is parsed at **compile time** by the
-    /// `css!()` proc-macro and embedded as a static rkyv-encoded IR
-    /// blob (see [`UA_STYLESHEET_IR`]); runtime cost is a single rkyv
-    /// deserialize plus a rule-tree append, with no CSS tokenizer
-    /// involvement.
+    /// The sheet itself lives in the sibling `engine-ua-stylesheet`
+    /// crate — see [`UA_STYLESHEET_IR`]. That crate is the only place
+    /// the `view_macros::css!()` proc-macro is invoked on the engine's
+    /// behalf; here we just hand the pre-parsed rkyv blob to the
+    /// existing parsed-stylesheet pipeline.
     ///
     /// Tagged [`Origin::UserAgent`] via
     /// [`add_parsed_stylesheet_with_origin`](Self::add_parsed_stylesheet_with_origin),

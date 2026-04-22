@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "engine",
+    "engine-ua-stylesheet",
     "wasmtime-engine",
     "paws-runner",
     "rust-wasm-binding", "paws-style-ir", "view-macros",
