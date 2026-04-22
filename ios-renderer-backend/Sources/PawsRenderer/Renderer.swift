@@ -110,6 +110,20 @@ public final class PawsRendererInstance {
 
     // MARK: - Async operations (non-blocking)
 
+    /// Sets the viewport size that the engine's layout step will use for
+    /// this renderer. Call this before `postRunWasm` — the viewport is
+    /// captured when the engine thread starts and later calls are no-ops.
+    ///
+    /// Without a viewport, Taffy lays out every block element at its
+    /// intrinsic content size, so unstyled `<div>`s collapse to the width
+    /// of their text (often under 10 pixels). Passing the host view's
+    /// bounds makes unstyled elements fill the available width, matching
+    /// browser-like behaviour.
+    public func setViewport(width: CGFloat, height: CGFloat) {
+        let result = paws_renderer_set_viewport(handle, Float(width), Float(height))
+        precondition(result == 0, "setViewport failed with error code \(result)")
+    }
+
     /// Asynchronously compiles and runs a WASM module, then auto-commits.
     ///
     /// The `OpExecutor` will be called on the main thread when ops are ready.

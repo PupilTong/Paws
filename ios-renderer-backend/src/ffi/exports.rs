@@ -87,6 +87,33 @@ pub extern "C" fn paws_renderer_create(
     Box::into_raw(Box::new(renderer))
 }
 
+/// Sets the viewport size that the engine will apply to the guest's
+/// `RuntimeState` layout. Must be called before `paws_renderer_post_run_wasm`
+/// to take effect — the viewport is read once when the engine thread starts.
+///
+/// `width` / `height` must be finite and strictly positive. Passing
+/// non-conforming values resets the viewport to `MAX_CONTENT` (content-sized
+/// layout), which is the default when this function is not called.
+///
+/// Without a viewport, Taffy lays every block element out at its intrinsic
+/// content size — unstyled `<div>`s collapse to the width of whatever text
+/// they contain (often under 10 pixels), making them effectively invisible
+/// inside a normal-sized host view.
+///
+/// # Safety
+///
+/// `renderer` must be a valid pointer returned by `paws_renderer_create`.
+#[no_mangle]
+pub extern "C" fn paws_renderer_set_viewport(
+    renderer: *mut PawsRenderer,
+    width: f32,
+    height: f32,
+) -> i32 {
+    let renderer = get_renderer!(renderer);
+    renderer.engine.set_viewport(width, height);
+    0
+}
+
 /// Destroys a `PawsRenderer`, stopping the background thread if running.
 ///
 /// After this call the pointer is invalid. Passing `null` is a no-op.

@@ -17,15 +17,32 @@ public class PawsRendererView: UIView {
     /// Creates a new `PawsRendererView` with the given base URL.
     ///
     /// The view automatically registers itself as the renderer's root view
-    /// via the `OpExecutor`.
+    /// via the `OpExecutor`. The viewport is propagated to the engine via
+    /// `layoutSubviews` so Taffy lays out unstyled block elements to the
+    /// view's bounds width instead of collapsing to intrinsic content size.
     public init(baseURL: String = "about:blank", frame: CGRect = .zero) {
         super.init(frame: frame)
         self.renderer = PawsRendererInstance(baseURL: baseURL, rootView: self)
+        if frame.width > 0 && frame.height > 0 {
+            renderer.setViewport(width: frame.width, height: frame.height)
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("PawsRendererView does not support Interface Builder")
+    }
+
+    /// Propagate the host bounds to the engine as the layout viewport. The
+    /// engine captures the viewport once when the background thread starts,
+    /// so this only matters for the first meaningful layout pass — the one
+    /// that happens before `postRunWasm` triggers engine startup.
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        let size = bounds.size
+        if size.width > 0 && size.height > 0 {
+            renderer.setViewport(width: size.width, height: size.height)
+        }
     }
 }
 
