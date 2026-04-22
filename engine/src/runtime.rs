@@ -389,12 +389,8 @@ impl<R: EngineRenderer> RuntimeState<R> {
         let css_rules = unsafe {
             ::style::servo_arc::Arc::new_static(|layout| std::alloc::alloc(layout), rules_lock)
         };
-        let contents = StylesheetContents::from_shared_data(
-            css_rules,
-            origin,
-            url_data.clone(),
-            quirks_mode,
-        );
+        let contents =
+            StylesheetContents::from_shared_data(css_rules, origin, url_data.clone(), quirks_mode);
         let stylesheet = Arc::new(::style::stylesheets::Stylesheet {
             contents: lock.wrap(contents),
             shared_lock: lock.clone(),
