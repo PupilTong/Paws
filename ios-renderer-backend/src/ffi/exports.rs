@@ -530,17 +530,20 @@ mod tests {
         assert_eq!(result, 0);
         paws_renderer_destroy(renderer);
 
-        // Walk the 32-byte op slots looking for SetBgColor (tag 0x06).
-        // Matches the wire format in `src/ops.rs`.
-        const SLOT_SIZE: usize = 32;
-        const OP_SET_BG_COLOR: u8 = 0x06;
+        // Walk the op slots looking for SetBgColor. Pull the slot
+        // size and tag byte straight from `crate::ops` so if the wire
+        // format ever changes, this test catches it via a compile
+        // error instead of a silent skew.
+        use crate::ops::{OpTag, SLOT_SIZE};
         let ops = state.ops.lock().unwrap();
         assert!(
             ops.len() >= SLOT_SIZE,
             "styled element should emit at least one op slot, got {} bytes",
             ops.len()
         );
-        let has_bg = ops.chunks(SLOT_SIZE).any(|slot| slot[0] == OP_SET_BG_COLOR);
+        let has_bg = ops
+            .chunks(SLOT_SIZE)
+            .any(|slot| slot[0] == OpTag::SetBgColor as u8);
         assert!(
             has_bg,
             "styled element must emit a SetBgColor op or the iOS \
