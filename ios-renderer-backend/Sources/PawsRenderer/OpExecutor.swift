@@ -37,11 +37,16 @@ private let OP_SET_TEXT_COLOR:     UInt8 = 0x13
 private let OP_DETACH_TEXT:        UInt8 = 0x14
 private let OP_RELEASE_TEXT:       UInt8 = 0x15
 
+// Image ops
+private let OP_DECLARE_IMAGE:      UInt8 = 0x20
+private let OP_SET_IMAGE_DATA:     UInt8 = 0x21
+
 // ViewKind values (must match Rust ViewKind repr(u8))
 private let KIND_VIEW:       UInt8 = 0
 private let KIND_SCROLLVIEW: UInt8 = 1
 private let KIND_LAYER:      UInt8 = 2
-private let KIND_TEXT:        UInt8 = 3
+private let KIND_TEXT:       UInt8 = 3
+private let KIND_IMAGE:      UInt8 = 4
 
 /// Slot size in bytes — must match Rust SLOT_SIZE.
 private let SLOT_SIZE = 32
@@ -91,6 +96,28 @@ public final class OpExecutor {
                 let nodeId = readU64(base + 1)
                 let parentId = readU64(base + 9)
                 handleDeclareText(nodeId: nodeId, parentId: parentId)
+
+            case OP_DECLARE_IMAGE:
+                let nodeId = readU64(base + 1)
+                let parentId = readU64(base + 9)
+                handleDeclareImage(nodeId: nodeId, parentId: parentId)
+
+            case OP_SET_IMAGE_DATA:
+                let nodeId = readU64(base + 1)
+                let offset = readU32(base + 9)
+                let len = readU32(base + 13)
+                if let sPtr = stringsPtr, Int(offset) + Int(len) <= stringsLen {
+                    let imageData = Data(bytes: sPtr + Int(offset), count: Int(len))
+                    if let image = UIImage(data: imageData),
+                       let imageView = viewMap[nodeId]?.obj as? UIImageView {
+                        imageView.image = image
+                    }
+                    // Silent skip on decode failure — the UIImageView
+                    // stays empty, matching the "no image" case. The
+                    // engine side emitted the op because the bytes were
+                    // validated earlier; a failure here means the blob
+                    // was not a format UIKit understands.
+                }
 
             case OP_SET_VIEW_FRAME, OP_SET_LAYER_FRAME:
                 let nodeId = readU64(base + 1)
@@ -249,6 +276,27 @@ public final class OpExecutor {
         viewMap[nodeId] = Entry(obj: textLayer, kind: OP_DECLARE_TEXT)
     }
 
+    private func handleDeclareImage(nodeId: UInt64, parentId: UInt64) {
+        if let existing = viewMap[nodeId], existing.kind == OP_DECLARE_IMAGE {
+            return
+        }
+
+        if viewMap[nodeId] != nil {
+            viewMap.removeValue(forKey: nodeId)
+        }
+
+        let imageView = UIImageView()
+        // `.scaleAspectFit` matches the browser's "contain the image
+        // inside the content box without distorting it" default — the
+        // closest single contentMode to CSS `object-fit: contain`. We
+        // don't plumb `object-fit` yet; authors can resize the `<img>`
+        // box itself via CSS `width`/`height` to control the fit.
+        imageView.contentMode = .scaleAspectFit
+        imageView.clipsToBounds = true
+
+        viewMap[nodeId] = Entry(obj: imageView, kind: OP_DECLARE_IMAGE)
+    }
+
     private func attachToParent(
         nodeId: UInt64, childKind: UInt8,
         parentId: UInt64, parentKind: UInt8
@@ -257,7 +305,7 @@ public final class OpExecutor {
 
         // Resolve parent — ROOT_SENTINEL means rootView.
         let parentObj: AnyObject
-        let effectiveParentKind: UInt8
+        var effectiveParentKind: UInt8
         if parentId == ROOT_SENTINEL {
             parentObj = rootView
             effectiveParentKind = KIND_VIEW
@@ -267,7 +315,15 @@ public final class OpExecutor {
             effectiveParentKind = parentKind
         }
 
-        switch (effectiveParentKind, childKind) {
+        // UIImageView is a UIView — collapse it onto KIND_VIEW so the
+        // existing (parent, child) dispatch table doesn't need to list
+        // every KIND_IMAGE combination separately. `addSubview` and
+        // `view.layer` both work transparently on UIImageView.
+        var effectiveChildKind = childKind
+        if effectiveChildKind == KIND_IMAGE { effectiveChildKind = KIND_VIEW }
+        if effectiveParentKind == KIND_IMAGE { effectiveParentKind = KIND_VIEW }
+
+        switch (effectiveParentKind, effectiveChildKind) {
         case (KIND_VIEW, KIND_VIEW), (KIND_VIEW, KIND_SCROLLVIEW),
              (KIND_SCROLLVIEW, KIND_VIEW), (KIND_SCROLLVIEW, KIND_SCROLLVIEW):
             if let parent = parentObj as? UIView, let child = childEntry.obj as? UIView {

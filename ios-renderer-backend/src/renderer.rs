@@ -14,6 +14,7 @@ use engine::RenderState;
 use style::values::specified::box_::Overflow;
 use style::values::specified::font::FONT_MEDIUM_PX;
 
+use crate::image::decode_data_url;
 use crate::ops::{OpBuffer, ViewKind};
 
 /// Sentinel parent ID for the root node. Swift maps this to `rootView`.
@@ -41,6 +42,14 @@ pub(crate) struct IosNodeState {
     font_size: f32,
     font_weight: f32,
     text_color: Option<(f32, f32, f32, f32)>,
+    // ── Image fields (only meaningful for ViewKind::Image) ─────
+    /// Raw `src` attribute value rendered on the previous frame. Used
+    /// to detect when the image source changed so the decoded bytes
+    /// don't have to be re-uploaded on every commit. We store the full
+    /// attribute string rather than a hash of the bytes because
+    /// identity comparison is cheap and the decode-or-skip decision
+    /// lives next to it.
+    image_src: Option<String>,
     /// `true` once this node has been rendered in a previous frame.
     /// `Default` gives `false`, which triggers full create on first encounter.
     rendered: bool,
@@ -118,29 +127,41 @@ impl ViewTree {
         let kind = determine_kind(node, is_root);
         let layout = node.layout();
 
-        // Extract properties based on kind.
-        let (bg, clips, content_size, text_content, font_size, font_weight, text_color) =
-            if kind == ViewKind::Text {
-                let (fs, fw) = extract_font_properties(node);
-                let tc = extract_text_color(node);
-                (
-                    None,
-                    false,
-                    None,
-                    node.text().map(|s| s.to_string()),
-                    fs,
-                    fw,
-                    tc,
-                )
-            } else {
-                let bg = extract_background_color(node);
-                let clips = has_clip_overflow(node);
-                let content_size = if matches!(kind, ViewKind::ScrollView) {
-                    Some(compute_content_size(doc, node_id))
-                } else {
-                    None
-                };
-                (bg, clips, content_size, None, 0.0, 0.0, None)
+        // Extract properties based on kind. Each kind uses a disjoint
+        // subset of fields on `IosNodeState`; populating irrelevant
+        // fields with their `Default` values keeps the dirty-check loop
+        // uniform.
+        let (bg, clips, content_size, text_content, font_size, font_weight, text_color, image_src) =
+            match kind {
+                ViewKind::Text => {
+                    let (fs, fw) = extract_font_properties(node);
+                    let tc = extract_text_color(node);
+                    (
+                        None,
+                        false,
+                        None,
+                        node.text().map(|s| s.to_string()),
+                        fs,
+                        fw,
+                        tc,
+                        None,
+                    )
+                }
+                ViewKind::Image => {
+                    let bg = extract_background_color(node);
+                    let src = node.attribute("src").map(|s| s.to_string());
+                    (bg, false, None, None, 0.0, 0.0, None, src)
+                }
+                _ => {
+                    let bg = extract_background_color(node);
+                    let clips = has_clip_overflow(node);
+                    let content_size = if matches!(kind, ViewKind::ScrollView) {
+                        Some(compute_content_size(doc, node_id))
+                    } else {
+                        None
+                    };
+                    (bg, clips, content_size, None, 0.0, 0.0, None, None)
+                }
             };
 
         let new_state = IosNodeState {
@@ -158,6 +179,7 @@ impl ViewTree {
             font_size,
             font_weight,
             text_color,
+            image_src,
             rendered: true,
         };
 
@@ -208,6 +230,27 @@ impl ViewTree {
                         self.ops.push_text_color(nid, r, g, b, a);
                     }
                 }
+            } else if kind == ViewKind::Image {
+                // Image nodes share background-color semantics with
+                // other element kinds (for the transparent letterboxing
+                // regions of aspect-preserving fits) but do not clip or
+                // track scroll content size.
+                if prev.bg_color != bg {
+                    if let Some((r, g, b, a)) = bg {
+                        self.ops.push_bg_color(nid, r, g, b, a);
+                    }
+                }
+                // Only redecode + re-upload the bitmap when the `src`
+                // attribute actually changed. Inline data URLs are
+                // large; re-pushing them every frame would dominate the
+                // op buffer.
+                if prev.image_src != new_state.image_src {
+                    if let Some(ref src) = new_state.image_src {
+                        if let Some(bytes) = decode_data_url(src) {
+                            self.ops.push_image_data(nid, &bytes);
+                        }
+                    }
+                }
             } else {
                 // Element-specific dirty checking.
                 if prev.bg_color != bg {
@@ -255,6 +298,19 @@ fn emit_full_node(node_id: u64, state: &IosNodeState, ops: &mut OpBuffer) {
         if let Some((r, g, b, a)) = state.text_color {
             ops.push_text_color(node_id, r, g, b, a);
         }
+    } else if state.kind == ViewKind::Image {
+        // Image-specific initial ops. Decoding happens here rather than
+        // on the Swift side because the op-buffer format is "raw bytes
+        // only"; that keeps the main-thread executor free of base64
+        // parsing and data-URL quirks.
+        if let Some((r, g, b, a)) = state.bg_color {
+            ops.push_bg_color(node_id, r, g, b, a);
+        }
+        if let Some(ref src) = state.image_src {
+            if let Some(bytes) = decode_data_url(src) {
+                ops.push_image_data(node_id, &bytes);
+            }
+        }
     } else {
         // Element-specific initial ops.
         if let Some((r, g, b, a)) = state.bg_color {
@@ -282,6 +338,15 @@ fn emit_full_node(node_id: u64, state: &IosNodeState, ops: &mut OpBuffer) {
 fn determine_kind<S: RenderState>(node: &engine::dom::PawsElement<S>, is_root: bool) -> ViewKind {
     if node.is_text_node() {
         return ViewKind::Text;
+    }
+
+    // `<img>` is backed by a UIImageView regardless of overflow/root
+    // status. The UA stylesheet gives it `overflow: clip`, so scrolling
+    // heuristics below would never trigger for it anyway; handling it
+    // first keeps the rest of the function focused on generic element
+    // kinds.
+    if node.local_name() == Some("img") {
+        return ViewKind::Image;
     }
 
     let (overflow_x, overflow_y) = node
@@ -712,6 +777,103 @@ mod tests {
             (viewport_width - 375.0).abs() < 0.5,
             "with viewport 375×667, unstyled root should fill width \
              (expected ≈ 375px, got {viewport_width})"
+        );
+    }
+
+    // ── Image node tests ───────────────────────────────────────────
+
+    /// A one-pixel transparent PNG encoded as a data URL. Uses the
+    /// minimum valid PNG bytes so the test doesn't need to embed the
+    /// full 67-byte IHDR+IDAT+IEND blob inline.
+    const TINY_PNG_DATA_URL: &str =
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=";
+
+    #[test]
+    fn test_img_element_emits_declare_image_and_data() {
+        let mut doc = setup_styled_doc(|state| {
+            let img = state.create_element("img".to_string());
+            state.append_element(0, img).unwrap();
+            state
+                .set_attribute(img, "src".into(), TINY_PNG_DATA_URL.into())
+                .unwrap();
+            state
+                .set_inline_style(img, "width".into(), "32px".into())
+                .unwrap();
+            state
+                .set_inline_style(img, "height".into(), "32px".into())
+                .unwrap();
+        });
+
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, root);
+
+        let tags = collect_tags(&tree);
+        assert!(
+            tags.contains(&(OpTag::DeclareImage as u8)),
+            "<img> element should emit DeclareImage; got {tags:?}"
+        );
+        assert!(
+            tags.contains(&(OpTag::SetImageData as u8)),
+            "<img> element with a decodable data URL should emit SetImageData; got {tags:?}"
+        );
+        assert!(
+            tree.ops().strings_len() > 0,
+            "image bytes must be appended to the auxiliary data table"
+        );
+    }
+
+    #[test]
+    fn test_img_element_skips_image_data_without_src() {
+        let mut doc = setup_styled_doc(|state| {
+            let img = state.create_element("img".to_string());
+            state.append_element(0, img).unwrap();
+            state
+                .set_inline_style(img, "width".into(), "32px".into())
+                .unwrap();
+            state
+                .set_inline_style(img, "height".into(), "32px".into())
+                .unwrap();
+        });
+
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, root);
+
+        let tags = collect_tags(&tree);
+        assert!(tags.contains(&(OpTag::DeclareImage as u8)));
+        assert!(
+            !tags.contains(&(OpTag::SetImageData as u8)),
+            "<img> without a src attribute must not emit SetImageData"
+        );
+    }
+
+    #[test]
+    fn test_img_element_unchanged_src_skips_reupload() {
+        let mut doc = setup_styled_doc(|state| {
+            let img = state.create_element("img".to_string());
+            state.append_element(0, img).unwrap();
+            state
+                .set_attribute(img, "src".into(), TINY_PNG_DATA_URL.into())
+                .unwrap();
+            state
+                .set_inline_style(img, "width".into(), "32px".into())
+                .unwrap();
+            state
+                .set_inline_style(img, "height".into(), "32px".into())
+                .unwrap();
+        });
+
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, root);
+        assert!(tree.ops().op_count() > 0, "first frame should emit ops");
+
+        tree.process(&mut doc, root);
+        assert_eq!(
+            tree.ops().op_count(),
+            0,
+            "unchanged <img> tree should emit zero ops on subsequent frames"
         );
     }
 

@@ -3,6 +3,7 @@ use markup5ever::{LocalName, Namespace, QualName};
 use taffy::prelude::TaffyMaxContent;
 
 use crate::dom::{Document, DomError};
+use crate::io::{EngineIOController, IoLayer};
 use crate::style::StyleContext;
 
 /// Error codes returned from host functions to WASM guests.
@@ -95,17 +96,30 @@ impl EngineRenderer for () {
 /// Top-level state container for the WASM host runtime.
 ///
 /// Owns the [`Document`] (which includes the text layout context),
-/// [`StyleContext`], stylesheet cache, and an [`EngineRenderer`] backend.
-/// All WASM-facing host functions operate through this struct.
+/// [`StyleContext`], stylesheet cache, an [`EngineRenderer`] backend,
+/// and an [`IoLayer`] wrapping the host's [`EngineIOController`]. All
+/// WASM-facing host functions operate through this struct.
 ///
-/// The type parameter `R` is the renderer backend. Use `()` for tests
-/// and headless usage (zero-cost no-op renderer).
-pub struct RuntimeState<R: EngineRenderer = ()> {
+/// Two type parameters:
+/// - `R`: the renderer backend. Use `()` for tests and headless
+///   usage (zero-cost no-op renderer).
+/// - `I`: the I/O controller. Defaults to `()` for the same reason —
+///   `()` returns [`crate::io::IoError::NotImplemented`] from every
+///   network method, letting the engine spin up without a network
+///   stack while the host is still being built out.
+///
+/// Both parameters default so existing call sites that write
+/// `RuntimeState<R>` continue to type-check under `RuntimeState<R, ()>`.
+pub struct RuntimeState<R: EngineRenderer = (), I: EngineIOController = ()> {
     pub doc: Document<R::NodeState>,
     pub last_error: Option<HostError>,
     pub style_context: StyleContext,
     pub(crate) stylesheet_cache: crate::style::StylesheetCache,
     pub renderer: R,
+    /// Host-side network controller wrapped in the engine's cache +
+    /// data-URL decoder. Access through [`Self::io`] / [`Self::io_mut`]
+    /// so future changes to the layer's shape stay contained.
+    pub(crate) io: IoLayer<I>,
     /// The event currently being dispatched, if any.
     ///
     /// Set by `dispatch_event` and cleared after the dispatch loop completes.
@@ -134,7 +148,10 @@ impl RuntimeState<()> {
 
 impl<R: EngineRenderer> RuntimeState<R> {
     /// Creates a new runtime state with a custom renderer backend and
-    /// content-sized layout (`MAX_CONTENT`).
+    /// content-sized layout (`MAX_CONTENT`). The I/O controller
+    /// defaults to `()`, so network methods return
+    /// [`IoError::NotImplemented`](crate::io::IoError::NotImplemented)
+    /// and only `data:` URLs / cache hits resolve.
     ///
     /// Equivalent to calling [`with_renderer_viewport`](Self::with_renderer_viewport)
     /// with `taffy::Size::MAX_CONTENT`.
@@ -144,14 +161,50 @@ impl<R: EngineRenderer> RuntimeState<R> {
 
     /// Creates a new runtime state with a custom renderer backend and an
     /// explicit Taffy viewport used for every `__commit`-triggered layout.
+    /// The I/O controller defaults to `()`.
     ///
     /// Hosts that bound layout to a fixed area (e.g. `paws-runner` with a
     /// configured viewport, or the iOS renderer using the host view's
     /// bounds) should use this constructor; for typical definite sizing
-    /// see [`Self::with_definite_viewport`].
+    /// see [`Self::with_definite_viewport`]. Hosts that need a real
+    /// network stack should use [`Self::with_renderer_io_viewport`]
+    /// instead.
     pub fn with_renderer_viewport(
         url_str: String,
         renderer: R,
+        viewport: taffy::Size<taffy::AvailableSpace>,
+    ) -> Self {
+        Self::with_renderer_io_viewport(url_str, renderer, (), viewport)
+    }
+
+    /// Convenience: creates a new runtime state with a definite `width × height`
+    /// viewport and the default `()` I/O controller. Panics in debug
+    /// builds if either dimension is non-finite or negative (Taffy
+    /// treats those as layout bugs that produce undefined output).
+    pub fn with_definite_viewport(url_str: String, renderer: R, width: f32, height: f32) -> Self {
+        Self::with_renderer_io_definite_viewport(url_str, renderer, (), width, height)
+    }
+}
+
+impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
+    /// Creates a new runtime state with both a custom renderer and a
+    /// custom I/O controller, using content-sized layout
+    /// (`MAX_CONTENT`). Use this when the host needs real networking;
+    /// headless / network-free setups should prefer the simpler
+    /// [`Self::with_renderer`] constructor which defaults the
+    /// controller to `()`.
+    pub fn with_renderer_io(url_str: String, renderer: R, io: I) -> Self {
+        Self::with_renderer_io_viewport(url_str, renderer, io, taffy::Size::MAX_CONTENT)
+    }
+
+    /// Full constructor: renderer, I/O controller, and explicit
+    /// Taffy viewport. Every other constructor eventually delegates
+    /// here so there's a single source of truth for how
+    /// [`StyleContext`], [`Document`], and [`IoLayer`] get wired up.
+    pub fn with_renderer_io_viewport(
+        url_str: String,
+        renderer: R,
+        io: I,
         viewport: taffy::Size<taffy::AvailableSpace>,
     ) -> Self {
         let url = url::Url::parse(&url_str).expect("Valid Document URL");
@@ -169,11 +222,37 @@ impl<R: EngineRenderer> RuntimeState<R> {
             style_context: context,
             stylesheet_cache,
             renderer,
+            io: IoLayer::new(io),
             current_event: None,
             viewport,
         };
         state.install_ua_stylesheet();
         state
+    }
+
+    /// Creates a new runtime state with a renderer, I/O controller,
+    /// and definite `width × height` viewport. Panics in debug
+    /// builds if either dimension is non-finite or negative.
+    pub fn with_renderer_io_definite_viewport(
+        url_str: String,
+        renderer: R,
+        io: I,
+        width: f32,
+        height: f32,
+    ) -> Self {
+        debug_assert!(
+            width.is_finite() && width >= 0.0,
+            "viewport width must be finite and non-negative, got {width}"
+        );
+        debug_assert!(
+            height.is_finite() && height >= 0.0,
+            "viewport height must be finite and non-negative, got {height}"
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(width),
+            height: taffy::AvailableSpace::Definite(height),
+        };
+        Self::with_renderer_io_viewport(url_str, renderer, io, viewport)
     }
 
     /// Installs the engine's built-in User-Agent stylesheet.
@@ -194,23 +273,20 @@ impl<R: EngineRenderer> RuntimeState<R> {
         );
     }
 
-    /// Convenience: creates a new runtime state with a definite `width × height`
-    /// viewport. Panics in debug builds if either dimension is non-finite or
-    /// negative (Taffy treats those as layout bugs that produce undefined output).
-    pub fn with_definite_viewport(url_str: String, renderer: R, width: f32, height: f32) -> Self {
-        debug_assert!(
-            width.is_finite() && width >= 0.0,
-            "viewport width must be finite and non-negative, got {width}"
-        );
-        debug_assert!(
-            height.is_finite() && height >= 0.0,
-            "viewport height must be finite and non-negative, got {height}"
-        );
-        let viewport = taffy::Size {
-            width: taffy::AvailableSpace::Definite(width),
-            height: taffy::AvailableSpace::Definite(height),
-        };
-        Self::with_renderer_viewport(url_str, renderer, viewport)
+    /// Immutable access to the engine's I/O layer (cache +
+    /// controller). Prefer this over touching fields directly so
+    /// future changes to the layer's shape don't ripple across the
+    /// codebase.
+    pub fn io(&self) -> &IoLayer<I> {
+        &self.io
+    }
+
+    /// Mutable access to the I/O layer. Callers that need to call
+    /// async controller methods obtain the controller via
+    /// [`IoLayer::controller_mut`] and poll the returned futures on
+    /// their own executor — the engine does not own one.
+    pub fn io_mut(&mut self) -> &mut IoLayer<I> {
+        &mut self.io
     }
 
     /// Creates a new HTML element with the given tag name. Returns the node ID.

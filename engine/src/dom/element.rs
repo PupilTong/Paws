@@ -255,6 +255,16 @@ impl<S: RenderState> PawsElement<S> {
         self.node_type == NodeType::Text
     }
 
+    /// Returns the element's local (tag) name, or `None` for non-element nodes.
+    pub fn local_name(&self) -> Option<&str> {
+        self.name.as_ref().map(|n| n.local.as_ref())
+    }
+
+    /// Returns the value of the named attribute, or `None` if absent.
+    pub fn attribute(&self, name: &str) -> Option<&str> {
+        self.attrs.get(&Atom::from(name)).map(|s| s.as_str())
+    }
+
     /// Returns `true` if this element is an HTML `<slot>` element.
     pub(crate) fn is_slot_element(&self) -> bool {
         self.name

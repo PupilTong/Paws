@@ -79,6 +79,12 @@ enum ExampleCatalog {
                     wasmResourceName: "example_event_dispatch",
                     symbolName: "hand.tap"
                 ),
+                ExampleEntry(
+                    displayName: "Image Element",
+                    description: "<img> backed by a data: URL; rendered via UIImageView.",
+                    wasmResourceName: "example_img_element",
+                    symbolName: "photo"
+                ),
             ]
         ),
         ExampleSection(

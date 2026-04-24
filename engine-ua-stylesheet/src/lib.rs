@@ -20,6 +20,17 @@
 //! `initial_values`; browser-shaped guests with explicit `<html>` /
 //! `<body>` elements pick up the rules through the normal cascade.
 //!
+//! `<img>` inherits Chrome's UA rule verbatim:
+//! `img { overflow: clip; overflow-clip-margin: content-box; }`
+//! (Blink source: `third_party/blink/renderer/core/html/resources/
+//! html.css`). No `display` override — `<img>` keeps the CSS initial
+//! `inline`, matching browsers. Paws has no replaced-element machinery
+//! yet, so the decoded bitmap does not provide an intrinsic size the
+//! way it does in real browsers; authors must set `width`/`height`
+//! (inline or via a stylesheet) to give the `<img>` box a definite
+//! size. That is a deliberate limitation for this first cut — replaced
+//! sizing is a follow-up.
+//!
 //! The engine installs this sheet with [`Origin::UserAgent`] at
 //! `RuntimeState` construction via `add_parsed_stylesheet_with_origin`,
 //! so every author sheet wins without `!important`.
@@ -32,5 +43,9 @@ pub static UA_STYLESHEET_IR: &[u8] = view_macros::css!(
         font-size: 16px; \
         font-family: system-ui; \
         font-weight: 400; \
+    } \
+    img { \
+        overflow: clip; \
+        overflow-clip-margin: content-box; \
     }"
 );

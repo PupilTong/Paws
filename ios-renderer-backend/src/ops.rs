@@ -98,6 +98,22 @@ pub(crate) enum OpTag {
     /// Release a CATextLayer.
     /// `[tag:1][node_id:8][padding:23]`
     ReleaseText = 0x15,
+
+    // ── Image ops ───────────────────────────────────────────────────
+    /// Create a UIImageView.
+    /// `[tag:1][node_id:8][parent_id:8][padding:15]`
+    ///
+    /// Detach and release of an image node reuse [`OpTag::DetachView`] /
+    /// [`OpTag::ReleaseView`] since `UIImageView` is a `UIView` subclass.
+    DeclareImage = 0x20,
+
+    /// Set the image bitmap (references the bytes table).
+    /// `[tag:1][node_id:8][data_offset:4][data_len:4][padding:15]`
+    ///
+    /// The bytes stored in the auxiliary table are the raw encoded image
+    /// (e.g. a PNG or JPEG blob, already base64-decoded by the renderer).
+    /// Swift passes the slice to `UIImage(data:)` on the main thread.
+    SetImageData = 0x21,
 }
 
 /// Slot size in bytes. Every op occupies exactly this many bytes.
@@ -156,13 +172,14 @@ impl OpBuffer {
 
     // ── Declare ops ────────────────────────────────────────────────
 
-    /// Emits a Declare op (View, ScrollView, or Layer) with parent info.
+    /// Emits a Declare op (View, ScrollView, Layer, Text, or Image) with parent info.
     pub(crate) fn push_declare(&mut self, kind: ViewKind, node_id: u64, parent_id: u64) {
         let tag = match kind {
             ViewKind::View => OpTag::DeclareView,
             ViewKind::ScrollView => OpTag::DeclareScrollView,
             ViewKind::Layer => OpTag::DeclareLayer,
             ViewKind::Text => OpTag::DeclareText,
+            ViewKind::Image => OpTag::DeclareImage,
         };
         let mut slot = [0u8; SLOT_SIZE];
         slot[0] = tag as u8;
@@ -175,7 +192,9 @@ impl OpBuffer {
 
     /// Emits a SetViewFrame, SetLayerFrame, or SetTextFrame op.
     ///
-    /// Text nodes reuse `SetLayerFrame` since CATextLayer is a CALayer subclass.
+    /// Text nodes reuse `SetLayerFrame` since `CATextLayer` is a `CALayer`
+    /// subclass. Image nodes reuse `SetViewFrame` since `UIImageView` is
+    /// a `UIView` subclass.
     pub(crate) fn push_set_frame(
         &mut self,
         kind: ViewKind,
@@ -270,9 +289,33 @@ impl OpBuffer {
         self.data.extend_from_slice(&slot);
     }
 
+    // ── Image ops ──────────────────────────────────────────────────
+
+    /// Appends raw image bytes to the auxiliary data table and emits a
+    /// `SetImageData` op pointing at them.
+    ///
+    /// The table is the same byte buffer that backs text-content strings
+    /// — Swift treats the `(offset, len)` payload as a binary blob and
+    /// hands it to `UIImage(data:)`.
+    pub(crate) fn push_image_data(&mut self, node_id: u64, bytes: &[u8]) {
+        let offset = self.strings.len() as u32;
+        let len = bytes.len() as u32;
+        self.strings.extend_from_slice(bytes);
+
+        let mut slot = [0u8; SLOT_SIZE];
+        slot[0] = OpTag::SetImageData as u8;
+        slot[1..9].copy_from_slice(&node_id.to_le_bytes());
+        slot[9..13].copy_from_slice(&offset.to_le_bytes());
+        slot[13..17].copy_from_slice(&len.to_le_bytes());
+        self.data.extend_from_slice(&slot);
+    }
+
     // ── Detach / Release ops ───────────────────────────────────────
 
-    /// Emits a Detach op (view, layer, or text).
+    /// Emits a Detach op (view, layer, text, or image).
+    ///
+    /// `ViewKind::Image` maps to `DetachView` since `UIImageView` is a
+    /// `UIView` subclass and the Swift executor calls `removeFromSuperview`.
     pub(crate) fn push_detach(&mut self, node_id: u64, kind: ViewKind) {
         let tag = match kind {
             ViewKind::Layer => OpTag::DetachLayer,
@@ -285,10 +328,14 @@ impl OpBuffer {
         self.data.extend_from_slice(&slot);
     }
 
-    /// Emits a Release op (view, scroll view, layer, or text).
+    /// Emits a Release op (view, scroll view, layer, text, or image).
+    ///
+    /// `ViewKind::Image` maps to `ReleaseView` since Swift only needs to
+    /// drop the entry from its view map — the concrete `UIImageView`
+    /// subclass does not require special teardown.
     pub(crate) fn push_release(&mut self, node_id: u64, kind: ViewKind) {
         let tag = match kind {
-            ViewKind::View => OpTag::ReleaseView,
+            ViewKind::View | ViewKind::Image => OpTag::ReleaseView,
             ViewKind::ScrollView => OpTag::ReleaseScrollView,
             ViewKind::Layer => OpTag::ReleaseLayer,
             ViewKind::Text => OpTag::ReleaseText,
@@ -352,6 +399,8 @@ pub(crate) enum ViewKind {
     Layer = 2,
     /// A `CATextLayer` for rendering text.
     Text = 3,
+    /// A `UIImageView` for rendering raster images.
+    Image = 4,
 }
 
 #[cfg(test)]
@@ -566,6 +615,53 @@ mod tests {
         let slot = buf.slot_at(0).unwrap();
         let a = f32::from_le_bytes(slot[21..25].try_into().unwrap());
         assert_eq!(a, 1.0);
+    }
+
+    // ── Image op tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_push_declare_image() {
+        let mut buf = OpBuffer::new();
+        buf.push_declare(ViewKind::Image, 11, 2);
+        assert_eq!(buf.tag_at(0), Some(OpTag::DeclareImage as u8));
+
+        let slot = buf.slot_at(0).unwrap();
+        let node_id = u64::from_le_bytes(slot[1..9].try_into().unwrap());
+        let parent_id = u64::from_le_bytes(slot[9..17].try_into().unwrap());
+        assert_eq!(node_id, 11);
+        assert_eq!(parent_id, 2);
+    }
+
+    #[test]
+    fn test_push_image_data_table_and_op() {
+        let mut buf = OpBuffer::new();
+        buf.push_image_data(7, &[0x89, 0x50, 0x4E, 0x47]);
+        assert_eq!(buf.tag_at(0), Some(OpTag::SetImageData as u8));
+
+        let slot = buf.slot_at(0).unwrap();
+        let offset = u32::from_le_bytes(slot[9..13].try_into().unwrap());
+        let len = u32::from_le_bytes(slot[13..17].try_into().unwrap());
+        assert_eq!(offset, 0);
+        assert_eq!(len, 4);
+        assert_eq!(buf.strings_data(), &[0x89, 0x50, 0x4E, 0x47]);
+    }
+
+    #[test]
+    fn test_image_frame_uses_view_tag() {
+        let mut buf = OpBuffer::new();
+        buf.push_set_frame(ViewKind::Image, 3, 0.0, 0.0, 32.0, 32.0);
+        assert_eq!(
+            buf.tag_at(0),
+            Some(OpTag::SetViewFrame as u8),
+            "image frame should use SetViewFrame since UIImageView is a UIView"
+        );
+    }
+
+    #[test]
+    fn test_image_release_reuses_view_tag() {
+        let mut buf = OpBuffer::new();
+        buf.push_release(9, ViewKind::Image);
+        assert_eq!(buf.tag_at(0), Some(OpTag::ReleaseView as u8));
     }
 
     #[test]
