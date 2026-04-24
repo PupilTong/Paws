@@ -13,6 +13,7 @@
 
 mod error;
 pub(crate) mod ffi;
+mod image;
 mod ops;
 mod renderer;
 mod thread;

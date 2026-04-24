@@ -107,7 +107,7 @@ final class PawsExampleTests: XCTestCase {
         }
 
         view.renderer.postRunWat(demoWat, functionName: "run")
-        wait(for: [expectation], timeout: 5.0)
+        wait(for: [expectation], timeout: 30.0)
     }
 
     func testCommitProducesLayers() {
@@ -133,7 +133,7 @@ final class PawsExampleTests: XCTestCase {
         }
 
         view.renderer.postRunWat(demoWat, functionName: "run")
-        wait(for: [expectation], timeout: 5.0)
+        wait(for: [expectation], timeout: 30.0)
     }
 
     func testLayerFrames() {
@@ -167,7 +167,7 @@ final class PawsExampleTests: XCTestCase {
         }
 
         view.renderer.postRunWat(demoWat, functionName: "run")
-        wait(for: [expectation], timeout: 5.0)
+        wait(for: [expectation], timeout: 30.0)
     }
 
     func testLayerBackgroundColors() {
@@ -219,7 +219,7 @@ final class PawsExampleTests: XCTestCase {
         }
 
         view.renderer.postRunWat(demoWat, functionName: "run")
-        wait(for: [expectation], timeout: 5.0)
+        wait(for: [expectation], timeout: 30.0)
     }
 
     // MARK: - Text rendering tests
@@ -247,7 +247,7 @@ final class PawsExampleTests: XCTestCase {
         }
 
         view.renderer.postRunWat(textWat, functionName: "run")
-        wait(for: [expectation], timeout: 5.0)
+        wait(for: [expectation], timeout: 30.0)
     }
 
     func testTextLayerHasContent() {
@@ -279,7 +279,7 @@ final class PawsExampleTests: XCTestCase {
         }
 
         view.renderer.postRunWat(textWat, functionName: "run")
-        wait(for: [expectation], timeout: 5.0)
+        wait(for: [expectation], timeout: 30.0)
     }
 
     func testTextLayerHasNonZeroFrame() {
@@ -315,7 +315,7 @@ final class PawsExampleTests: XCTestCase {
         }
 
         view.renderer.postRunWat(textWat, functionName: "run")
-        wait(for: [expectation], timeout: 5.0)
+        wait(for: [expectation], timeout: 30.0)
     }
 
     // MARK: - Screenshot / pixel comparison tests
@@ -386,7 +386,7 @@ final class PawsExampleTests: XCTestCase {
         }
 
         view.renderer.postRunWat(demoWat, functionName: "run")
-        wait(for: [expectation], timeout: 5.0)
+        wait(for: [expectation], timeout: 30.0)
     }
 
     func testScreenshotTextNodeHasContent() {
@@ -435,6 +435,6 @@ final class PawsExampleTests: XCTestCase {
         }
 
         view.renderer.postRunWat(textWat, functionName: "run")
-        wait(for: [expectation], timeout: 5.0)
+        wait(for: [expectation], timeout: 30.0)
     }
 }

@@ -60,9 +60,9 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
     pub fn build(self) -> Runner<R> {
         let state = match self.viewport {
             Some((width, height)) => {
-                RuntimeState::with_definite_viewport(self.url, self.renderer, width, height)
+                RuntimeState::with_definite_viewport(self.url, self.renderer, (), width, height)
             }
-            None => RuntimeState::with_renderer(self.url, self.renderer),
+            None => RuntimeState::with_renderer(self.url, self.renderer, ()),
         };
         Runner {
             state: Some(state),

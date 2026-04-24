@@ -16,6 +16,7 @@ const EXAMPLES: &[&str] = &[
     "example-commit-full",
     "example-namespace",
     "example-event-dispatch",
+    "example-img-element",
 ];
 
 /// Yew-based test fixtures under `Paws/examples/yew/`. Source lives in

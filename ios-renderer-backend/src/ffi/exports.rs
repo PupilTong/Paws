@@ -625,4 +625,98 @@ mod tests {
              PawsRendererView renders an invisible transparent box"
         );
     }
+
+    /// End-to-end regression: the compiled `example_img_element` wasm
+    /// must push a `DeclareImage` op and a `SetImageData` op whose
+    /// payload indexes into a non-empty auxiliary data table. This
+    /// mirrors the Swift side's contract — if either op is absent the
+    /// `UIImageView` on the simulator stays blank — and catches skew
+    /// between the wasm guest, the renderer's data-URL decoder, and
+    /// the op-buffer format without needing a live simulator session.
+    #[test]
+    fn test_img_element_delivers_declare_image_and_data_via_ffi() {
+        struct CollectingState {
+            ops: std::sync::Mutex<Vec<u8>>,
+            strings: std::sync::Mutex<Vec<u8>>,
+        }
+        extern "C" fn collect(
+            ops_ptr: *const u8,
+            ops_len: usize,
+            strings_ptr: *const u8,
+            strings_len: usize,
+            ctx: *mut c_void,
+        ) {
+            // SAFETY: ctx is kept alive by the test until
+            // `paws_renderer_destroy` returns.
+            let state = unsafe { &*(ctx as *const CollectingState) };
+            if ops_len > 0 {
+                // SAFETY: `ops_ptr` points to `ops_len` bytes.
+                let bytes = unsafe { std::slice::from_raw_parts(ops_ptr, ops_len) };
+                state.ops.lock().unwrap().extend_from_slice(bytes);
+            }
+            if strings_len > 0 && !strings_ptr.is_null() {
+                // SAFETY: `strings_ptr` points to `strings_len` bytes.
+                let bytes = unsafe { std::slice::from_raw_parts(strings_ptr, strings_len) };
+                state.strings.lock().unwrap().extend_from_slice(bytes);
+            }
+        }
+
+        let state = std::sync::Arc::new(CollectingState {
+            ops: std::sync::Mutex::new(Vec::new()),
+            strings: std::sync::Mutex::new(Vec::new()),
+        });
+        let ctx_ptr = std::sync::Arc::as_ptr(&state) as *mut c_void;
+
+        let wasm_path = paws_examples::example_wasm_path("example_img_element");
+        let wasm_bytes = std::fs::read(wasm_path).unwrap();
+
+        let url = CString::new("https://test.paws").unwrap();
+        let renderer = paws_renderer_create(url.as_ptr(), collect, ctx_ptr);
+        assert!(!renderer.is_null());
+        assert_eq!(paws_renderer_set_viewport(renderer, 375.0, 667.0), 0);
+
+        let func = CString::new("run").unwrap();
+        let result = paws_renderer_post_run_wasm(
+            renderer,
+            wasm_bytes.as_ptr(),
+            wasm_bytes.len(),
+            func.as_ptr(),
+        );
+        assert_eq!(result, 0);
+        paws_renderer_destroy(renderer);
+
+        use crate::ops::{OpTag, SLOT_SIZE};
+        let ops = state.ops.lock().unwrap();
+        let has_declare_image = ops
+            .chunks(SLOT_SIZE)
+            .any(|slot| slot[0] == OpTag::DeclareImage as u8);
+        assert!(
+            has_declare_image,
+            "example_img_element must emit a DeclareImage op"
+        );
+
+        let image_data_slot = ops
+            .chunks(SLOT_SIZE)
+            .find(|slot| slot[0] == OpTag::SetImageData as u8)
+            .expect("example_img_element must emit a SetImageData op");
+        let offset = u32::from_le_bytes(image_data_slot[9..13].try_into().unwrap()) as usize;
+        let len = u32::from_le_bytes(image_data_slot[13..17].try_into().unwrap()) as usize;
+
+        let strings = state.strings.lock().unwrap();
+        assert!(
+            offset + len <= strings.len() && len > 0,
+            "SetImageData payload must point into the strings table \
+             (offset={offset}, len={len}, table_bytes={})",
+            strings.len()
+        );
+        // The decoder should have produced a PNG blob — the first
+        // eight bytes of any PNG are the fixed signature.
+        let blob = &strings[offset..offset + len];
+        assert_eq!(
+            &blob[..8],
+            b"\x89PNG\r\n\x1a\n",
+            "decoded image bytes should start with the PNG signature, got {:02x?}",
+            &blob[..blob.len().min(8)]
+        );
+    }
 }
