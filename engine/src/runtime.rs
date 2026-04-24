@@ -136,72 +136,46 @@ pub struct RuntimeState<R: EngineRenderer = (), I: EngineIOController = ()> {
 }
 
 impl RuntimeState<()> {
-    /// Creates a new runtime state with the no-op `()` renderer and
-    /// content-sized layout (`MAX_CONTENT`).
+    /// Creates a new runtime state with the no-op `()` renderer, the
+    /// no-op `()` I/O controller, and content-sized layout
+    /// (`MAX_CONTENT`).
     ///
-    /// Use this for tests and headless usage where no rendering backend
-    /// is needed and layout should be driven by content size.
+    /// Use this for tests and headless usage where neither a
+    /// rendering backend nor a network stack is needed and layout
+    /// should be driven by content size.
     pub fn new(url_str: String) -> Self {
-        Self::with_renderer(url_str, ())
+        Self::with_renderer(url_str, (), ())
     }
 }
 
-impl<R: EngineRenderer> RuntimeState<R> {
-    /// Creates a new runtime state with a custom renderer backend and
-    /// content-sized layout (`MAX_CONTENT`). The I/O controller
-    /// defaults to `()`, so network methods return
+impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
+    /// Creates a new runtime state with a custom renderer backend,
+    /// a custom I/O controller, and content-sized layout
+    /// (`MAX_CONTENT`).
+    ///
+    /// Pass `()` for either parameter to get the zero-cost no-op —
+    /// `()` for `renderer` is the headless case,  `()` for `io`
+    /// means every network method returns
     /// [`IoError::NotImplemented`](crate::io::IoError::NotImplemented)
     /// and only `data:` URLs / cache hits resolve.
     ///
     /// Equivalent to calling [`with_renderer_viewport`](Self::with_renderer_viewport)
     /// with `taffy::Size::MAX_CONTENT`.
-    pub fn with_renderer(url_str: String, renderer: R) -> Self {
-        Self::with_renderer_viewport(url_str, renderer, taffy::Size::MAX_CONTENT)
-    }
-
-    /// Creates a new runtime state with a custom renderer backend and an
-    /// explicit Taffy viewport used for every `__commit`-triggered layout.
-    /// The I/O controller defaults to `()`.
-    ///
-    /// Hosts that bound layout to a fixed area (e.g. `paws-runner` with a
-    /// configured viewport, or the iOS renderer using the host view's
-    /// bounds) should use this constructor; for typical definite sizing
-    /// see [`Self::with_definite_viewport`]. Hosts that need a real
-    /// network stack should use [`Self::with_renderer_io_viewport`]
-    /// instead.
-    pub fn with_renderer_viewport(
-        url_str: String,
-        renderer: R,
-        viewport: taffy::Size<taffy::AvailableSpace>,
-    ) -> Self {
-        Self::with_renderer_io_viewport(url_str, renderer, (), viewport)
-    }
-
-    /// Convenience: creates a new runtime state with a definite `width × height`
-    /// viewport and the default `()` I/O controller. Panics in debug
-    /// builds if either dimension is non-finite or negative (Taffy
-    /// treats those as layout bugs that produce undefined output).
-    pub fn with_definite_viewport(url_str: String, renderer: R, width: f32, height: f32) -> Self {
-        Self::with_renderer_io_definite_viewport(url_str, renderer, (), width, height)
-    }
-}
-
-impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
-    /// Creates a new runtime state with both a custom renderer and a
-    /// custom I/O controller, using content-sized layout
-    /// (`MAX_CONTENT`). Use this when the host needs real networking;
-    /// headless / network-free setups should prefer the simpler
-    /// [`Self::with_renderer`] constructor which defaults the
-    /// controller to `()`.
-    pub fn with_renderer_io(url_str: String, renderer: R, io: I) -> Self {
-        Self::with_renderer_io_viewport(url_str, renderer, io, taffy::Size::MAX_CONTENT)
+    pub fn with_renderer(url_str: String, renderer: R, io: I) -> Self {
+        Self::with_renderer_viewport(url_str, renderer, io, taffy::Size::MAX_CONTENT)
     }
 
     /// Full constructor: renderer, I/O controller, and explicit
-    /// Taffy viewport. Every other constructor eventually delegates
+    /// Taffy viewport used for every `__commit`-triggered layout.
+    /// Every other constructor on this type eventually delegates
     /// here so there's a single source of truth for how
     /// [`StyleContext`], [`Document`], and [`IoLayer`] get wired up.
-    pub fn with_renderer_io_viewport(
+    ///
+    /// Hosts that bound layout to a fixed area (e.g. `paws-runner`
+    /// with a configured viewport, or the iOS renderer using the
+    /// host view's bounds) should use this constructor; for typical
+    /// definite sizing see [`Self::with_definite_viewport`].
+    pub fn with_renderer_viewport(
         url_str: String,
         renderer: R,
         io: I,
@@ -230,10 +204,11 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         state
     }
 
-    /// Creates a new runtime state with a renderer, I/O controller,
-    /// and definite `width × height` viewport. Panics in debug
-    /// builds if either dimension is non-finite or negative.
-    pub fn with_renderer_io_definite_viewport(
+    /// Convenience: creates a new runtime state with a definite
+    /// `width × height` viewport. Panics in debug builds if either
+    /// dimension is non-finite or negative (Taffy treats those as
+    /// layout bugs that produce undefined output).
+    pub fn with_definite_viewport(
         url_str: String,
         renderer: R,
         io: I,
@@ -252,7 +227,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
             width: taffy::AvailableSpace::Definite(width),
             height: taffy::AvailableSpace::Definite(height),
         };
-        Self::with_renderer_io_viewport(url_str, renderer, io, viewport)
+        Self::with_renderer_viewport(url_str, renderer, io, viewport)
     }
 
     /// Installs the engine's built-in User-Agent stylesheet.

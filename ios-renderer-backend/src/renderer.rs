@@ -461,7 +461,7 @@ mod tests {
     ) -> Document<IosNodeState> {
         let renderer = TestRenderer;
         let mut state =
-            engine::RuntimeState::with_renderer("https://test.com".to_string(), renderer);
+            engine::RuntimeState::with_renderer("https://test.com".to_string(), renderer, ());
         setup(&mut state);
         state.commit();
         state.doc
@@ -665,10 +665,13 @@ mod tests {
             Some((w, h)) => engine::RuntimeState::with_definite_viewport(
                 "https://test.com".to_string(),
                 renderer,
+                (),
                 w,
                 h,
             ),
-            None => engine::RuntimeState::with_renderer("https://test.com".to_string(), renderer),
+            None => {
+                engine::RuntimeState::with_renderer("https://test.com".to_string(), renderer, ())
+            }
         };
         let host = state.create_element("div".to_string());
         state.append_element(0, host).unwrap();

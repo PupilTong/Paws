@@ -229,9 +229,9 @@ fn run_engine(
     };
     let state = match viewport {
         Some((width, height)) => {
-            RuntimeState::with_definite_viewport(base_url, renderer, width, height)
+            RuntimeState::with_definite_viewport(base_url, renderer, (), width, height)
         }
-        None => RuntimeState::with_renderer(base_url, renderer),
+        None => RuntimeState::with_renderer(base_url, renderer, ()),
     };
 
     // Paws examples are wasm32-wasip2 components (see
