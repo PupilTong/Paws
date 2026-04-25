@@ -67,8 +67,6 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use fnv::FnvHashMap;
-
 // ── Error / result ────────────────────────────────────────────────────
 
 /// Errors surfaced by the I/O layer. Kept as a typed enum so callers
@@ -467,105 +465,74 @@ impl EngineIOController for () {
     }
 }
 
-// ── Response cache ────────────────────────────────────────────────────
-
-/// Engine-owned response body cache, keyed by full URL.
-///
-/// Stores `Arc<Vec<u8>>` so callers (the renderer, the style loader,
-/// future `<img>` src resolution) can share a single copy of the
-/// decoded bytes. The cache is unbounded today — future work will
-/// add an LRU eviction policy, TTL via `Cache-Control`, and
-/// conditional revalidation via `ETag`/`Last-Modified`. Keeping the
-/// surface minimal until then prevents callers from building on
-/// semantics we haven't committed to.
-pub struct ResponseCache {
-    entries: FnvHashMap<String, Arc<Vec<u8>>>,
-}
-
-impl ResponseCache {
-    /// Creates an empty cache.
-    pub fn new() -> Self {
-        Self {
-            entries: FnvHashMap::default(),
-        }
-    }
-
-    /// Returns the cached bytes for `url`, or `None` on a miss.
-    pub fn get(&self, url: &str) -> Option<Arc<Vec<u8>>> {
-        self.entries.get(url).cloned()
-    }
-
-    /// Inserts bytes for `url`. Overwrites any prior entry.
-    pub fn insert(&mut self, url: String, bytes: Arc<Vec<u8>>) {
-        self.entries.insert(url, bytes);
-    }
-
-    /// Removes the entry for `url`, returning the old bytes if any.
-    pub fn remove(&mut self, url: &str) -> Option<Arc<Vec<u8>>> {
-        self.entries.remove(url)
-    }
-
-    /// Drops every entry.
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-
-    /// Number of entries currently cached.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether the cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-}
-
-impl Default for ResponseCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ── I/O layer ─────────────────────────────────────────────────────────
 
 /// Engine-owned façade over the controller.
 ///
-/// `IoLayer` bundles the [`ResponseCache`] and the
-/// [`EngineIOController`] together so the rest of the engine has a
-/// single entry point for resource resolution. The layer also hosts
-/// the synchronous fast paths (data URL decoding, cache hits) that
-/// should never require driving a future — every cache lookup that
-/// can answer immediately does, and only true network misses fall
-/// through to the async controller.
+/// `IoLayer` bundles a [`ResourceManager`](crate::resources::ResourceManager)
+/// and the [`EngineIOController`] together so the rest of the engine
+/// has a single entry point for resource resolution. The layer also
+/// hosts the synchronous fast paths (`data:` URL decoding, `blob:`
+/// URL lookup, cache hits) that should never require driving a
+/// future — every lookup that can answer immediately does, and only
+/// true network misses fall through to the async controller.
 ///
 /// Callers are responsible for polling futures returned from
 /// [`Self::controller_mut`] because the engine does not own an
 /// executor.
-pub struct IoLayer<I: EngineIOController = ()> {
+///
+/// The type parameters mirror `ResourceManager`'s: `P` is the
+/// injected cache-policy provider and `E` is the eviction policy.
+/// Both default to the no-op / in-memory-LRU implementations.
+pub struct IoLayer<
+    I: EngineIOController = (),
+    P: crate::resources::CachePolicyProvider = (),
+    E: crate::resources::EvictionPolicy = crate::resources::LruBytesEviction,
+> {
     controller: I,
-    cache: ResponseCache,
+    resources: crate::resources::ResourceManager<P, E>,
 }
 
-impl<I: EngineIOController> IoLayer<I> {
-    /// Wraps a controller in a fresh layer with an empty cache.
+impl<I: EngineIOController> IoLayer<I, (), crate::resources::LruBytesEviction> {
+    /// Wraps a controller in a fresh layer with a default
+    /// [`ResourceManager`](crate::resources::ResourceManager).
     pub fn new(controller: I) -> Self {
         Self {
             controller,
-            cache: ResponseCache::new(),
+            resources: crate::resources::ResourceManager::new(),
+        }
+    }
+}
+
+impl<I, P, E> IoLayer<I, P, E>
+where
+    I: EngineIOController,
+    P: crate::resources::CachePolicyProvider,
+    E: crate::resources::EvictionPolicy,
+{
+    /// Wraps a controller in a fresh layer with an explicit
+    /// resource manager. Hosts that want to inject a real HTTP
+    /// cache policy go through here.
+    pub fn with_resources(
+        controller: I,
+        resources: crate::resources::ResourceManager<P, E>,
+    ) -> Self {
+        Self {
+            controller,
+            resources,
         }
     }
 
-    /// Immutable access to the cache.
-    pub fn cache(&self) -> &ResponseCache {
-        &self.cache
+    /// Immutable access to the resource manager.
+    pub fn resources(&self) -> &crate::resources::ResourceManager<P, E> {
+        &self.resources
     }
 
-    /// Mutable access to the cache. Exposed so callers that own the
-    /// async path can insert the result of a completed network
-    /// fetch.
-    pub fn cache_mut(&mut self) -> &mut ResponseCache {
-        &mut self.cache
+    /// Mutable access to the resource manager. Callers that own the
+    /// async path use this to insert completed network fetches; the
+    /// host-side wrappers for blob URLs also go through here.
+    pub fn resources_mut(&mut self) -> &mut crate::resources::ResourceManager<P, E> {
+        &mut self.resources
     }
 
     /// Immutable access to the controller.
@@ -581,20 +548,30 @@ impl<I: EngineIOController> IoLayer<I> {
     }
 
     /// Synchronous fetch that succeeds only when the URL can be
-    /// resolved without touching the controller: a `data:` URL or
-    /// a cache hit. Returns `Ok(None)` for a network miss so the
-    /// caller can decide whether to kick off an async fetch.
+    /// resolved without touching the controller: a `data:` URL, a
+    /// `blob:paws/*` object URL, or a network cache hit. Returns
+    /// `Ok(None)` for a network miss so the caller can decide
+    /// whether to kick off an async fetch.
     ///
-    /// `data:` URLs decoded here are inserted into the cache —
-    /// repeated lookups for the same URL are `O(1)` after the first.
+    /// `data:` URLs are decoded once and cached in the resource
+    /// manager; repeated lookups for the same URL are `O(1)` after
+    /// the first. `blob:` URLs are resolved against the engine's
+    /// blob registry and are never inserted into the network cache
+    /// (revocation would leave a stale copy behind).
     pub fn fetch_sync(&mut self, url: &str) -> IoResult<Option<Arc<Vec<u8>>>> {
-        if let Some(hit) = self.cache.get(url) {
-            return Ok(Some(hit));
+        // Blob URLs are scheme-classified as `Other("blob")` by
+        // `UrlScheme`, so dispatch on the prefix directly.
+        if url.starts_with("blob:paws/") {
+            return Ok(self.resources.resolve_blob(url).map(|e| e.bytes.clone()));
+        }
+        if let Some(hit) = self.resources.get(url) {
+            return Ok(Some(hit.bytes.clone()));
         }
         match UrlScheme::classify(url)? {
             UrlScheme::Data => {
                 let bytes = Arc::new(decode_data_url(url)?);
-                self.cache.insert(url.to_string(), bytes.clone());
+                self.resources
+                    .insert_network(url.to_string(), bytes.clone(), None, Vec::new());
                 Ok(Some(bytes))
             }
             _ => Ok(None),
@@ -604,12 +581,14 @@ impl<I: EngineIOController> IoLayer<I> {
     /// Consumes the layer and returns its parts. Used when the
     /// engine is being torn down and the controller needs an
     /// explicit drop on the host side.
-    pub fn into_parts(self) -> (I, ResponseCache) {
-        (self.controller, self.cache)
+    pub fn into_parts(self) -> (I, crate::resources::ResourceManager<P, E>) {
+        (self.controller, self.resources)
     }
 }
 
-impl<I: EngineIOController + Default> Default for IoLayer<I> {
+impl<I: EngineIOController + Default> Default
+    for IoLayer<I, (), crate::resources::LruBytesEviction>
+{
     fn default() -> Self {
         Self::new(I::default())
     }
@@ -764,28 +743,6 @@ mod tests {
         poll_now(controller.shutdown());
     }
 
-    // ── ResponseCache ──────────────────────────────────────────────
-
-    #[test]
-    fn response_cache_round_trip() {
-        let mut cache = ResponseCache::new();
-        assert!(cache.is_empty());
-        cache.insert("https://a.test/1".to_string(), Arc::new(b"one".to_vec()));
-        cache.insert("https://a.test/2".to_string(), Arc::new(b"two".to_vec()));
-        assert_eq!(cache.len(), 2);
-        assert_eq!(
-            cache.get("https://a.test/1").as_deref(),
-            Some(&b"one".to_vec())
-        );
-        assert_eq!(
-            cache.remove("https://a.test/2").as_deref(),
-            Some(&b"two".to_vec())
-        );
-        assert_eq!(cache.len(), 1);
-        cache.clear();
-        assert!(cache.is_empty());
-    }
-
     // ── IoLayer ────────────────────────────────────────────────────
 
     #[test]
@@ -797,18 +754,13 @@ mod tests {
             first.as_deref().map(|v| v.as_slice()),
             Some(b"Paws".as_slice())
         );
-        // Second call is served from the cache — clobber the
-        // decoder by asserting identity via Arc pointer equality
-        // would be nice, but pointer-equality on freshly-decoded
-        // bytes is enough signal that we didn't re-decode if the
-        // cache length didn't grow.
-        assert_eq!(layer.cache().len(), 1);
+        assert_eq!(layer.resources().len(), 1);
         let second = layer.fetch_sync(url).unwrap();
         assert_eq!(
             second.as_deref().map(|v| v.as_slice()),
             Some(b"Paws".as_slice())
         );
-        assert_eq!(layer.cache().len(), 1);
+        assert_eq!(layer.resources().len(), 1);
     }
 
     #[test]
@@ -819,22 +771,24 @@ mod tests {
             result.is_none(),
             "network URLs are never resolvable via fetch_sync"
         );
-        assert!(layer.cache().is_empty());
+        assert!(layer.resources().is_empty());
     }
 
     #[test]
-    fn io_layer_fetch_sync_surfaces_manual_cache_inserts() {
+    fn io_layer_fetch_sync_resolves_blob_urls() {
         let mut layer: IoLayer<()> = IoLayer::new(());
-        let url = "https://example.com/image.png";
-        layer
-            .cache_mut()
-            .insert(url.to_string(), Arc::new(b"cached".to_vec()));
-        let result = layer.fetch_sync(url).unwrap();
+        let url = layer
+            .resources_mut()
+            .create_object_url(b"blob-body".to_vec(), "image/png".to_string());
+        let result = layer.fetch_sync(&url).unwrap();
         assert_eq!(
             result.as_deref().map(|v| v.as_slice()),
-            Some(b"cached".as_slice()),
-            "a cached network URL should be served synchronously"
+            Some(b"blob-body".as_slice()),
+            "blob URLs should round-trip through fetch_sync"
         );
+        // Revoke and verify the URL resolves to None afterwards.
+        assert!(layer.resources_mut().revoke_object_url(&url));
+        assert!(layer.fetch_sync(&url).unwrap().is_none());
     }
 
     #[test]

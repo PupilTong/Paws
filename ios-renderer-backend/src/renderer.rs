@@ -14,7 +14,7 @@ use engine::RenderState;
 use style::values::specified::box_::Overflow;
 use style::values::specified::font::FONT_MEDIUM_PX;
 
-use crate::image::decode_data_url;
+use crate::image::{decode_image_src, ImageSource};
 use crate::ops::{OpBuffer, ViewKind};
 
 /// Sentinel parent ID for the root node. Swift maps this to `rootView`.
@@ -90,12 +90,20 @@ impl ViewTree {
     pub(crate) fn process(
         &mut self,
         doc: &mut Document<IosNodeState>,
+        resources: &dyn engine::ResourceResolver,
         root: Option<engine::NodeId>,
     ) {
         self.ops.clear();
 
         if let Some(root_id) = root {
-            self.process_node(doc, root_id, ROOT_PARENT_ID, ViewKind::View, true);
+            self.process_node(
+                doc,
+                resources,
+                root_id,
+                ROOT_PARENT_ID,
+                ViewKind::View,
+                true,
+            );
         }
 
         // Emit Release ops for nodes removed since last commit.
@@ -110,6 +118,7 @@ impl ViewTree {
     fn process_node(
         &mut self,
         doc: &mut Document<IosNodeState>,
+        resources: &dyn engine::ResourceResolver,
         node_id: engine::NodeId,
         parent_id: u64,
         parent_kind: ViewKind,
@@ -186,12 +195,12 @@ impl ViewTree {
         let prev = node.render_state();
         if !prev.rendered {
             // New node — emit create + all properties.
-            emit_full_node(nid, &new_state, &mut self.ops);
+            emit_full_node(nid, &new_state, resources, &mut self.ops);
         } else if prev.kind != kind {
             // Kind changed — release old, create new.
             self.ops.push_detach(nid, prev.kind);
             self.ops.push_release(nid, prev.kind);
-            emit_full_node(nid, &new_state, &mut self.ops);
+            emit_full_node(nid, &new_state, resources, &mut self.ops);
         } else {
             // Same kind — only emit changed properties.
             if prev.x != new_state.x
@@ -246,8 +255,11 @@ impl ViewTree {
                 // op buffer.
                 if prev.image_src != new_state.image_src {
                     if let Some(ref src) = new_state.image_src {
-                        if let Some(bytes) = decode_data_url(src) {
-                            self.ops.push_image_data(nid, &bytes);
+                        if let Some(bytes) = decode_image_src(src, resources) {
+                            match bytes {
+                                ImageSource::Owned(b) => self.ops.push_image_data(nid, &b),
+                                ImageSource::Shared(b) => self.ops.push_image_data(nid, &b),
+                            }
                         }
                     }
                 }
@@ -279,13 +291,18 @@ impl ViewTree {
         // Recurse children in paint order (already sorted by the engine's
         // stacking context logic).
         for child_id in children {
-            self.process_node(doc, child_id, nid, kind, false);
+            self.process_node(doc, resources, child_id, nid, kind, false);
         }
     }
 }
 
 /// Emits a full Declare + all property ops for a node.
-fn emit_full_node(node_id: u64, state: &IosNodeState, ops: &mut OpBuffer) {
+fn emit_full_node(
+    node_id: u64,
+    state: &IosNodeState,
+    resources: &dyn engine::ResourceResolver,
+    ops: &mut OpBuffer,
+) {
     ops.push_declare(state.kind, node_id, state.parent_id);
     ops.push_set_frame(state.kind, node_id, state.x, state.y, state.w, state.h);
 
@@ -307,8 +324,11 @@ fn emit_full_node(node_id: u64, state: &IosNodeState, ops: &mut OpBuffer) {
             ops.push_bg_color(node_id, r, g, b, a);
         }
         if let Some(ref src) = state.image_src {
-            if let Some(bytes) = decode_data_url(src) {
-                ops.push_image_data(node_id, &bytes);
+            if let Some(bytes) = decode_image_src(src, resources) {
+                match bytes {
+                    ImageSource::Owned(b) => ops.push_image_data(node_id, &b),
+                    ImageSource::Shared(b) => ops.push_image_data(node_id, &b),
+                }
             }
         }
     } else {
@@ -474,7 +494,13 @@ mod tests {
     unsafe impl Send for TestRenderer {}
     impl engine::EngineRenderer for TestRenderer {
         type NodeState = IosNodeState;
-        fn on_commit(&mut self, _doc: &mut Document<IosNodeState>, _root: Option<engine::NodeId>) {}
+        fn on_commit(
+            &mut self,
+            _doc: &mut Document<IosNodeState>,
+            _resources: &dyn engine::ResourceResolver,
+            _root: Option<engine::NodeId>,
+        ) {
+        }
     }
 
     /// Collects all op tags from ViewTree's ops buffer.
@@ -498,7 +524,7 @@ mod tests {
 
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
 
         let tags = collect_tags(&tree);
         assert!(tags.contains(&(OpTag::DeclareView as u8)));
@@ -523,11 +549,11 @@ mod tests {
         let root = doc.root_element_id();
 
         // First frame — full ops.
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
         assert!(tree.ops().op_count() > 0);
 
         // Second frame — same data, no changes.
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
         assert_eq!(
             tree.ops().op_count(),
             0,
@@ -552,7 +578,7 @@ mod tests {
 
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
 
         let tags = collect_tags(&tree);
         assert!(tags.contains(&(OpTag::DeclareView as u8)));
@@ -577,7 +603,7 @@ mod tests {
 
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
 
         let tags = collect_tags(&tree);
         assert!(
@@ -615,7 +641,7 @@ mod tests {
 
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
 
         let tags = collect_tags(&tree);
         assert!(
@@ -646,7 +672,7 @@ mod tests {
 
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
 
         let ops = tree.ops();
         let text = std::str::from_utf8(&ops.strings_data()[..ops.strings_len()]).unwrap();
@@ -723,7 +749,7 @@ mod tests {
         let mut doc = setup_yew_counter_doc(None);
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
 
         let tags = collect_tags(&tree);
         let declare_text_count = tags
@@ -760,7 +786,7 @@ mod tests {
         let mut doc = setup_yew_counter_doc(None);
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
         let content_sized_width =
             view_frame_width(tree.ops(), 1).expect("host root emits SetViewFrame");
         assert!(
@@ -774,7 +800,7 @@ mod tests {
         let mut doc = setup_yew_counter_doc(Some((375.0, 667.0)));
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
         let viewport_width = view_frame_width(tree.ops(), 1).expect("host root emits SetViewFrame");
         assert!(
             (viewport_width - 375.0).abs() < 0.5,
@@ -809,7 +835,7 @@ mod tests {
 
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
 
         let tags = collect_tags(&tree);
         assert!(
@@ -841,7 +867,7 @@ mod tests {
 
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
 
         let tags = collect_tags(&tree);
         assert!(tags.contains(&(OpTag::DeclareImage as u8)));
@@ -869,10 +895,10 @@ mod tests {
 
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
         assert!(tree.ops().op_count() > 0, "first frame should emit ops");
 
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
         assert_eq!(
             tree.ops().op_count(),
             0,
@@ -894,7 +920,7 @@ mod tests {
 
         let mut tree = ViewTree::new();
         let root = doc.root_element_id();
-        tree.process(&mut doc, root);
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
 
         let tags = collect_tags(&tree);
         assert!(tags.contains(&(OpTag::DeclareView as u8)));

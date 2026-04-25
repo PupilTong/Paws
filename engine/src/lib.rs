@@ -4,14 +4,22 @@ pub mod dom;
 pub mod events;
 pub mod io;
 pub mod layout;
+pub mod resources;
 mod runtime;
 mod style;
 
 pub use io::{
     decode_data_url, EngineIOController, HttpMethod, HttpRequest, HttpResponse, IoError, IoLayer,
-    IoResult, ResponseCache, UrlScheme, WebSocketHandle, WsFrame,
+    IoResult, UrlScheme, WebSocketHandle, WsFrame,
 };
 pub use layout::{compute_layout_in_place, paint_order_children};
-pub use runtime::{EngineRenderer, HostErrorCode, RenderState, RuntimeState};
+pub use resources::{
+    BlobEntry, BlobRegistry, CachePolicy, CachePolicyProvider, CachedEntry, EvictionPolicy,
+    Freshness, LruBytesEviction, ResourceManager,
+};
+pub use runtime::{
+    EngineRenderer, HostErrorCode, NoopResourceResolver, RenderState, ResourceResolver,
+    RuntimeState,
+};
 pub use style::typed_om::{CSSKeywordValue, CSSStyleValue, CSSUnitValue, StylePropertyMapReadOnly};
 pub use taffy::NodeId;

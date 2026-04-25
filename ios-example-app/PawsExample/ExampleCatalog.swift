@@ -85,6 +85,12 @@ enum ExampleCatalog {
                     wasmResourceName: "example_img_element",
                     symbolName: "photo"
                 ),
+                ExampleEntry(
+                    displayName: "Inline Image",
+                    description: "inline_image!() + createObjectURL: raw PNG bytes embedded at compile time, blob URL minted at runtime.",
+                    wasmResourceName: "example_inline_image",
+                    symbolName: "photo.on.rectangle"
+                ),
             ]
         ),
         ExampleSection(
@@ -132,6 +138,12 @@ enum ExampleCatalog {
                     description: "Parent state change that must rerender a child subtree.",
                     wasmResourceName: "example_yew_child_rerender",
                     symbolName: "arrow.down.forward.square"
+                ),
+                ExampleEntry(
+                    displayName: "Photo Cycle",
+                    description: "Three inlined PNGs with createObjectURL on mount; click cycling lands when the event system does.",
+                    wasmResourceName: "example_yew_photo_cycle",
+                    symbolName: "photo.stack"
                 ),
             ]
         ),

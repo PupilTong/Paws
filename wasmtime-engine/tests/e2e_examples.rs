@@ -449,6 +449,7 @@ fn test_all_examples_run_successfully() {
         "example_commit_full",
         "example_namespace",
         "example_event_dispatch",
+        "example_inline_image",
         "example_yew_counter",
         "example_yew_use_state_counter",
         "example_yew_multi_state_setters",
@@ -456,9 +457,43 @@ fn test_all_examples_run_successfully() {
         "example_yew_ub_deref",
         "example_yew_stale_read",
         "example_yew_child_rerender",
+        "example_yew_photo_cycle",
     ];
 
     for name in examples {
         let _runner = run_example(name);
     }
+}
+
+// -----------------------------------------------------------------------
+// inline-image: `inline_image!` + `create_object_url_with_raw_data`
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_inline_image_uses_blob_url_for_src() {
+    // The guest creates one <img>, registers a blob URL for the
+    // inlined PNG bytes, and sets src to that URL. Verify the src
+    // attribute is the expected `blob:paws/<hex>` shape.
+    let runner = run_example("example_inline_image");
+    let state = runner.state();
+
+    let img = state
+        .doc
+        .get_node(NodeId::from(1_u64))
+        .expect("img should exist");
+    assert!(img.is_element());
+    assert_eq!(img.parent, Some(NodeId::from(0_u64)));
+
+    let src = img
+        .attribute("src")
+        .expect("img should have a src attribute");
+    assert!(
+        src.starts_with("blob:paws/"),
+        "src should be a blob URL (got {src:?})"
+    );
+    assert_eq!(
+        src.len(),
+        "blob:paws/".len() + 16,
+        "blob URL should be 16 hex chars (got {src:?})"
+    );
 }

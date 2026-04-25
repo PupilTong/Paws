@@ -17,6 +17,7 @@ const EXAMPLES: &[&str] = &[
     "example-namespace",
     "example-event-dispatch",
     "example-img-element",
+    "example-inline-image",
 ];
 
 /// Yew-based test fixtures under `Paws/examples/yew/`. Source lives in
@@ -34,6 +35,7 @@ const YEW_EXAMPLES: &[&str] = &[
     "example-yew-ub-deref",
     "example-yew-stale-read",
     "example-yew-child-rerender",
+    "example-yew-photo-cycle",
 ];
 
 /// Single target for every guest. `wasm-component-ld` wraps the core

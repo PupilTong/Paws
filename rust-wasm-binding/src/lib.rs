@@ -9,7 +9,7 @@
 //! Targets `wasm32-wasip2` and is packaged as a component by
 //! `wasm-component-ld`.
 
-pub use view_macros::css;
+pub use view_macros::{css, inline_image};
 
 // ---------------------------------------------------------------------------
 // Generated bindings (wit-bindgen)
@@ -179,6 +179,34 @@ pub fn commit() -> Result<(), i32> {
 /// Use with the [`css!`] macro: `apply_css(css!(r#"div { color: red; }"#))`.
 pub fn apply_css(css_bytes: &[u8]) {
     paws::host::stylesheet::add_parsed_stylesheet(css_bytes);
+}
+
+// ---------------------------------------------------------------------------
+// Object-URL wrappers (URL.createObjectURL / URL.revokeObjectURL)
+// ---------------------------------------------------------------------------
+
+/// Registers raw bytes with the host and returns a `blob:paws/<hex>`
+/// URL that can be placed in any `src` attribute. Mirrors
+/// `URL.createObjectURL(Blob)` on the browser side.
+///
+/// Pair with the [`inline_image!`] macro to embed an image at compile
+/// time and register it at runtime without a base64 round-trip:
+///
+/// ```ignore
+/// const LOGO: (&[u8], &str) = inline_image!("assets/logo.png");
+/// let url = create_object_url_with_raw_data(LOGO.0, LOGO.1);
+/// set_attribute(img_id, "src", &url)?;
+/// ```
+pub fn create_object_url_with_raw_data(data: &[u8], mime_type: &str) -> String {
+    paws::host::resources::create_object_url_with_raw_data(data, mime_type)
+}
+
+/// Drops a blob URL registration. After revocation the URL resolves
+/// to nothing on subsequent `fetch_sync` calls, though already-decoded
+/// bitmaps in the renderer's per-node cache continue to render.
+/// Mirrors `URL.revokeObjectURL(url)`.
+pub fn revoke_object_url(url: &str) -> Result<(), i32> {
+    check(paws::host::resources::revoke_object_url(url))
 }
 
 // ---------------------------------------------------------------------------
