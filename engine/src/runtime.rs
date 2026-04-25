@@ -162,11 +162,10 @@ pub struct RuntimeState<R: EngineRenderer = (), I: EngineIOController = ()> {
     pub current_event: Option<crate::events::Event>,
     /// Viewport size passed to Taffy when the guest calls `__commit`.
     ///
-    /// Set at construction via [`RuntimeState::with_renderer_viewport`]
-    /// (or defaulted to `MAX_CONTENT` via [`RuntimeState::new`] /
-    /// [`RuntimeState::with_renderer`]). The viewport is immutable after
-    /// construction — callers that need a different size must create a
-    /// fresh `RuntimeState`.
+    /// Set at construction via [`RuntimeState::with_renderer_viewport`] and
+    /// updated via [`RuntimeState::set_viewport`]. Direct field mutation is
+    /// tolerated for legacy callers; `commit()` re-syncs Stylo's device
+    /// viewport before style resolution.
     pub viewport: taffy::Size<taffy::AvailableSpace>,
 }
 
@@ -217,7 +216,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         viewport: taffy::Size<taffy::AvailableSpace>,
     ) -> Self {
         let url = url::Url::parse(&url_str).expect("Valid Document URL");
-        let context = StyleContext::new(url.clone());
+        let context = StyleContext::with_viewport(url.clone(), viewport);
         let lock = context.lock.clone();
         let doc = Document::new(lock.clone(), url);
         // Document and StyleContext share the same SharedRwLock (cloned from StyleContext)
@@ -263,6 +262,20 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
             height: taffy::AvailableSpace::Definite(height),
         };
         Self::with_renderer_viewport(url_str, renderer, io, viewport)
+    }
+
+    /// Updates the runtime viewport used by both Stylo style resolution and
+    /// Taffy layout. The change takes effect on the next `commit()` or lazy
+    /// computed-style read.
+    pub fn set_viewport(&mut self, viewport: taffy::Size<taffy::AvailableSpace>) {
+        self.viewport = viewport;
+        self.sync_style_viewport();
+    }
+
+    fn sync_style_viewport(&mut self) {
+        if self.style_context.set_viewport(self.viewport) {
+            self.doc.mark_root_dirty();
+        }
     }
 
     /// Installs the engine's built-in User-Agent stylesheet.
@@ -478,6 +491,8 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
     /// is invoked so the renderer can generate platform-specific output.
     /// Removed node render states are cleared after the renderer processes them.
     pub fn commit(&mut self) {
+        self.sync_style_viewport();
+
         // 1. Style resolution (skipped if nothing is dirty)
         self.doc.ensure_styles_resolved(&self.style_context);
 
@@ -1851,8 +1866,8 @@ mod tests {
 
     #[test]
     fn test_ir_width_vh() {
-        // viewport units are computed to px; without a real viewport Stylo
-        // resolves them to 0px, but the pipeline still exercises the code path
+        // RuntimeState::new uses the historical default Stylo viewport for
+        // viewport unit resolution.
         let val = ir_pipeline_get(view_macros::css!(r#"div { width: 100vh; }"#), "width");
         assert_computed_contains(&val, "px");
     }
@@ -1861,6 +1876,113 @@ mod tests {
     fn test_ir_height_vw() {
         let val = ir_pipeline_get(view_macros::css!(r#"div { height: 50vw; }"#), "height");
         assert_computed_contains(&val, "px");
+    }
+
+    #[test]
+    fn test_style_viewport_units_follow_definite_runtime_viewport() {
+        let mut state = RuntimeState::with_definite_viewport(
+            "https://example.com".to_string(),
+            (),
+            (),
+            375.0,
+            667.0,
+        );
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            div {
+                display: block;
+                width: 100vw;
+                height: 100vh;
+            }
+        "#
+        ));
+
+        state.commit();
+
+        assert_layout_size(&state, div, 375.0, 667.0);
+    }
+
+    #[test]
+    fn test_media_query_reacts_to_runtime_viewport_resize() {
+        let mut state = RuntimeState::with_definite_viewport(
+            "https://example.com".to_string(),
+            (),
+            (),
+            500.0,
+            400.0,
+        );
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state.add_stylesheet(
+            r#"
+            div {
+                display: block;
+                width: 100px;
+                height: 10px;
+            }
+
+            @media (min-width: 700px) {
+                div {
+                    width: 700px;
+                }
+            }
+        "#
+            .to_string(),
+        );
+
+        state.commit();
+        assert_layout_size(&state, div, 100.0, 10.0);
+
+        state.set_viewport(taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(400.0),
+        });
+        state.commit();
+
+        assert_layout_size(&state, div, 700.0, 10.0);
+    }
+
+    #[test]
+    fn test_media_query_resize_updates_lazy_computed_style_read() {
+        let mut state = RuntimeState::with_definite_viewport(
+            "https://example.com".to_string(),
+            (),
+            (),
+            500.0,
+            400.0,
+        );
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state.add_stylesheet(
+            r#"
+            div {
+                display: block;
+                width: 100px;
+            }
+
+            @media (min-width: 700px) {
+                div {
+                    width: 700px;
+                }
+            }
+        "#
+            .to_string(),
+        );
+
+        state.commit();
+
+        state.set_viewport(taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(400.0),
+        });
+        let map = state.computed_style_map(div).unwrap();
+        let width = map
+            .get("width", &mut state.doc, &state.style_context)
+            .expect("computed width");
+
+        assert_computed_contains(&width, "700");
     }
 
     #[test]

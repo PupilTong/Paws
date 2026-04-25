@@ -229,10 +229,10 @@ impl<R: EngineRenderer> Runner<R> {
             height.is_finite() && height >= 0.0,
             "viewport height must be finite and non-negative, got {height}"
         );
-        self.state_mut().viewport = taffy::Size {
+        self.state_mut().set_viewport(taffy::Size {
             width: taffy::AvailableSpace::Definite(width),
             height: taffy::AvailableSpace::Definite(height),
-        };
+        });
     }
 
     /// Returns the current viewport as stored on [`RuntimeState`].

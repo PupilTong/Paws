@@ -24,6 +24,7 @@ use stylo::values::computed::font::GenericFontFamily;
 use stylo::values::specified::font::FONT_MEDIUM_PX;
 use stylo::values::specified::position::PositionTryFallbacksTryTactic;
 use stylo_traits::{CSSPixel, DevicePixel, ParsingMode};
+use taffy::{AvailableSpace, Size};
 use url::Url;
 
 use crate::dom::PawsElement;
@@ -38,6 +39,9 @@ pub mod typed_om;
 pub(crate) use convert::to_taffy_style;
 pub(crate) use css_style_sheet::CSSStyleSheet;
 pub(crate) use sheet_cache::StylesheetCache;
+
+const DEFAULT_VIEWPORT_WIDTH: f32 = 800.0;
+const DEFAULT_VIEWPORT_HEIGHT: f32 = 600.0;
 
 #[derive(Debug, Default)]
 struct SimpleFontMetricsProvider;
@@ -77,9 +81,8 @@ pub(crate) fn build_parser_context<'a>(url_data: &'a UrlExtraData) -> ParserCont
     )
 }
 
-fn build_device() -> Device {
+fn build_device(viewport: euclid::Size2D<f32, CSSPixel>) -> Device {
     let default_values = ComputedValues::initial_values_with_font_override(Font::initial_values());
-    let viewport = euclid::Size2D::<f32, CSSPixel>::new(800.0, 600.0);
     let device_pixel_ratio = euclid::Scale::<f32, CSSPixel, DevicePixel>::new(1.0);
     Device::new(
         MediaType::screen(),
@@ -89,6 +92,20 @@ fn build_device() -> Device {
         Box::new(SimpleFontMetricsProvider),
         default_values,
         PrefersColorScheme::Light,
+    )
+}
+
+fn css_viewport_from_taffy(viewport: Size<AvailableSpace>) -> euclid::Size2D<f32, CSSPixel> {
+    fn resolve_axis(axis: AvailableSpace, fallback: f32) -> f32 {
+        match axis {
+            AvailableSpace::Definite(value) if value.is_finite() && value >= 0.0 => value,
+            _ => fallback,
+        }
+    }
+
+    euclid::Size2D::<f32, CSSPixel>::new(
+        resolve_axis(viewport.width, DEFAULT_VIEWPORT_WIDTH),
+        resolve_axis(viewport.height, DEFAULT_VIEWPORT_HEIGHT),
     )
 }
 
@@ -227,9 +244,22 @@ pub struct StyleContext {
 
 impl StyleContext {
     /// Creates a new style context with default device settings (800x600 viewport).
+    #[cfg(test)]
     pub(crate) fn new(url: url::Url) -> Self {
+        Self::with_viewport(
+            url,
+            Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+        )
+    }
+
+    /// Creates a new style context with a Stylo device viewport matching the
+    /// runtime layout viewport when that viewport is definite.
+    pub(crate) fn with_viewport(url: url::Url, viewport: Size<AvailableSpace>) -> Self {
         let lock = SharedRwLock::new();
-        let device = build_device();
+        let device = build_device(css_viewport_from_taffy(viewport));
         let stylist = Stylist::new(device, QuirksMode::NoQuirks);
         let rule_tree = RuleTree::new();
 
@@ -243,6 +273,28 @@ impl StyleContext {
             url,
             url_data,
         }
+    }
+
+    /// Updates Stylo's device viewport to match the runtime layout viewport.
+    ///
+    /// Returns `true` when the CSS viewport changed and computed styles must be
+    /// refreshed. Non-definite Taffy axes keep the historical 800x600 Stylo
+    /// fallback because there is no concrete host dimension to mirror.
+    pub(crate) fn set_viewport(&mut self, viewport: Size<AvailableSpace>) -> bool {
+        let css_viewport = css_viewport_from_taffy(viewport);
+        if self.stylist.device().viewport_size() == css_viewport {
+            return false;
+        }
+
+        let device = build_device(css_viewport);
+        let guard = self.lock.read();
+        let guards = StylesheetGuards::same(&guard);
+        let changed_origins = self.stylist.set_device(device, &guards);
+        if !changed_origins.is_empty() {
+            self.stylist.force_stylesheet_origins_dirty(changed_origins);
+            self.stylist.flush(&guards);
+        }
+        true
     }
 
     /// Appends a stylesheet to the stylist and flushes the cascade.
