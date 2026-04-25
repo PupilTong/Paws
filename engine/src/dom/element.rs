@@ -296,6 +296,13 @@ impl<S: RenderState> PawsElement<S> {
         }
     }
 
+    pub(crate) fn mark_dirty_and_ancestors(&self) {
+        // Marking `self` is for future subtree invalidation; today the root
+        // dirty bit is still the only lazy style resolution gate.
+        self.set_dirty_descendants();
+        self.mark_ancestors_dirty();
+    }
+
     pub(crate) fn set_attribute(&mut self, name: &str, value: &str) {
         let atom_name = Atom::from(name);
         self.attrs.insert(atom_name.clone(), value.to_string());

@@ -357,8 +357,8 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         if node.is_element() {
             crate::style::update_inline_style(&self.style_context, node, &name, &value);
 
-            // Mark ancestors dirty so lazy style resolution picks up the change.
-            node.mark_ancestors_dirty();
+            // Mark the node and ancestors dirty so lazy style resolution picks up the change.
+            node.mark_dirty_and_ancestors();
 
             Ok(())
         } else {
@@ -381,6 +381,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         // For now, we append to stylist.
         let added_sheet = self.doc.stylesheets.last().unwrap();
         self.style_context.add_stylesheet(added_sheet);
+        self.doc.mark_root_dirty();
     }
 
     /// Adds a pre-parsed stylesheet from rkyv-encoded IR bytes.
@@ -463,6 +464,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         self.doc.stylesheets.push(sheet);
         let added_sheet = self.doc.stylesheets.last().unwrap();
         self.style_context.add_stylesheet(added_sheet);
+        self.doc.mark_root_dirty();
     }
 
     /// Runs the full rendering pipeline: style resolution, layout, and renderer notification.
@@ -511,6 +513,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
             .ok_or(HostErrorCode::InvalidChild)?;
         if node.is_element() {
             node.set_attribute(&name, &value);
+            node.mark_dirty_and_ancestors();
             Ok(())
         } else {
             Err(HostErrorCode::InvalidChild)
@@ -656,7 +659,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         match node.node_type {
             NodeType::Text | NodeType::Comment => {
                 node.text_content = Some(value);
-                node.mark_ancestors_dirty();
+                node.mark_dirty_and_ancestors();
                 Ok(())
             }
             // Per DOM spec, setting nodeValue on these types is a no-op
@@ -795,6 +798,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
             return Err(HostErrorCode::InvalidChild);
         }
         node.remove_attribute(name);
+        node.mark_dirty_and_ancestors();
         Ok(())
     }
 
@@ -956,8 +960,8 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
             .expect("shadow root validated above");
         shadow_root_mut.shadow_cascade_data = Some(Box::new(cascade_data));
 
-        // Mark ancestors dirty for re-resolution
-        shadow_root_mut.mark_ancestors_dirty();
+        // Mark the shadow root and ancestors dirty for re-resolution
+        shadow_root_mut.mark_dirty_and_ancestors();
 
         Ok(())
     }
@@ -977,6 +981,14 @@ fn dom_error_to_host(e: DomError) -> HostErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_layout_size(state: &RuntimeState, id: u32, width: f32, height: f32) {
+        let node = state.doc.get_node(taffy::NodeId::from(id as u64)).unwrap();
+        assert!(node.computed_values.is_some());
+        assert_eq!(node.layout().size.width, width);
+        assert_eq!(node.layout().size.height, height);
+    }
+
     #[test]
     fn test_create_element() {
         let mut state = RuntimeState::new("https://example.com".to_string());
@@ -3400,6 +3412,191 @@ mod tests {
         let node = state.doc.get_node(taffy::NodeId::from(div as u64)).unwrap();
         assert_eq!(node.layout().size.width, 50.0);
         assert_eq!(node.layout().size.height, 50.0);
+    }
+
+    #[test]
+    fn test_post_commit_invalidation_append_styles_new_child() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            .post-commit-child {
+                display: block;
+                width: 120px;
+                height: 40px;
+            }
+        "#
+        ));
+
+        state.commit();
+
+        let child = state.create_element("div".to_string());
+        state
+            .set_attribute(child, "class".to_string(), "post-commit-child".to_string())
+            .unwrap();
+        state.append_element(parent, child).unwrap();
+        state.commit();
+
+        assert_layout_size(&state, child, 120.0, 40.0);
+    }
+
+    #[test]
+    fn test_post_commit_invalidation_class_change_and_remove() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            div {
+                display: block;
+                width: 10px;
+                height: 10px;
+            }
+
+            .active {
+                width: 90px;
+                height: 30px;
+            }
+        "#
+        ));
+
+        state.commit();
+        assert_layout_size(&state, div, 10.0, 10.0);
+
+        state
+            .set_attribute(div, "class".to_string(), "active".to_string())
+            .unwrap();
+        state.commit();
+        assert_layout_size(&state, div, 90.0, 30.0);
+
+        state.remove_attribute(div, "class").unwrap();
+        state.commit();
+        assert_layout_size(&state, div, 10.0, 10.0);
+    }
+
+    #[test]
+    fn test_post_commit_invalidation_computed_style_read_clears_layout_cache() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            div {
+                display: block;
+                width: 10px;
+                height: 10px;
+            }
+
+            .active {
+                width: 90px;
+                height: 30px;
+            }
+        "#
+        ));
+
+        state.commit();
+        assert_layout_size(&state, div, 10.0, 10.0);
+
+        state
+            .set_attribute(div, "class".to_string(), "active".to_string())
+            .unwrap();
+
+        let map = state.computed_style_map(div).unwrap();
+        let width = map
+            .get("width", &mut state.doc, &state.style_context)
+            .expect("computed width after class change");
+        assert_computed_contains(&width, "90");
+
+        state.commit();
+        assert_layout_size(&state, div, 90.0, 30.0);
+    }
+
+    #[test]
+    fn test_post_commit_invalidation_add_stylesheet() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+
+        state.commit();
+
+        state.add_stylesheet(
+            r#"
+            div {
+                display: block;
+                width: 55px;
+                height: 25px;
+            }
+        "#
+            .to_string(),
+        );
+        state.commit();
+
+        assert_layout_size(&state, div, 55.0, 25.0);
+    }
+
+    #[test]
+    fn test_post_commit_invalidation_structural_selector_after_append_and_remove() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let list = state.create_element("ul".to_string());
+        state.append_element(0, list).unwrap();
+        let first = state.create_element("li".to_string());
+        state.append_element(list, first).unwrap();
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            li {
+                display: block;
+                width: 10px;
+                height: 10px;
+            }
+
+            li:last-child {
+                width: 40px;
+            }
+        "#
+        ));
+
+        state.commit();
+        assert_layout_size(&state, first, 40.0, 10.0);
+
+        let second = state.create_element("li".to_string());
+        state.append_element(list, second).unwrap();
+        state.commit();
+        assert_layout_size(&state, first, 10.0, 10.0);
+        assert_layout_size(&state, second, 40.0, 10.0);
+
+        state.remove_child(list, second).unwrap();
+        state.commit();
+        assert_layout_size(&state, first, 40.0, 10.0);
+    }
+
+    #[test]
+    fn test_post_commit_invalidation_replace_styles_new_child() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let old_child = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+        state.append_element(parent, old_child).unwrap();
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            .replacement {
+                display: block;
+                width: 70px;
+                height: 20px;
+            }
+        "#
+        ));
+
+        state.commit();
+
+        let new_child = state.create_element("div".to_string());
+        state
+            .set_attribute(new_child, "class".to_string(), "replacement".to_string())
+            .unwrap();
+        state.replace_child(parent, new_child, old_child).unwrap();
+        state.commit();
+
+        assert_layout_size(&state, new_child, 70.0, 20.0);
     }
 
     // ─── insert_before tests ──────────────────────────────────────

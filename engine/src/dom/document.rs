@@ -135,6 +135,12 @@ impl<S: RenderState> Document<S> {
         self.nodes.get_mut(u64::from(id) as usize)
     }
 
+    pub(crate) fn mark_root_dirty(&self) {
+        if let Some(root) = self.get_node(self.root) {
+            root.set_dirty_descendants();
+        }
+    }
+
     /// Panicking accessor for layout passes. Use `get_node` for fallible access.
     #[inline]
     pub(crate) fn node(&self, id: taffy::NodeId) -> &PawsElement<S> {
@@ -212,7 +218,7 @@ impl<S: RenderState> Document<S> {
             .get_mut(u64::from(host_id) as usize)
             .expect("host validated above");
         host_mut.shadow_root_id = Some(shadow_root_id);
-        host_mut.set_dirty_descendants();
+        host_mut.mark_dirty_and_ancestors();
 
         Ok(shadow_root_id)
     }
@@ -258,7 +264,7 @@ impl<S: RenderState> Document<S> {
         let mut parent_in_doc = false;
         if let Some(parent) = self.get_node_mut(parent_id) {
             parent.children.push(child_id);
-            parent.set_dirty_descendants();
+            parent.mark_dirty_and_ancestors();
             parent_in_doc = parent.flags.contains(NodeFlags::IS_IN_DOCUMENT);
         }
 
@@ -324,7 +330,7 @@ impl<S: RenderState> Document<S> {
             if let Some(parent) = self.get_node_mut(parent_id) {
                 if let Some(pos) = parent.children.iter().position(|&id| id == node_id) {
                     parent.children.remove(pos);
-                    parent.set_dirty_descendants();
+                    parent.mark_dirty_and_ancestors();
                 }
             }
             if let Some(child) = self.get_node_mut(node_id) {
@@ -428,7 +434,7 @@ impl<S: RenderState> Document<S> {
             // Remove old_child from children (it's at `pos`)
             parent.children.remove(pos);
             parent.children.insert(pos, new_child_id);
-            parent.set_dirty_descendants();
+            parent.mark_dirty_and_ancestors();
         }
 
         // Set new_child's parent
@@ -517,8 +523,7 @@ impl<S: RenderState> Document<S> {
         let mut parent_in_doc = false;
         if let Some(parent) = self.get_node_mut(parent_id) {
             parent.children.insert(pos, new_child_id);
-            parent.set_dirty_descendants();
-            parent.mark_ancestors_dirty();
+            parent.mark_dirty_and_ancestors();
             parent_in_doc = parent.flags.contains(NodeFlags::IS_IN_DOCUMENT);
         }
 
@@ -665,13 +670,22 @@ impl<S: RenderState> Document<S> {
     /// Ensures computed styles are up-to-date for the document tree.
     ///
     /// Checks the root's dirty-descendants flag and triggers a full style
-    /// resolution pass if any node is dirty. This is the lazy resolution
-    /// entry point used by [`StylePropertyMapReadOnly`] read operations.
+    /// resolution pass if any node is dirty. Layout caches are cleared after
+    /// a restyle because current invalidation is full-tree, not incremental.
+    /// This is the lazy resolution entry point used by
+    /// [`StylePropertyMapReadOnly`] read operations.
     pub(crate) fn ensure_styles_resolved(&mut self, style_context: &crate::style::StyleContext) {
         if let Some(root) = self.get_node(self.root) {
             if root.has_dirty_descendants() {
                 self.resolve_style(style_context);
+                self.clear_layout_caches();
             }
+        }
+    }
+
+    fn clear_layout_caches(&mut self) {
+        for (_, node) in self.nodes.iter_mut() {
+            node.layout_cache.clear();
         }
     }
 
