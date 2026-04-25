@@ -25,7 +25,7 @@
 
 #![allow(dead_code)]
 
-use crate::bindings::paws::host::{dom, events, shadow, stylesheet};
+use crate::bindings::paws::host::{dom, events, resources, shadow, stylesheet};
 use engine::{EngineRenderer, HostErrorCode, RuntimeState};
 
 /// Returns `Some(err_code)` if `id` is negative (after recording an
@@ -580,5 +580,30 @@ impl<R: EngineRenderer> stylesheet::Host for RuntimeState<R> {
     fn add_parsed_stylesheet(&mut self, bytes: Vec<u8>) {
         self.clear_error();
         RuntimeState::<R>::add_parsed_stylesheet(self, &bytes);
+    }
+}
+
+// ─── resources::Host ─────────────────────────────────────────────────
+//
+// Delegates to the engine's `ResourceManager` (owned by `IoLayer` on
+// `RuntimeState`). The blob registry is fully implemented; the WIT
+// contract here is a thin wrapper that just shuttles bytes + MIME
+// type across the component boundary.
+
+impl<R: EngineRenderer> resources::Host for RuntimeState<R> {
+    fn create_object_url_with_raw_data(&mut self, data: Vec<u8>, mime_type: String) -> String {
+        self.clear_error();
+        self.io_mut()
+            .resources_mut()
+            .create_object_url(data, mime_type)
+    }
+
+    fn revoke_object_url(&mut self, url: String) -> i32 {
+        if self.io_mut().resources_mut().revoke_object_url(&url) {
+            self.clear_error();
+            0
+        } else {
+            self.set_error(HostErrorCode::InvalidChild, "unknown or revoked blob URL")
+        }
     }
 }

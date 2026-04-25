@@ -1,0 +1,19 @@
+[package]
+name = "example-yew-photo-cycle"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rust-wasm-binding = { path = "../../../rust-wasm-binding", default-features = false }
+yew = { path = "../../../yew/packages/yew", features = ["csr"] }
+
+[features]
+coverage = ["rust-wasm-binding/coverage"]
+
+# Declare a 1-crate workspace so `cargo` does not climb upward and find
+# Paws' root workspace. The yew path dep below resolves its own
+# `workspace = true` entries through Paws' root workspace independently.
+[workspace]

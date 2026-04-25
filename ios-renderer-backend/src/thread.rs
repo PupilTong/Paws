@@ -193,9 +193,10 @@ impl EngineRenderer for IosRenderer {
     fn on_commit(
         &mut self,
         doc: &mut engine::dom::Document<IosNodeState>,
+        resources: &dyn engine::ResourceResolver,
         root_element: Option<engine::NodeId>,
     ) {
-        self.view_tree.process(doc, root_element);
+        self.view_tree.process(doc, resources, root_element);
         let ops = self.view_tree.ops();
         if ops.len() > 0 {
             (self.callback.completion)(

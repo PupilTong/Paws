@@ -87,6 +87,25 @@ interface stylesheet {
     add-parsed-stylesheet: func(bytes: list<u8>);
 }
 
+/// Object-URL registration for in-memory resources. Mirrors
+/// URL.createObjectURL / URL.revokeObjectURL on the browser side:
+/// the guest hands over raw bytes + MIME type, receives a
+/// `blob:paws/<hex>` URL that can be placed in any `src` attribute,
+/// and later revokes the URL to release the bytes. Blobs are not
+/// evicted automatically; the guest is responsible for revoking
+/// URLs it no longer needs.
+interface resources {
+    /// Registers raw bytes under a freshly-allocated blob URL
+    /// (`blob:paws/<hex>`). The URL is valid until
+    /// `revoke-object-url` is called or the engine shuts down.
+    create-object-url-with-raw-data: func(data: list<u8>, mime-type: string) -> string;
+
+    /// Drops the registration. Returns 0 on success, or a negative
+    /// HostErrorCode if the URL was unknown (already revoked or
+    /// never registered).
+    revoke-object-url: func(url: string) -> s32;
+}
+
 /// The standard Paws guest world: imports everything the host exposes
 /// and exports the three entry points the host calls into:
 /// - `run`: the main entry, invoked once per guest execution.
@@ -103,6 +122,7 @@ world paws-guest {
     import events;
     import shadow;
     import stylesheet;
+    import resources;
 
     export run: func() -> s32;
     export invoke-listener: func(callback-id: s32);

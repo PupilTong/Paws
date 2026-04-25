@@ -79,18 +79,53 @@ pub trait EngineRenderer: Send + 'static {
     /// Called after style resolution and layout are complete.
     ///
     /// `root_element` is the first element child of the document root,
-    /// or `None` if the document has no element children.
+    /// or `None` if the document has no element children. `resources`
+    /// gives the renderer read-only access to the engine's resource
+    /// manager so it can resolve `blob:paws/*` URLs placed in
+    /// `<img src>` (and similar) attributes.
     fn on_commit(
         &mut self,
         doc: &mut Document<Self::NodeState>,
+        resources: &dyn ResourceResolver,
         root_element: Option<taffy::NodeId>,
     );
+}
+
+/// Read-only view over the engine's resource registries exposed to
+/// renderers during `on_commit`. Abstracts away the
+/// [`ResourceManager`](crate::resources::ResourceManager)'s generic
+/// parameters so the [`EngineRenderer`] trait stays object-safe and
+/// independent of the host's injected cache / eviction policy choice.
+pub trait ResourceResolver {
+    /// Resolves a URL to its raw bytes if the engine can answer
+    /// synchronously — currently covers `blob:paws/*` URLs and any
+    /// data URL already cached. Returns `None` for miss, unsupported
+    /// scheme, or revoked blob URL. Renderers should treat a `None`
+    /// return as "no bitmap to draw" (matches the legacy
+    /// `decode_data_url` fallback).
+    fn resolve(&self, url: &str) -> Option<std::sync::Arc<Vec<u8>>>;
+}
+
+/// No-op resolver used when a renderer is invoked without a resource
+/// manager (tests, older call sites). Returns `None` for every URL.
+pub struct NoopResourceResolver;
+
+impl ResourceResolver for NoopResourceResolver {
+    fn resolve(&self, _url: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+        None
+    }
 }
 
 /// No-op renderer for tests and headless usage. Zero-cost `NodeState = ()`.
 impl EngineRenderer for () {
     type NodeState = ();
-    fn on_commit(&mut self, _doc: &mut Document<()>, _root: Option<taffy::NodeId>) {}
+    fn on_commit(
+        &mut self,
+        _doc: &mut Document<()>,
+        _resources: &dyn ResourceResolver,
+        _root: Option<taffy::NodeId>,
+    ) {
+    }
 }
 
 /// Top-level state container for the WASM host runtime.
@@ -452,8 +487,12 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
             crate::layout::compute_layout_in_place(&mut self.doc, root_id, self.viewport);
         }
 
-        // 4. Notify the renderer (split borrow: &mut renderer + &mut doc are disjoint fields)
-        self.renderer.on_commit(&mut self.doc, root_element);
+        // 4. Notify the renderer (split borrow: &mut renderer + &mut doc + &io
+        // are disjoint fields). The renderer receives a `&dyn ResourceResolver`
+        // view over `IoLayer`'s resource manager so it can resolve
+        // `blob:paws/*` URLs in `<img src>` attributes.
+        self.renderer
+            .on_commit(&mut self.doc, self.io.resources(), root_element);
 
         // 5. Clear removed render states after the renderer has processed them
         self.doc.removed_render_states.clear();

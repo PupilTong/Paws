@@ -110,7 +110,8 @@ pub fn build_component_linker<R: EngineRenderer>(
     let mut linker: ComponentLinker<HostData<R>> = ComponentLinker::new(engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
 
-    // dom / shadow / stylesheet: bindgen auto-registrations are fine.
+    // dom / shadow / stylesheet / resources: bindgen auto-registrations
+    // are fine — none of these need the store to re-enter the guest.
     paws_host::dom::add_to_linker::<HostData<R>, RuntimeStateData<R>>(&mut linker, |h| {
         &mut h.state
     })?;
@@ -118,6 +119,9 @@ pub fn build_component_linker<R: EngineRenderer>(
         &mut h.state
     })?;
     paws_host::stylesheet::add_to_linker::<HostData<R>, RuntimeStateData<R>>(&mut linker, |h| {
+        &mut h.state
+    })?;
+    paws_host::resources::add_to_linker::<HostData<R>, RuntimeStateData<R>>(&mut linker, |h| {
         &mut h.state
     })?;
 
