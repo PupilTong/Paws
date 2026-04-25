@@ -6,10 +6,9 @@
 //! the bytes. The registry never evicts entries on its own — blobs
 //! live until explicit revocation or engine shutdown.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-use fnv::FnvHashMap;
 
 /// A single blob entry backing a `blob:paws/*` URL.
 pub struct BlobEntry {
@@ -26,7 +25,7 @@ pub struct BlobEntry {
 
 /// Lookup table of live blob URLs.
 pub struct BlobRegistry {
-    entries: FnvHashMap<String, Arc<BlobEntry>>,
+    entries: HashMap<String, Arc<BlobEntry>>,
     /// 64-bit xorshift state used to mint new URLs. Seeded from
     /// `SystemTime` on construction; avoids pulling in `rand` or
     /// `uuid`. At 64 bits collisions are statistically impossible
@@ -49,7 +48,7 @@ impl BlobRegistry {
             seed
         };
         Self {
-            entries: FnvHashMap::default(),
+            entries: HashMap::new(),
             rng_state: seed,
         }
     }

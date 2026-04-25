@@ -30,9 +30,8 @@
 //! `P = ()` and `E = LruBytesEviction` means existing call sites
 //! that don't care about policy or eviction compile unchanged.
 
+use std::collections::HashMap;
 use std::sync::Arc;
-
-use fnv::FnvHashMap;
 
 pub mod blob;
 pub mod cache;
@@ -65,7 +64,7 @@ pub const DEFAULT_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 pub struct ResourceManager<P: CachePolicyProvider = (), E: EvictionPolicy = LruBytesEviction> {
     policy: P,
     eviction: E,
-    entries: FnvHashMap<String, Arc<CachedEntry>>,
+    entries: HashMap<String, Arc<CachedEntry>>,
     blob: BlobRegistry,
     byte_budget: usize,
     current_bytes: usize,
@@ -93,7 +92,7 @@ impl<P: CachePolicyProvider, E: EvictionPolicy> ResourceManager<P, E> {
         Self {
             policy,
             eviction,
-            entries: FnvHashMap::default(),
+            entries: HashMap::new(),
             blob: BlobRegistry::new(),
             byte_budget,
             current_bytes: 0,
