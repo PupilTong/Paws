@@ -189,7 +189,8 @@ pub fn paint_order_children<S: RenderState>(
 
     let mut children: Vec<taffy::NodeId> = doc
         .flat_tree_child_ids(node_id)
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|&cid| doc.get_node(cid).is_some_and(|c| c.has_style()))
         .collect();
 

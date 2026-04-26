@@ -3,6 +3,7 @@ use crate::layout::text::TextLayoutContext;
 use crate::runtime::RenderState;
 use markup5ever::QualName;
 use slab::Slab;
+use std::borrow::Cow;
 use style::shared_lock::SharedRwLock;
 
 /// Errors that can occur during DOM tree operations.
@@ -816,12 +817,15 @@ impl<S: RenderState> Document<S> {
     ///
     /// Shadow hosts expose their flat tree children: shadow root children with
     /// `<slot>` elements replaced by assigned light DOM or fallback content.
-    pub(crate) fn flat_tree_child_ids(&self, parent_id: taffy::NodeId) -> Vec<taffy::NodeId> {
+    ///
+    /// This is structural only; callers still decide whether children are
+    /// styled, laid out, or renderable.
+    pub(crate) fn flat_tree_child_ids(&self, parent_id: taffy::NodeId) -> Cow<'_, [taffy::NodeId]> {
         let node = self.node(parent_id);
         if let Some(shadow_root_id) = node.shadow_root_id {
-            self.flatten_shadow_children(shadow_root_id)
+            Cow::Owned(self.flatten_shadow_children(shadow_root_id))
         } else {
-            node.children.clone()
+            Cow::Borrowed(&node.children)
         }
     }
 
