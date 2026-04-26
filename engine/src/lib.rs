@@ -22,4 +22,5 @@ pub use runtime::{
     RuntimeState,
 };
 pub use style::typed_om::{CSSKeywordValue, CSSStyleValue, CSSUnitValue, StylePropertyMapReadOnly};
+pub use style::StyleProfilingSnapshot;
 pub use taffy::NodeId;

@@ -33,11 +33,13 @@ pub(crate) mod convert;
 pub(crate) mod css_style_sheet;
 pub(crate) mod dom;
 pub(crate) mod ir_convert;
+pub(crate) mod profiling;
 pub(crate) mod sheet_cache;
 pub mod typed_om;
 
 pub(crate) use convert::to_taffy_style;
 pub(crate) use css_style_sheet::CSSStyleSheet;
+pub use profiling::StyleProfilingSnapshot;
 pub(crate) use sheet_cache::StylesheetCache;
 
 const DEFAULT_VIEWPORT_WIDTH: f32 = 800.0;
@@ -178,6 +180,7 @@ pub(crate) fn compute_style_for_node<S: RenderState>(
     let effective_parent = parent_style.unwrap_or(&default_parent);
 
     let mut selector_caches = selectors::matching::SelectorCaches::default();
+    let selector_matching_started = profiling::start_timer();
 
     // Pass `None` for bloom filter so Stylo always walks the DOM for ancestor-
     // based combinators (descendant, child). An empty bloom filter would reject
@@ -207,17 +210,21 @@ pub(crate) fn compute_style_for_node<S: RenderState>(
             &mut match_results,
             &mut matching_context,
         );
+    let selector_matching = profiling::elapsed(selector_matching_started);
 
+    let rule_tree_started = profiling::start_timer();
     let rule_node = style_context.rule_tree.insert_ordered_rules_with_important(
         match_results
             .into_iter()
             .map(|block| (block.source.clone(), block.cascade_priority)),
         &guards,
     );
+    let rule_tree_insertion = profiling::elapsed(rule_tree_started);
 
     let mut conditions = RuleCacheConditions::default();
+    let cascade_started = profiling::start_timer();
 
-    stylo::properties::cascade::cascade::<&PawsElement>(
+    let computed = stylo::properties::cascade::cascade::<&PawsElement>(
         &style_context.stylist,
         None, // Pseudo
         &rule_node,
@@ -231,7 +238,12 @@ pub(crate) fn compute_style_for_node<S: RenderState>(
         None, // rule_cache
         &mut conditions,
         None, // element
-    )
+    );
+    let cascade = profiling::elapsed(cascade_started);
+    style_context
+        .profiler
+        .record_element_node(selector_matching, rule_tree_insertion, cascade);
+    computed
 }
 
 /// Holds the Stylo styling engine state: the `Stylist`, rule tree, and shared lock.
@@ -239,6 +251,7 @@ pub struct StyleContext {
     pub(crate) stylist: Stylist,
     pub(crate) rule_tree: RuleTree,
     pub(crate) lock: SharedRwLock,
+    pub(crate) profiler: profiling::StyleProfiler,
     #[allow(dead_code)]
     pub(crate) url: Url,
     pub(crate) url_data: UrlExtraData,
@@ -272,6 +285,7 @@ impl StyleContext {
             stylist,
             rule_tree,
             lock,
+            profiler: profiling::StyleProfiler::default(),
             url,
             url_data,
         }
@@ -309,5 +323,13 @@ impl StyleContext {
             ua_or_user: &guard,
         };
         self.stylist.flush(&guards);
+    }
+
+    pub(crate) fn reset_profiling(&self) {
+        self.profiler.reset();
+    }
+
+    pub(crate) fn profiling_snapshot(&self) -> StyleProfilingSnapshot {
+        self.profiler.snapshot()
     }
 }

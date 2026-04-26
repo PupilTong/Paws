@@ -8,6 +8,9 @@ license.workspace = true
 path = "src/lib.rs"
 crate-type = ["rlib"]
 
+[features]
+style-profiling = []
+
 [dependencies]
 taffy = { version = "0.9.2", default-features = false, features = ["std", "flexbox", "grid", "block_layout", "calc"] }
 # Note: Stylo is a complex crate from Mozilla; this is a light-weight usage surface.
@@ -48,4 +51,8 @@ harness = false
 
 [[bench]]
 name = "stylesheet_bench"
+harness = false
+
+[[bench]]
+name = "commit_bench"
 harness = false

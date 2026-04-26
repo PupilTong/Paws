@@ -695,6 +695,7 @@ impl<S: RenderState> Document<S> {
     /// Uses BFS traversal from the root to ensure parents are styled before
     /// children, which is required for CSS inheritance to work correctly.
     pub fn resolve_style(&mut self, style_context: &crate::style::StyleContext) {
+        let resolve_started = crate::style::profiling::start_timer();
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(self.root);
 
@@ -811,6 +812,9 @@ impl<S: RenderState> Document<S> {
                 }
             }
         }
+        style_context
+            .profiler
+            .record_resolve_pass(crate::style::profiling::elapsed(resolve_started));
     }
 
     /// Returns the child list used by layout and rendering.
