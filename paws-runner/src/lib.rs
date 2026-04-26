@@ -8,9 +8,10 @@
 //! Commit is guest-owned: the runner never calls commit on the host side.
 //! A Paws WASM guest that wants its layout computed must call the
 //! `__commit` host function (via `rust_wasm_binding::commit()`) before
-//! returning from its `run()` export. The viewport configured via
-//! [`RunnerBuilder::viewport`] is stored on [`engine::RuntimeState`]
-//! ahead of time and the `__commit` handler reads it automatically.
+//! returning from its `run()` export. The viewport defaults to 800x600
+//! unless configured via [`RunnerBuilder::viewport`]; it is stored on
+//! [`engine::RuntimeState`] ahead of time and the `__commit` handler reads
+//! it automatically.
 //!
 //! # Example
 //!
