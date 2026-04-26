@@ -170,12 +170,12 @@ fn paint_layer<S: RenderState>(node: &PawsElement<S>) -> i8 {
     3
 }
 
-/// Returns a node's children sorted by CSS2.1 Appendix E paint order.
+/// Returns a node's flat-tree children sorted by CSS2.1 Appendix E paint order.
 ///
 /// If the node creates a stacking context, children are sorted by
 /// `(paint_layer, z_index)` with DOM-order tiebreaking (stable sort).
 /// If the node does not create a stacking context, children are returned
-/// in DOM order with a simple z-index sort (current behavior preserved).
+/// in flat-tree order with a simple z-index sort (current behavior preserved).
 ///
 /// Only styled children are returned.
 pub fn paint_order_children<S: RenderState>(
@@ -187,10 +187,9 @@ pub fn paint_order_children<S: RenderState>(
         None => return Vec::new(),
     };
 
-    let mut children: Vec<taffy::NodeId> = node
-        .children
-        .iter()
-        .copied()
+    let mut children: Vec<taffy::NodeId> = doc
+        .flat_tree_child_ids(node_id)
+        .into_iter()
         .filter(|&cid| doc.get_node(cid).is_some_and(|c| c.has_style()))
         .collect();
 
@@ -469,6 +468,63 @@ mod tests {
             ids,
             vec![a as u64, b as u64, c as u64],
             "same z-index should preserve DOM order"
+        );
+    }
+
+    #[test]
+    fn test_paint_order_uses_shadow_flat_tree_children() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
+
+        let before = add_styled_child(&mut state, shadow_root, &[("width", "10px")]);
+        let slot = state.create_element("slot".to_string());
+        state.append_element(shadow_root, slot).unwrap();
+        let after = add_styled_child(&mut state, shadow_root, &[("width", "30px")]);
+
+        let light = add_styled_child(&mut state, host, &[("width", "20px")]);
+
+        state.commit();
+
+        let ordered = paint_order_children(&state.doc, taffy::NodeId::from(host as u64));
+        let ids: Vec<u64> = ordered.iter().map(|&id| u64::from(id)).collect();
+        assert_eq!(
+            ids,
+            vec![before as u64, light as u64, after as u64],
+            "shadow host paint order should use flat tree children with slot replacement"
+        );
+        assert!(
+            !ordered.contains(&taffy::NodeId::from(slot as u64)),
+            "slot element itself should not appear in the host flat tree"
+        );
+    }
+
+    #[test]
+    fn test_paint_order_uses_slot_fallback_in_flat_tree() {
+        let mut state = RuntimeState::new("https://test.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
+
+        let before = add_styled_child(&mut state, shadow_root, &[("width", "10px")]);
+        let slot = state.create_element("slot".to_string());
+        state.append_element(shadow_root, slot).unwrap();
+        let fallback = add_styled_child(&mut state, slot, &[("width", "20px")]);
+        let after = add_styled_child(&mut state, shadow_root, &[("width", "30px")]);
+
+        state.commit();
+
+        let ordered = paint_order_children(&state.doc, taffy::NodeId::from(host as u64));
+        let ids: Vec<u64> = ordered.iter().map(|&id| u64::from(id)).collect();
+        assert_eq!(
+            ids,
+            vec![before as u64, fallback as u64, after as u64],
+            "empty slot should expose fallback children in host paint order"
+        );
+        assert!(
+            !ordered.contains(&taffy::NodeId::from(slot as u64)),
+            "slot element itself should not appear in the host flat tree"
         );
     }
 
