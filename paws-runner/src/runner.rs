@@ -11,14 +11,13 @@ use crate::error::RunnerError;
 
 /// Default document URL used when the caller doesn't supply one.
 const DEFAULT_URL: &str = "https://example.com";
+const DEFAULT_VIEWPORT_WIDTH: f32 = 800.0;
+const DEFAULT_VIEWPORT_HEIGHT: f32 = 600.0;
 
 /// Builder for [`Runner`]. Obtain one from [`Runner::builder`].
 pub struct RunnerBuilder<R: EngineRenderer = ()> {
     url: String,
-    /// `None` means "don't constrain layout" (Taffy's `Size::MAX_CONTENT`),
-    /// matching [`RuntimeState`]'s historical default. Only populated when
-    /// the caller explicitly calls [`viewport`](Self::viewport).
-    viewport: Option<(f32, f32)>,
+    viewport: (f32, f32),
     renderer: R,
 }
 
@@ -26,7 +25,7 @@ impl RunnerBuilder<()> {
     fn new() -> Self {
         Self {
             url: DEFAULT_URL.to_string(),
-            viewport: None,
+            viewport: (DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT),
             renderer: (),
         }
     }
@@ -40,9 +39,10 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
     }
 
     /// Sets the viewport that the guest's `__commit` will use for layout.
-    /// When unset, layout runs content-sized (Taffy's `MAX_CONTENT`).
+    /// Defaults to 800x600 when unset.
     pub fn viewport(mut self, width: f32, height: f32) -> Self {
-        self.viewport = Some((width, height));
+        debug_assert_viewport(width, height);
+        self.viewport = (width, height);
         self
     }
 
@@ -58,12 +58,9 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
 
     /// Finalises the builder and returns a ready-to-use [`Runner`].
     pub fn build(self) -> Runner<R> {
-        let state = match self.viewport {
-            Some((width, height)) => {
-                RuntimeState::with_definite_viewport(self.url, self.renderer, (), width, height)
-            }
-            None => RuntimeState::with_renderer(self.url, self.renderer, ()),
-        };
+        let (width, height) = self.viewport;
+        let state =
+            RuntimeState::with_definite_viewport(self.url, self.renderer, (), width, height);
         Runner {
             state: Some(state),
             engine: create_engine(),
@@ -93,7 +90,7 @@ pub struct Runner<R: EngineRenderer = ()> {
 
 impl Runner<()> {
     /// Returns a builder with default url (`https://example.com`) and
-    /// content-sized layout (Taffy's `Size::MAX_CONTENT`).
+    /// an 800x600 viewport.
     pub fn builder() -> RunnerBuilder<()> {
         RunnerBuilder::new()
     }
@@ -221,14 +218,7 @@ impl<R: EngineRenderer> Runner<R> {
     /// Updates the viewport size. The change takes effect on the next
     /// guest-initiated commit; it does not retrigger layout on its own.
     pub fn resize(&mut self, width: f32, height: f32) {
-        debug_assert!(
-            width.is_finite() && width >= 0.0,
-            "viewport width must be finite and non-negative, got {width}"
-        );
-        debug_assert!(
-            height.is_finite() && height >= 0.0,
-            "viewport height must be finite and non-negative, got {height}"
-        );
+        debug_assert_viewport(width, height);
         self.state_mut().set_viewport(taffy::Size {
             width: taffy::AvailableSpace::Definite(width),
             height: taffy::AvailableSpace::Definite(height),
@@ -236,12 +226,8 @@ impl<R: EngineRenderer> Runner<R> {
     }
 
     /// Returns the current viewport as stored on [`RuntimeState`].
-    ///
-    /// `Size::MAX_CONTENT` means "no constraint" — the layout will be
-    /// content-sized. A `Size { width: Definite(w), height: Definite(h) }`
-    /// value was set via the builder or [`resize`](Self::resize).
     pub fn viewport(&self) -> taffy::Size<taffy::AvailableSpace> {
-        self.state().viewport
+        self.state().viewport()
     }
 
     /// Borrows the underlying [`RuntimeState`] for DOM / layout inspection.
@@ -266,6 +252,17 @@ impl<R: EngineRenderer> Runner<R> {
     }
 }
 
+fn debug_assert_viewport(width: f32, height: f32) {
+    debug_assert!(
+        width.is_finite() && width >= 0.0,
+        "viewport width must be finite and non-negative, got {width}"
+    );
+    debug_assert!(
+        height.is_finite() && height >= 0.0,
+        "viewport height must be finite and non-negative, got {height}"
+    );
+}
+
 impl Default for Runner<()> {
     fn default() -> Self {
         Runner::builder().build()
@@ -275,7 +272,6 @@ impl Default for Runner<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use taffy::prelude::TaffyMaxContent;
 
     /// A minimal WAT module that matches the wasmtime-engine linker's
     /// expected imports but does nothing — exercises the happy path.
@@ -317,9 +313,15 @@ mod tests {
     "#;
 
     #[test]
-    fn builder_defaults_to_max_content() {
+    fn builder_defaults_to_definite_viewport() {
         let runner = Runner::builder().build();
-        assert_eq!(runner.viewport(), taffy::Size::MAX_CONTENT);
+        assert_eq!(
+            runner.viewport(),
+            taffy::Size {
+                width: taffy::AvailableSpace::Definite(DEFAULT_VIEWPORT_WIDTH),
+                height: taffy::AvailableSpace::Definite(DEFAULT_VIEWPORT_HEIGHT),
+            }
+        );
     }
 
     #[test]

@@ -95,6 +95,8 @@ fn build_device(viewport: euclid::Size2D<f32, CSSPixel>) -> Device {
     )
 }
 
+/// Converts Taffy's available-space constraint to Stylo's concrete viewport,
+/// falling back per axis when the layout constraint is not a host dimension.
 fn css_viewport_from_taffy(viewport: Size<AvailableSpace>) -> euclid::Size2D<f32, CSSPixel> {
     fn resolve_axis(axis: AvailableSpace, fallback: f32) -> f32 {
         match axis {

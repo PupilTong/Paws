@@ -163,10 +163,10 @@ pub struct RuntimeState<R: EngineRenderer = (), I: EngineIOController = ()> {
     /// Viewport size passed to Taffy when the guest calls `__commit`.
     ///
     /// Set at construction via [`RuntimeState::with_renderer_viewport`] and
-    /// updated via [`RuntimeState::set_viewport`]. Direct field mutation is
-    /// tolerated for legacy callers; `commit()` re-syncs Stylo's device
-    /// viewport before style resolution.
-    pub viewport: taffy::Size<taffy::AvailableSpace>,
+    /// updated via [`RuntimeState::set_viewport`]. External callers should
+    /// use [`RuntimeState::viewport`] for reads and [`RuntimeState::set_viewport`]
+    /// for writes so Stylo's device viewport stays in sync with layout.
+    pub(crate) viewport: taffy::Size<taffy::AvailableSpace>,
 }
 
 impl RuntimeState<()> {
@@ -264,17 +264,29 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         Self::with_renderer_viewport(url_str, renderer, io, viewport)
     }
 
-    /// Updates the runtime viewport used by both Stylo style resolution and
-    /// Taffy layout. The change takes effect on the next `commit()` or lazy
-    /// computed-style read.
-    pub fn set_viewport(&mut self, viewport: taffy::Size<taffy::AvailableSpace>) {
-        self.viewport = viewport;
-        self.sync_style_viewport();
+    /// Returns the runtime viewport used by both Stylo style resolution and
+    /// Taffy layout.
+    pub fn viewport(&self) -> taffy::Size<taffy::AvailableSpace> {
+        self.viewport
     }
 
-    fn sync_style_viewport(&mut self) {
+    /// Updates the runtime viewport used by both Stylo style resolution and
+    /// Taffy layout.
+    ///
+    /// Returns `true` when the CSS viewport changed and computed styles were
+    /// invalidated. The change takes effect on the next `commit()` or lazy
+    /// computed-style read.
+    pub fn set_viewport(&mut self, viewport: taffy::Size<taffy::AvailableSpace>) -> bool {
+        self.viewport = viewport;
+        self.sync_style_viewport()
+    }
+
+    fn sync_style_viewport(&mut self) -> bool {
         if self.style_context.set_viewport(self.viewport) {
             self.doc.mark_root_dirty();
+            true
+        } else {
+            false
         }
     }
 
@@ -1983,6 +1995,58 @@ mod tests {
             .expect("computed width");
 
         assert_computed_contains(&width, "700");
+    }
+
+    #[test]
+    fn test_set_viewport_reports_only_real_css_viewport_changes() {
+        let mut state = RuntimeState::with_definite_viewport(
+            "https://example.com".to_string(),
+            (),
+            (),
+            500.0,
+            400.0,
+        );
+
+        assert!(!state.set_viewport(taffy::Size {
+            width: taffy::AvailableSpace::Definite(500.0),
+            height: taffy::AvailableSpace::Definite(400.0),
+        }));
+        assert!(state.set_viewport(taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(400.0),
+        }));
+        assert!(!state.set_viewport(taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(400.0),
+        }));
+    }
+
+    #[test]
+    fn test_non_definite_viewport_axis_uses_default_css_fallback() {
+        let mut state = RuntimeState::with_renderer_viewport(
+            "https://example.com".to_string(),
+            (),
+            (),
+            taffy::Size {
+                width: taffy::AvailableSpace::Definite(375.0),
+                height: taffy::AvailableSpace::MaxContent,
+            },
+        );
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            div {
+                display: block;
+                width: 100vw;
+                height: 100vh;
+            }
+        "#
+        ));
+
+        state.commit();
+
+        assert_layout_size(&state, div, 375.0, 600.0);
     }
 
     #[test]
