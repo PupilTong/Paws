@@ -7,7 +7,7 @@ use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Crit
 use taffy::prelude::TaffyMaxContent;
 
 use engine::layout::compute_layout_in_place;
-use engine::{NodeId, RuntimeState};
+use engine::{paint_order_children, NodeId, RuntimeState};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,6 +73,77 @@ fn setup_deep_tree(depth: usize) -> (RuntimeState, u32) {
 
     state.doc.resolve_style(&state.style_context);
     (state, root)
+}
+
+/// Creates a root containing one shadow host whose shadow root has:
+///
+/// `header`, `<slot>`, `footer`
+///
+/// The slot receives `assigned_children` light-DOM children. This exercises the
+/// flat-tree path used by both Taffy traversal and paint-order traversal.
+fn setup_shadow_slot_tree(assigned_children: usize) -> (RuntimeState, u32, u32) {
+    let mut state = RuntimeState::new("https://bench.test".to_string());
+
+    let root = state.create_element("div".to_string());
+    state.append_element(0, root).unwrap();
+    state
+        .set_inline_style(root, "display".into(), "block".into())
+        .unwrap();
+    state
+        .set_inline_style(root, "width".into(), "800px".into())
+        .unwrap();
+
+    let host = state.create_element("div".to_string());
+    state.append_element(root, host).unwrap();
+    state
+        .set_inline_style(host, "display".into(), "flex".into())
+        .unwrap();
+    state
+        .set_inline_style(host, "width".into(), "800px".into())
+        .unwrap();
+    state
+        .set_inline_style(host, "height".into(), "200px".into())
+        .unwrap();
+
+    let shadow_root = state.attach_shadow(host, "open").unwrap();
+
+    let header = state.create_element("div".to_string());
+    state.append_element(shadow_root, header).unwrap();
+    state
+        .set_inline_style(header, "width".into(), "20px".into())
+        .unwrap();
+    state
+        .set_inline_style(header, "height".into(), "20px".into())
+        .unwrap();
+
+    let slot = state.create_element("slot".to_string());
+    state.append_element(shadow_root, slot).unwrap();
+
+    let footer = state.create_element("div".to_string());
+    state.append_element(shadow_root, footer).unwrap();
+    state
+        .set_inline_style(footer, "width".into(), "20px".into())
+        .unwrap();
+    state
+        .set_inline_style(footer, "height".into(), "20px".into())
+        .unwrap();
+
+    for _ in 0..assigned_children {
+        let child = state.create_element("div".to_string());
+        state.append_element(host, child).unwrap();
+        state
+            .set_inline_style(child, "width".into(), "10px".into())
+            .unwrap();
+        state
+            .set_inline_style(child, "height".into(), "10px".into())
+            .unwrap();
+        state
+            .set_inline_style(child, "margin".into(), "1px".into())
+            .unwrap();
+    }
+
+    state.doc.resolve_style(&state.style_context);
+    (state, root, host)
 }
 
 // ---------------------------------------------------------------------------
@@ -223,6 +294,39 @@ fn bench_mixed_layout(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// 6. Shadow host layout — slot-distributed flat tree
+// ---------------------------------------------------------------------------
+fn bench_shadow_slot_layout_100(c: &mut Criterion) {
+    let (mut state, root, _) = setup_shadow_slot_tree(100);
+
+    c.bench_function("shadow_slot_layout_100_assigned_children", |b| {
+        b.iter(|| {
+            compute_layout_in_place(
+                black_box(&mut state.doc),
+                black_box(NodeId::from(root as u64)),
+                taffy::Size::MAX_CONTENT,
+            )
+        })
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 7. Shadow host paint order — slot-distributed flat tree
+// ---------------------------------------------------------------------------
+fn bench_shadow_slot_paint_order_100(c: &mut Criterion) {
+    let (state, _, host) = setup_shadow_slot_tree(100);
+
+    c.bench_function("shadow_slot_paint_order_100_assigned_children", |b| {
+        b.iter(|| {
+            black_box(paint_order_children(
+                black_box(&state.doc),
+                black_box(NodeId::from(host as u64)),
+            ))
+        })
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Criterion groups & main
 // ---------------------------------------------------------------------------
 criterion_group!(
@@ -232,5 +336,7 @@ criterion_group!(
     bench_deep_block_layout,
     bench_grid_layout_3x3,
     bench_mixed_layout,
+    bench_shadow_slot_layout_100,
+    bench_shadow_slot_paint_order_100,
 );
 criterion_main!(benches);
