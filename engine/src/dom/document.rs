@@ -3,6 +3,7 @@ use crate::layout::text::TextLayoutContext;
 use crate::runtime::RenderState;
 use markup5ever::QualName;
 use slab::Slab;
+use std::borrow::Cow;
 use style::shared_lock::SharedRwLock;
 
 /// Errors that can occur during DOM tree operations.
@@ -810,6 +811,46 @@ impl<S: RenderState> Document<S> {
                 }
             }
         }
+    }
+
+    /// Returns the child list used by layout and rendering.
+    ///
+    /// Shadow hosts expose their flat tree children: shadow root children with
+    /// `<slot>` elements replaced by assigned light DOM or fallback content.
+    ///
+    /// This is structural only; callers still decide whether children are
+    /// styled, laid out, or renderable.
+    pub(crate) fn flat_tree_child_ids(&self, parent_id: taffy::NodeId) -> Cow<'_, [taffy::NodeId]> {
+        let node = self.node(parent_id);
+        if let Some(shadow_root_id) = node.shadow_root_id {
+            Cow::Owned(self.flatten_shadow_children(shadow_root_id))
+        } else {
+            Cow::Borrowed(&node.children)
+        }
+    }
+
+    /// Builds the flat tree children for a shadow root, replacing `<slot>`
+    /// elements with their assigned light DOM children (or the slot's own
+    /// children as fallback content).
+    pub(crate) fn flatten_shadow_children(
+        &self,
+        shadow_root_id: taffy::NodeId,
+    ) -> Vec<taffy::NodeId> {
+        let shadow_root = self.node(shadow_root_id);
+        let mut result = Vec::with_capacity(shadow_root.children.len());
+        for &child_id in &shadow_root.children {
+            let child = self.node(child_id);
+            if child.is_slot_element() {
+                if child.assigned_nodes.is_empty() {
+                    result.extend_from_slice(&child.children);
+                } else {
+                    result.extend_from_slice(&child.assigned_nodes);
+                }
+            } else {
+                result.push(child_id);
+            }
+        }
+        result
     }
 
     /// Assigns light DOM children of a shadow host to `<slot>` elements

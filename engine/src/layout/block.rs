@@ -116,31 +116,6 @@ impl<S: RenderState> taffy::TraversePartialTree for Document<S> {
     }
 }
 
-impl<S: RenderState> Document<S> {
-    /// Builds the flat tree children for a shadow root, replacing `<slot>`
-    /// elements with their assigned light DOM children (or the slot's own
-    /// children as fallback content).
-    fn flatten_shadow_children(&self, shadow_root_id: NodeId) -> Vec<NodeId> {
-        let shadow_root = self.node(shadow_root_id);
-        let mut result = Vec::with_capacity(shadow_root.children.len());
-        for &child_id in &shadow_root.children {
-            let child = self.node(child_id);
-            if child.is_slot_element() {
-                if child.assigned_nodes.is_empty() {
-                    // Fallback: use the slot's own children
-                    result.extend_from_slice(&child.children);
-                } else {
-                    // Distribute assigned light DOM children
-                    result.extend_from_slice(&child.assigned_nodes);
-                }
-            } else {
-                result.push(child_id);
-            }
-        }
-        result
-    }
-}
-
 // ─── TraverseTree (marker) ───────────────────────────────────────────
 
 impl<S: RenderState> taffy::TraverseTree for Document<S> {}

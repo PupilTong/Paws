@@ -682,6 +682,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_shadow_host_renderer_uses_flat_tree_children() {
+        let mut doc = setup_styled_doc(|state| {
+            let host = state.create_element("div".to_string());
+            state.append_element(0, host).unwrap();
+
+            let shadow_root = state.attach_shadow(host, "open").unwrap();
+            let shadow_child = state.create_element("div".to_string());
+            state.append_element(shadow_root, shadow_child).unwrap();
+            let shadow_text = state.create_text_node("shadow".to_string());
+            state.append_element(shadow_child, shadow_text).unwrap();
+
+            let light_child = state.create_element("div".to_string());
+            state.append_element(host, light_child).unwrap();
+            let light_text = state.create_text_node("light".to_string());
+            state.append_element(light_child, light_text).unwrap();
+        });
+
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
+
+        let ops = tree.ops();
+        let text = std::str::from_utf8(&ops.strings_data()[..ops.strings_len()]).unwrap();
+        assert!(
+            text.contains("shadow"),
+            "renderer should enter the host's shadow flat tree"
+        );
+        assert!(
+            !text.contains("light"),
+            "unassigned light DOM child must not render when a shadow root has no slot"
+        );
+    }
+
     /// Builds a DOM tree that mirrors the yew counter example:
     /// `<div><div class="counter"><button>+</button><span>0</span></div></div>`.
     /// Used by the two tests below to exercise the unstyled-tree paint path.
