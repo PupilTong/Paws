@@ -1,5 +1,8 @@
 use engine_ua_stylesheet::UA_STYLESHEET_IR;
 use markup5ever::{LocalName, Namespace, QualName};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use taffy::prelude::TaffyMaxContent;
 
 use crate::dom::{Document, DomError};
@@ -150,6 +153,7 @@ pub struct RuntimeState<R: EngineRenderer = (), I: EngineIOController = ()> {
     pub last_error: Option<HostError>,
     pub style_context: StyleContext,
     pub(crate) stylesheet_cache: crate::style::StylesheetCache,
+    installed_stylesheets: HashSet<StylesheetInstallKey>,
     pub renderer: R,
     /// Host-side network controller wrapped in the engine's cache +
     /// data-URL decoder. Access through [`Self::io`] / [`Self::io_mut`]
@@ -167,6 +171,75 @@ pub struct RuntimeState<R: EngineRenderer = (), I: EngineIOController = ()> {
     /// use [`RuntimeState::viewport`] for reads and [`RuntimeState::set_viewport`]
     /// for writes so Stylo's device viewport stays in sync with layout.
     pub(crate) viewport: taffy::Size<taffy::AvailableSpace>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum StylesheetInstallSource {
+    LegacyCssText,
+    ParsedIr,
+}
+
+/// Compact identity for an installed document stylesheet.
+///
+/// The original payload is represented by length plus a SipHash fingerprint
+/// instead of retained bytes. A hash collision could skip a legitimately
+/// distinct stylesheet, but avoiding a second lifetime-long stylesheet payload
+/// copy is the right tradeoff for this deduplication guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StylesheetInstallKey {
+    source: StylesheetInstallSource,
+    origin: ::style::stylesheets::Origin,
+    payload_len: usize,
+    payload_hash: u64,
+}
+
+impl StylesheetInstallKey {
+    fn legacy_css(css: &str) -> Self {
+        Self::new(
+            StylesheetInstallSource::LegacyCssText,
+            ::style::stylesheets::Origin::Author,
+            css.as_bytes(),
+        )
+    }
+
+    fn parsed_ir(bytes: &[u8], origin: ::style::stylesheets::Origin) -> Self {
+        Self::new(StylesheetInstallSource::ParsedIr, origin, bytes)
+    }
+
+    fn new(
+        source: StylesheetInstallSource,
+        origin: ::style::stylesheets::Origin,
+        payload: &[u8],
+    ) -> Self {
+        let mut hasher = DefaultHasher::new();
+        source.hash(&mut hasher);
+        hash_stylesheet_origin(origin, &mut hasher);
+        payload.hash(&mut hasher);
+
+        Self {
+            source,
+            origin,
+            payload_len: payload.len(),
+            payload_hash: hasher.finish(),
+        }
+    }
+}
+
+impl Hash for StylesheetInstallKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.source.hash(state);
+        hash_stylesheet_origin(self.origin, state);
+        self.payload_len.hash(state);
+        self.payload_hash.hash(state);
+    }
+}
+
+fn hash_stylesheet_origin<H: Hasher>(origin: ::style::stylesheets::Origin, state: &mut H) {
+    match origin {
+        ::style::stylesheets::Origin::UserAgent => 0u8.hash(state),
+        ::style::stylesheets::Origin::User => 1u8.hash(state),
+        ::style::stylesheets::Origin::Author => 2u8.hash(state),
+    }
 }
 
 impl RuntimeState<()> {
@@ -229,6 +302,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
             last_error: None,
             style_context: context,
             stylesheet_cache,
+            installed_stylesheets: HashSet::new(),
             renderer,
             io: IoLayer::new(io),
             current_event: None,
@@ -393,17 +467,25 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
 
     /// Parses and adds a CSS stylesheet to the document.
     pub fn add_stylesheet(&mut self, css: String) {
+        let install_key = StylesheetInstallKey::legacy_css(&css);
+        if !self.installed_stylesheets.insert(install_key) {
+            return;
+        }
+
         // 1. Get or parse stylesheet from cache
         let sheet_arc = self.stylesheet_cache.get_or_parse(&css);
         let sheet = crate::style::CSSStyleSheet::new(sheet_arc);
 
-        // 2. Add to Document (so it knows what sheets it has)
-        self.doc.stylesheets.push(sheet);
+        self.install_recorded_stylesheet(sheet);
+    }
 
-        // 3. Add to StyleContext (so it applies to styling)
-        // Note: We need to pass the *latest* sheet added.
-        // In the future, we might rebuild the whole cascade from doc.stylesheets.
-        // For now, we append to stylist.
+    /// Installs a stylesheet whose dedupe key has already been recorded.
+    ///
+    /// Side effects: appends to `doc.stylesheets`, appends to Stylo's stylist,
+    /// and marks the root dirty so the cascade is visible on the next style
+    /// read or commit.
+    fn install_recorded_stylesheet(&mut self, sheet: crate::style::CSSStyleSheet) {
+        self.doc.stylesheets.push(sheet);
         let added_sheet = self.doc.stylesheets.last().unwrap();
         self.style_context.add_stylesheet(added_sheet);
         self.doc.mark_root_dirty();
@@ -434,9 +516,15 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         use paws_style_ir::ArchivedStyleSheetIR;
         use rkyv::rancor::Error;
 
+        let install_key = StylesheetInstallKey::parsed_ir(bytes, origin);
+        if !self.installed_stylesheets.insert(install_key) {
+            return;
+        }
+
         let archived = match rkyv::access::<ArchivedStyleSheetIR, Error>(bytes) {
             Ok(sheet) => sheet,
             Err(e) => {
+                self.installed_stylesheets.remove(&install_key);
                 self.set_error(
                     HostErrorCode::MemoryError,
                     format!("rkyv decode error: {:?}", e),
@@ -486,10 +574,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         });
 
         let sheet = crate::style::CSSStyleSheet::new(stylesheet);
-        self.doc.stylesheets.push(sheet);
-        let added_sheet = self.doc.stylesheets.last().unwrap();
-        self.style_context.add_stylesheet(added_sheet);
-        self.doc.mark_root_dirty();
+        self.install_recorded_stylesheet(sheet);
     }
 
     /// Runs the full rendering pipeline: style resolution, layout, and renderer notification.
@@ -3387,6 +3472,84 @@ mod tests {
             }
             other => panic!("Expected blue, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_duplicate_parsed_stylesheet_does_not_reorder_cascade() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+
+        let narrow = view_macros::css!("div { width: 10px; }");
+        let wide = view_macros::css!("div { width: 20px; }");
+
+        state.add_parsed_stylesheet(narrow);
+        state.add_parsed_stylesheet(wide);
+        state.add_parsed_stylesheet(narrow);
+
+        let map = state.computed_style_map(el).unwrap();
+        let width = map
+            .get("width", &mut state.doc, &state.style_context)
+            .unwrap();
+        assert_computed_contains(&width, "20");
+    }
+
+    #[test]
+    fn test_duplicate_legacy_stylesheet_does_not_reorder_cascade() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let el = state.create_element("div".to_string());
+        state.append_element(0, el).unwrap();
+
+        let narrow = "div { width: 10px; }";
+        let wide = "div { width: 20px; }";
+
+        state.add_stylesheet(narrow.to_string());
+        state.add_stylesheet(wide.to_string());
+        state.add_stylesheet(narrow.to_string());
+
+        let map = state.computed_style_map(el).unwrap();
+        let width = map
+            .get("width", &mut state.doc, &state.style_context)
+            .unwrap();
+        assert_computed_contains(&width, "20");
+    }
+
+    #[test]
+    fn test_stylesheet_install_identity_keeps_sources_distinct() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let before = state.doc.stylesheets.len();
+
+        let legacy_css = "div { width: 10px; }";
+        let parsed_ir = view_macros::css!("div { width: 10px; }");
+
+        state.add_stylesheet(legacy_css.to_string());
+        state.add_parsed_stylesheet(parsed_ir);
+        state.add_stylesheet(legacy_css.to_string());
+        state.add_parsed_stylesheet(parsed_ir);
+
+        assert_eq!(
+            state.doc.stylesheets.len(),
+            before + 2,
+            "legacy CSS and parsed IR are separate install identities"
+        );
+    }
+
+    #[test]
+    fn test_stylesheet_install_identity_keeps_origins_distinct() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let before = state.doc.stylesheets.len();
+        let parsed_ir = view_macros::css!("div { width: 10px; }");
+
+        state.add_parsed_stylesheet_with_origin(parsed_ir, ::style::stylesheets::Origin::UserAgent);
+        state.add_parsed_stylesheet_with_origin(parsed_ir, ::style::stylesheets::Origin::Author);
+        state.add_parsed_stylesheet_with_origin(parsed_ir, ::style::stylesheets::Origin::UserAgent);
+        state.add_parsed_stylesheet_with_origin(parsed_ir, ::style::stylesheets::Origin::Author);
+
+        assert_eq!(
+            state.doc.stylesheets.len(),
+            before + 2,
+            "the same parsed payload may be installed once per cascade origin"
+        );
     }
 
     #[test]
