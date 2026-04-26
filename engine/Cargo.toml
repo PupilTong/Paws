@@ -45,3 +45,7 @@ view-macros = { path = "../view-macros" }
 [[bench]]
 name = "layout_bench"
 harness = false
+
+[[bench]]
+name = "stylesheet_bench"
+harness = false
