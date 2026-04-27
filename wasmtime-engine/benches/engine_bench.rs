@@ -1,4 +1,4 @@
-use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Criterion};
+use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use taffy::prelude::TaffyMaxContent;
 
 use engine::RuntimeState;
@@ -6,45 +6,56 @@ use wasmtime::{Engine as WasmEngine, Module, Store};
 use wasmtime_engine::build_linker;
 
 // ---------------------------------------------------------------------------
-// Helper: compile a WAT module & instantiate with a fresh RuntimeState + linker
+// Helpers: compile WAT once, instantiate with a fresh RuntimeState + linker
 // ---------------------------------------------------------------------------
-fn setup_wasm(wat: &str) -> (Store<RuntimeState>, wasmtime::Instance) {
+fn compile_wasm(wat: &str) -> (WasmEngine, Module) {
     let engine = WasmEngine::default();
     let module = Module::new(&engine, wat).expect("compile wasm module");
-    let linker = build_linker(&engine);
-    let mut store = Store::new(
-        &engine,
-        RuntimeState::new("https://example.com".to_string()),
-    );
+    (engine, module)
+}
+
+fn instantiate_wasm(
+    engine: &WasmEngine,
+    module: &Module,
+) -> (Store<RuntimeState>, wasmtime::Instance) {
+    let linker = build_linker(engine);
+    let mut store = Store::new(engine, RuntimeState::new("https://example.com".to_string()));
     let instance = linker
-        .instantiate(&mut store, &module)
+        .instantiate(&mut store, module)
         .expect("instantiate wasm module");
     (store, instance)
+}
+
+fn setup_wasm(wat: &str) -> (Store<RuntimeState>, wasmtime::Instance) {
+    let (engine, module) = compile_wasm(wat);
+    instantiate_wasm(&engine, &module)
 }
 
 // ---------------------------------------------------------------------------
 // 1. Layout — simple (original benchmark)
 // ---------------------------------------------------------------------------
 fn bench_computed_style(c: &mut Criterion) {
-    let mut state = RuntimeState::new("https://example.com".to_string());
-    let id = state.create_element("div".to_string()); // returns u32
-    state
-        .set_inline_style(id, "height".to_string(), "100px".to_string())
-        .expect("set style");
-    // Verify node exists
-    assert!(state
-        .doc
-        .get_node(engine::NodeId::from(id as u64))
-        .is_some());
-
     c.bench_function("layout_simple", |b| {
-        b.iter(|| {
-            engine::layout::compute_layout_in_place(
-                black_box(&mut state.doc),
-                black_box(engine::NodeId::from(id as u64)),
-                taffy::Size::MAX_CONTENT,
-            );
-        })
+        b.iter_batched(
+            || {
+                let mut state = RuntimeState::new("https://example.com".to_string());
+                let id = state.create_element("div".to_string());
+                state.append_element(0, id).expect("append root");
+                state
+                    .set_inline_style(id, "height".to_string(), "100px".to_string())
+                    .expect("set style");
+                state.doc.resolve_style(&state.style_context);
+                (state, id)
+            },
+            |(mut state, id)| {
+                engine::layout::compute_layout_in_place(
+                    black_box(&mut state.doc),
+                    black_box(engine::NodeId::from(id as u64)),
+                    taffy::Size::MAX_CONTENT,
+                );
+            },
+            BatchSize::SmallInput,
+        )
     });
 }
 
@@ -564,45 +575,40 @@ fn bench_wasm_add_large_stylesheet(c: &mut Criterion) {
     );
 
     // Build the WASM memory data: CSS string + tag name + attribute strings
-    let engine = WasmEngine::default();
-    let module = Module::new(&engine, &wat).expect("compile wasm module");
-    let linker = build_linker(&engine);
-    let mut store = Store::new(
-        &engine,
-        RuntimeState::new("https://example.com".to_string()),
-    );
-    let instance = linker
-        .instantiate(&mut store, &module)
-        .expect("instantiate wasm module");
-
-    // Write data into WASM memory
-    let memory = instance
-        .get_memory(&mut store, "memory")
-        .expect("get memory");
-    memory.data_mut(&mut store)[..css_len].copy_from_slice(css.as_bytes());
-
-    // Write "div\0" at tag_offset
-    let tag_data = b"div\0";
-    memory.data_mut(&mut store)[css_len..css_len + 4].copy_from_slice(tag_data);
-
-    // Write "class\0" at class_attr_offset
-    let class_attr = b"class\0";
-    memory.data_mut(&mut store)[css_len + 16..css_len + 22].copy_from_slice(class_attr);
-
-    // Write "class-5\0" at class_val_offset
-    let class_val = b"class-5\0";
-    memory.data_mut(&mut store)[css_len + 32..css_len + 40].copy_from_slice(class_val);
-
-    let setup = instance
-        .get_typed_func::<(), ()>(&mut store, "setup")
-        .expect("get setup function");
+    let (engine, module) = compile_wasm(&wat);
 
     c.bench_function("wasm_add_large_stylesheet", |b| {
-        b.iter(|| {
-            setup
-                .call(&mut store, ())
-                .expect("run add large stylesheet")
-        })
+        b.iter_batched(
+            || {
+                let (mut store, instance) = instantiate_wasm(&engine, &module);
+
+                // Write data into WASM memory for this fresh instance.
+                let memory = instance
+                    .get_memory(&mut store, "memory")
+                    .expect("get memory");
+                memory.data_mut(&mut store)[..css_len].copy_from_slice(css.as_bytes());
+
+                let tag_data = b"div\0";
+                memory.data_mut(&mut store)[css_len..css_len + 4].copy_from_slice(tag_data);
+
+                let class_attr = b"class\0";
+                memory.data_mut(&mut store)[css_len + 16..css_len + 22].copy_from_slice(class_attr);
+
+                let class_val = b"class-5\0";
+                memory.data_mut(&mut store)[css_len + 32..css_len + 40].copy_from_slice(class_val);
+
+                (store, instance)
+            },
+            |(mut store, instance)| {
+                let setup = instance
+                    .get_typed_func::<(), ()>(&mut store, "setup")
+                    .expect("get setup function");
+                setup
+                    .call(&mut store, ())
+                    .expect("run add large stylesheet");
+            },
+            BatchSize::SmallInput,
+        )
     });
 }
 
@@ -719,47 +725,45 @@ fn bench_wasm_complex_selectors(c: &mut Criterion) {
         data_val = css_len + 128,       // "primary\0"
     );
 
-    let engine = WasmEngine::default();
-    let module = Module::new(&engine, &wat).expect("compile wasm module");
-    let linker = build_linker(&engine);
-    let mut store = Store::new(
-        &engine,
-        RuntimeState::new("https://example.com".to_string()),
-    );
-    let instance = linker
-        .instantiate(&mut store, &module)
-        .expect("instantiate wasm module");
-
-    let memory = instance
-        .get_memory(&mut store, "memory")
-        .expect("get memory");
-    let mem = memory.data_mut(&mut store);
-
-    // Write CSS at offset 0
-    mem[..css_len].copy_from_slice(css.as_bytes());
-
-    // String table after CSS
-    let strings: &[(&[u8], usize)] = &[
-        (b"div\0", css_len),
-        (b"class\0", css_len + 16),
-        (b"a\0", css_len + 32),
-        (b"container b\0", css_len + 48),
-        (b"wrapper c\0", css_len + 64),
-        (b"item d\0", css_len + 80),
-        (b"deep label\0", css_len + 96),
-        (b"data-type\0", css_len + 112),
-        (b"primary\0", css_len + 128),
-    ];
-    for (data, offset) in strings {
-        mem[*offset..*offset + data.len()].copy_from_slice(data);
-    }
-
-    let setup = instance
-        .get_typed_func::<(), ()>(&mut store, "setup")
-        .expect("get setup function");
+    let (engine, module) = compile_wasm(&wat);
 
     c.bench_function("wasm_complex_selectors", |b| {
-        b.iter(|| setup.call(&mut store, ()).expect("run complex selectors"))
+        b.iter_batched(
+            || {
+                let (mut store, instance) = instantiate_wasm(&engine, &module);
+
+                let memory = instance
+                    .get_memory(&mut store, "memory")
+                    .expect("get memory");
+                let mem = memory.data_mut(&mut store);
+
+                mem[..css_len].copy_from_slice(css.as_bytes());
+
+                let strings: &[(&[u8], usize)] = &[
+                    (b"div\0", css_len),
+                    (b"class\0", css_len + 16),
+                    (b"a\0", css_len + 32),
+                    (b"container b\0", css_len + 48),
+                    (b"wrapper c\0", css_len + 64),
+                    (b"item d\0", css_len + 80),
+                    (b"deep label\0", css_len + 96),
+                    (b"data-type\0", css_len + 112),
+                    (b"primary\0", css_len + 128),
+                ];
+                for (data, offset) in strings {
+                    mem[*offset..*offset + data.len()].copy_from_slice(data);
+                }
+
+                (store, instance)
+            },
+            |(mut store, instance)| {
+                let setup = instance
+                    .get_typed_func::<(), ()>(&mut store, "setup")
+                    .expect("get setup function");
+                setup.call(&mut store, ()).expect("run complex selectors");
+            },
+            BatchSize::SmallInput,
+        )
     });
 }
 

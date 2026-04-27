@@ -355,6 +355,20 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         self.sync_style_viewport()
     }
 
+    /// Clears accumulated style-profiling counters.
+    ///
+    /// The counters only record non-zero timings when `engine` is built with
+    /// the `profiling` feature enabled.
+    pub fn reset_style_profiling(&self) {
+        self.style_context.reset_profiling();
+    }
+
+    /// Returns aggregated style-profiling counters gathered since the last
+    /// [`reset_style_profiling`](Self::reset_style_profiling) call.
+    pub fn style_profiling_snapshot(&self) -> crate::style::StyleProfilingSnapshot {
+        self.style_context.profiling_snapshot()
+    }
+
     fn sync_style_viewport(&mut self) -> bool {
         if self.style_context.set_viewport(self.viewport) {
             self.doc.mark_root_dirty();
@@ -4813,5 +4827,137 @@ mod tests {
             .get_node(taffy::NodeId::from(shadow_root as u64))
             .unwrap();
         assert!(shadow_root_node.shadow_cascade_data.is_some());
+    }
+
+    #[cfg(feature = "profiling")]
+    #[test]
+    fn test_style_profiling_snapshot_tracks_style_matching_work() {
+        let mut state = RuntimeState::with_definite_viewport(
+            "https://example.com".to_string(),
+            (),
+            (),
+            1280.0,
+            800.0,
+        );
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            .app > .card[data-kind="primary"] .item {
+                padding: 2px;
+            }
+
+            .app > .card.featured .item[data-state="active"] .badge {
+                width: 20px;
+            }
+
+            @media (min-width: 900px) {
+                .app > .card {
+                    display: flex;
+                    gap: 4px;
+                }
+            }
+        "#
+        ));
+
+        let root = state.create_element("div".to_string());
+        state.append_element(0, root).unwrap();
+        state
+            .set_attribute(root, "class".to_string(), "app".to_string())
+            .unwrap();
+
+        for card_index in 0..6 {
+            let card = state.create_element("div".to_string());
+            state.append_element(root, card).unwrap();
+            state
+                .set_attribute(
+                    card,
+                    "class".to_string(),
+                    if card_index % 2 == 0 {
+                        "card featured".to_string()
+                    } else {
+                        "card".to_string()
+                    },
+                )
+                .unwrap();
+            state
+                .set_attribute(
+                    card,
+                    "data-kind".to_string(),
+                    if card_index % 2 == 0 {
+                        "primary".to_string()
+                    } else {
+                        "secondary".to_string()
+                    },
+                )
+                .unwrap();
+
+            for item_index in 0..4 {
+                let item = state.create_element("div".to_string());
+                state.append_element(card, item).unwrap();
+                state
+                    .set_attribute(item, "class".to_string(), "item".to_string())
+                    .unwrap();
+                state
+                    .set_attribute(
+                        item,
+                        "data-state".to_string(),
+                        if item_index % 2 == 0 {
+                            "active".to_string()
+                        } else {
+                            "inactive".to_string()
+                        },
+                    )
+                    .unwrap();
+
+                let badge = state.create_element("span".to_string());
+                state.append_element(item, badge).unwrap();
+                state
+                    .set_attribute(badge, "class".to_string(), "badge".to_string())
+                    .unwrap();
+            }
+        }
+
+        state.reset_style_profiling();
+        state.commit();
+
+        let snapshot = state.style_profiling_snapshot();
+        assert!(snapshot.enabled);
+        assert_eq!(snapshot.resolve_passes, 1);
+        assert!(snapshot.element_nodes_styled >= 1);
+        assert!(snapshot.selector_matching_ns > 0);
+        assert!(snapshot.rule_tree_insertion_ns > 0);
+        assert!(snapshot.cascade_ns > 0);
+        assert!(snapshot.total_resolve_ns >= snapshot.selector_matching_ns);
+        let timed_subphases = u128::from(snapshot.selector_matching_ns)
+            + u128::from(snapshot.rule_tree_insertion_ns)
+            + u128::from(snapshot.cascade_ns);
+        assert!(u128::from(snapshot.total_resolve_ns) >= timed_subphases);
+
+        state.reset_style_profiling();
+        assert_eq!(state.style_profiling_snapshot().resolve_passes, 0);
+    }
+
+    #[cfg(feature = "profiling")]
+    #[test]
+    fn test_style_profiling_clean_second_commit_does_not_resolve() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state
+            .set_inline_style(div, "width".to_string(), "50px".to_string())
+            .unwrap();
+
+        state.commit();
+        state.reset_style_profiling();
+
+        state.commit();
+
+        let snapshot = state.style_profiling_snapshot();
+        assert!(snapshot.enabled);
+        assert_eq!(snapshot.resolve_passes, 0);
+        assert_eq!(snapshot.element_nodes_styled, 0);
+        assert_eq!(snapshot.selector_matching_ns, 0);
+        assert_eq!(snapshot.rule_tree_insertion_ns, 0);
+        assert_eq!(snapshot.cascade_ns, 0);
+        assert_eq!(snapshot.total_resolve_ns, 0);
     }
 }

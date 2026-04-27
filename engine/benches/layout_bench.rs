@@ -1,7 +1,8 @@
 //! Engine-level layout benchmarks.
 //!
-//! These benchmarks measure pure layout performance without WASM overhead,
-//! isolating the Taffy trait implementation on `Document`.
+//! These benches intentionally measure warm pure-layout cost on pre-built,
+//! pre-styled trees without WASM overhead. Use `commit_bench` for cold setup
+//! and end-to-end commit scenarios that include selector matching.
 
 use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Criterion};
 use taffy::prelude::TaffyMaxContent;
