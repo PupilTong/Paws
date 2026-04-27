@@ -82,8 +82,13 @@ unsafe impl Send for SendCallback {}
 
 /// Handle to the background engine thread.
 ///
-/// Modelled after a browser WebWorker: one thread, one WASM module, started
-/// once via [`post_run_wasm`](Self::post_run_wasm) and alive until dropped.
+/// Modelled after a browser WebWorker: one thread, one WASM module,
+/// started once via [`post_run_wasm`](Self::post_run_wasm) and alive
+/// until dropped. After the guest's `run` returns the thread keeps the
+/// wasmtime store alive and pumps host-driven events posted via
+/// [`post_click`](Self::post_click) into the guest's `invoke-listener`,
+/// so component guests must return from `run` for the message loop to
+/// start.
 ///
 /// Multiple handles can coexist — each manages its own independent thread and
 /// UIKit sub-tree. There is no shared state between handles.
@@ -169,10 +174,19 @@ impl EngineHandle {
 
     /// Starts the engine by spawning a background thread that runs the WASM module.
     ///
-    /// This is a **one-shot** operation — the WASM module is expected to run its
-    /// own internal event loop and never return until the engine is stopped.
-    /// Calling this a second time on the same handle is a no-op; create a new
-    /// [`EngineHandle`] to run a different module.
+    /// For component-model guests the thread keeps the wasmtime store
+    /// alive past `run`'s return inside a [`ComponentSession`] and pumps
+    /// host-driven events ([`EngineMessage::Click`], …) into
+    /// `invoke-listener` until [`EngineMessage::Stop`] arrives (posted
+    /// by [`Drop`](EngineHandle::drop)). Component guests should
+    /// therefore **return** from `run` once their initial DOM is
+    /// committed; staying inside `run` indefinitely means the
+    /// host-driven message loop never starts and pointer events queue
+    /// up without firing. Core-module guests (WAT) run as a one-shot
+    /// because they have no `invoke-listener` export.
+    ///
+    /// Calling this a second time on the same handle is a no-op; create
+    /// a new [`EngineHandle`] to run a different module.
     ///
     /// Returns `true` if the thread was spawned, `false` if already running.
     pub(crate) fn post_run_wasm(&mut self, wasm_bytes: Vec<u8>, func_name: String) -> bool {

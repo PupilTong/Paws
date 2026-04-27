@@ -4,10 +4,19 @@
 //! Naming convention: `paws_renderer_*`.
 //!
 //! The engine thread is spawned on the first [`paws_renderer_post_run_wasm`]
-//! call and stays alive until [`paws_renderer_destroy`] is called (or until
-//! the WASM module's own internal loop exits). A renderer accepts only one
-//! WASM module — subsequent calls to `post_run_wasm` on the same renderer
-//! return [`RendererError::EngineFailed`].
+//! call and stays alive until [`paws_renderer_destroy`] is called.
+//! Component-model guests are expected to **return** from `run` once
+//! their initial DOM is built and committed; subsequent UI updates flow
+//! through event listeners that the host fires via
+//! [`paws_renderer_dispatch_click`] (and future pointer/keyboard
+//! entries). A guest that loops forever inside `run` will therefore
+//! never receive host-driven input. Core-module guests have no
+//! `invoke-listener` export and run as a one-shot — they do not get
+//! pointer events.
+//!
+//! A renderer accepts only one WASM module — subsequent calls to
+//! [`paws_renderer_post_run_wasm`] on the same renderer return
+//! [`RendererError::EngineFailed`].
 
 use std::ffi::{c_char, c_void, CStr};
 
@@ -127,9 +136,16 @@ pub extern "C" fn paws_renderer_destroy(renderer: *mut PawsRenderer) {
 
 /// Starts the rendering pipeline by loading and running a WASM module.
 ///
-/// Spawns the background engine thread, which compiles the module and calls
-/// the named export. The WASM module is expected to run its own internal
-/// event loop — it drives all DOM mutations and op delivery from within.
+/// Spawns the background engine thread, which compiles the module and
+/// calls the named export. For component-model guests, the engine thread
+/// keeps the wasmtime store alive after `run` returns and pumps
+/// host-driven events (e.g. clicks posted via
+/// [`paws_renderer_dispatch_click`]) into the guest's `invoke-listener`
+/// export. Component guests should therefore **return** from `run` once
+/// their initial DOM is built and committed; a guest that loops forever
+/// inside `run` will never receive pointer input. Core-module guests
+/// (the WAT path) run as a one-shot — they do not have `invoke-listener`
+/// and do not receive pointer events.
 ///
 /// This is a **one-shot** call per renderer. Calling it again on the same
 /// renderer returns [`RendererError::EngineFailed`] — create a new renderer
