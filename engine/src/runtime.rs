@@ -358,7 +358,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
     /// Clears accumulated style-profiling counters.
     ///
     /// The counters only record non-zero timings when `engine` is built with
-    /// the `style-profiling` feature enabled.
+    /// the `profiling` feature enabled.
     pub fn reset_style_profiling(&self) {
         self.style_context.reset_profiling();
     }
@@ -4829,7 +4829,7 @@ mod tests {
         assert!(shadow_root_node.shadow_cascade_data.is_some());
     }
 
-    #[cfg(feature = "style-profiling")]
+    #[cfg(feature = "profiling")]
     #[test]
     fn test_style_profiling_snapshot_tracks_style_matching_work() {
         let mut state = RuntimeState::with_definite_viewport(
@@ -4936,7 +4936,7 @@ mod tests {
         assert_eq!(state.style_profiling_snapshot().resolve_passes, 0);
     }
 
-    #[cfg(feature = "style-profiling")]
+    #[cfg(feature = "profiling")]
     #[test]
     fn test_style_profiling_clean_second_commit_does_not_resolve() {
         let mut state = RuntimeState::new("https://example.com".to_string());

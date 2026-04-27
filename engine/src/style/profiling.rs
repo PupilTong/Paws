@@ -1,18 +1,18 @@
 //! Feature-gated style-resolution profiling counters.
 //!
-//! The `style-profiling` feature intentionally favors observability over
+//! The `profiling` feature intentionally favors observability over
 //! perfectly unperturbed timings. In particular, `Instant::now()` calls still
 //! add measurable overhead, so profile-on numbers should be compared against
 //! other profile-on runs, not directly against the default build.
 
-#[cfg(feature = "style-profiling")]
+#[cfg(feature = "profiling")]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Snapshot of aggregated style-resolution timings.
 ///
 /// Populate this via [`crate::RuntimeState::style_profiling_snapshot`]. The
-/// counters stay zero unless the crate is built with the `style-profiling`
+/// counters stay zero unless the crate is built with the `profiling`
 /// feature enabled.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StyleProfilingSnapshot {
@@ -32,7 +32,7 @@ pub struct StyleProfilingSnapshot {
     pub total_resolve_ns: u64,
 }
 
-#[cfg(feature = "style-profiling")]
+#[cfg(feature = "profiling")]
 #[derive(Default)]
 pub(crate) struct StyleProfiler {
     resolve_passes: AtomicU64,
@@ -43,19 +43,19 @@ pub(crate) struct StyleProfiler {
     total_resolve_ns: AtomicU64,
 }
 
-#[cfg(not(feature = "style-profiling"))]
+#[cfg(not(feature = "profiling"))]
 #[derive(Default)]
 pub(crate) struct StyleProfiler {
     _private: (),
 }
 
-#[cfg(not(feature = "style-profiling"))]
+#[cfg(not(feature = "profiling"))]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct DisabledTimer {
     _private: (),
 }
 
-#[cfg(feature = "style-profiling")]
+#[cfg(feature = "profiling")]
 impl StyleProfiler {
     pub(crate) fn reset(&self) {
         self.resolve_passes.store(0, Ordering::Relaxed);
@@ -100,7 +100,7 @@ impl StyleProfiler {
     }
 }
 
-#[cfg(not(feature = "style-profiling"))]
+#[cfg(not(feature = "profiling"))]
 impl StyleProfiler {
     pub(crate) fn reset(&self) {}
 
@@ -119,27 +119,27 @@ impl StyleProfiler {
     pub(crate) fn record_resolve_pass(&self, _total_resolve: Duration) {}
 }
 
-#[cfg(feature = "style-profiling")]
+#[cfg(feature = "profiling")]
 pub(crate) fn start_timer() -> std::time::Instant {
     std::time::Instant::now()
 }
 
-#[cfg(not(feature = "style-profiling"))]
+#[cfg(not(feature = "profiling"))]
 pub(crate) fn start_timer() -> DisabledTimer {
     DisabledTimer::default()
 }
 
-#[cfg(feature = "style-profiling")]
+#[cfg(feature = "profiling")]
 pub(crate) fn elapsed(started_at: std::time::Instant) -> Duration {
     started_at.elapsed()
 }
 
-#[cfg(not(feature = "style-profiling"))]
+#[cfg(not(feature = "profiling"))]
 pub(crate) fn elapsed(_started_at: DisabledTimer) -> Duration {
     Duration::ZERO
 }
 
-#[cfg(feature = "style-profiling")]
+#[cfg(feature = "profiling")]
 fn duration_ns(duration: Duration) -> u64 {
     duration.as_nanos().min(u128::from(u64::MAX)) as u64
 }
