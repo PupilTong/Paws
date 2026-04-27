@@ -4927,8 +4927,37 @@ mod tests {
         assert!(snapshot.rule_tree_insertion_ns > 0);
         assert!(snapshot.cascade_ns > 0);
         assert!(snapshot.total_resolve_ns >= snapshot.selector_matching_ns);
+        let timed_subphases = u128::from(snapshot.selector_matching_ns)
+            + u128::from(snapshot.rule_tree_insertion_ns)
+            + u128::from(snapshot.cascade_ns);
+        assert!(u128::from(snapshot.total_resolve_ns) >= timed_subphases);
 
         state.reset_style_profiling();
         assert_eq!(state.style_profiling_snapshot().resolve_passes, 0);
+    }
+
+    #[cfg(feature = "style-profiling")]
+    #[test]
+    fn test_style_profiling_clean_second_commit_does_not_resolve() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state
+            .set_inline_style(div, "width".to_string(), "50px".to_string())
+            .unwrap();
+
+        state.commit();
+        state.reset_style_profiling();
+
+        state.commit();
+
+        let snapshot = state.style_profiling_snapshot();
+        assert!(snapshot.enabled);
+        assert_eq!(snapshot.resolve_passes, 0);
+        assert_eq!(snapshot.element_nodes_styled, 0);
+        assert_eq!(snapshot.selector_matching_ns, 0);
+        assert_eq!(snapshot.rule_tree_insertion_ns, 0);
+        assert_eq!(snapshot.cascade_ns, 0);
+        assert_eq!(snapshot.total_resolve_ns, 0);
     }
 }

@@ -1,3 +1,12 @@
+//! Feature-gated style-resolution profiling counters.
+//!
+//! The `style-profiling` feature intentionally favors observability over
+//! perfectly unperturbed timings. In particular, `Instant::now()` calls still
+//! add measurable overhead, so profile-on numbers should be compared against
+//! other profile-on runs, not directly against the default build.
+
+#[cfg(feature = "style-profiling")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Snapshot of aggregated style-resolution timings.
@@ -26,18 +35,12 @@ pub struct StyleProfilingSnapshot {
 #[cfg(feature = "style-profiling")]
 #[derive(Default)]
 pub(crate) struct StyleProfiler {
-    totals: std::sync::Mutex<StyleProfilingTotals>,
-}
-
-#[cfg(feature = "style-profiling")]
-#[derive(Debug, Clone, Copy, Default)]
-struct StyleProfilingTotals {
-    resolve_passes: u64,
-    element_nodes_styled: u64,
-    selector_matching_ns: u64,
-    rule_tree_insertion_ns: u64,
-    cascade_ns: u64,
-    total_resolve_ns: u64,
+    resolve_passes: AtomicU64,
+    element_nodes_styled: AtomicU64,
+    selector_matching_ns: AtomicU64,
+    rule_tree_insertion_ns: AtomicU64,
+    cascade_ns: AtomicU64,
+    total_resolve_ns: AtomicU64,
 }
 
 #[cfg(not(feature = "style-profiling"))]
@@ -55,20 +58,23 @@ pub(crate) struct DisabledTimer {
 #[cfg(feature = "style-profiling")]
 impl StyleProfiler {
     pub(crate) fn reset(&self) {
-        *self.totals.lock().expect("style profiling mutex poisoned") =
-            StyleProfilingTotals::default();
+        self.resolve_passes.store(0, Ordering::Relaxed);
+        self.element_nodes_styled.store(0, Ordering::Relaxed);
+        self.selector_matching_ns.store(0, Ordering::Relaxed);
+        self.rule_tree_insertion_ns.store(0, Ordering::Relaxed);
+        self.cascade_ns.store(0, Ordering::Relaxed);
+        self.total_resolve_ns.store(0, Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> StyleProfilingSnapshot {
-        let totals = *self.totals.lock().expect("style profiling mutex poisoned");
         StyleProfilingSnapshot {
             enabled: true,
-            resolve_passes: totals.resolve_passes,
-            element_nodes_styled: totals.element_nodes_styled,
-            selector_matching_ns: totals.selector_matching_ns,
-            rule_tree_insertion_ns: totals.rule_tree_insertion_ns,
-            cascade_ns: totals.cascade_ns,
-            total_resolve_ns: totals.total_resolve_ns,
+            resolve_passes: self.resolve_passes.load(Ordering::Relaxed),
+            element_nodes_styled: self.element_nodes_styled.load(Ordering::Relaxed),
+            selector_matching_ns: self.selector_matching_ns.load(Ordering::Relaxed),
+            rule_tree_insertion_ns: self.rule_tree_insertion_ns.load(Ordering::Relaxed),
+            cascade_ns: self.cascade_ns.load(Ordering::Relaxed),
+            total_resolve_ns: self.total_resolve_ns.load(Ordering::Relaxed),
         }
     }
 
@@ -78,23 +84,19 @@ impl StyleProfiler {
         rule_tree_insertion: Duration,
         cascade: Duration,
     ) {
-        let mut totals = self.totals.lock().expect("style profiling mutex poisoned");
-        totals.element_nodes_styled = totals.element_nodes_styled.saturating_add(1);
-        totals.selector_matching_ns = totals
-            .selector_matching_ns
-            .saturating_add(duration_ns(selector_matching));
-        totals.rule_tree_insertion_ns = totals
-            .rule_tree_insertion_ns
-            .saturating_add(duration_ns(rule_tree_insertion));
-        totals.cascade_ns = totals.cascade_ns.saturating_add(duration_ns(cascade));
+        self.element_nodes_styled.fetch_add(1, Ordering::Relaxed);
+        self.selector_matching_ns
+            .fetch_add(duration_ns(selector_matching), Ordering::Relaxed);
+        self.rule_tree_insertion_ns
+            .fetch_add(duration_ns(rule_tree_insertion), Ordering::Relaxed);
+        self.cascade_ns
+            .fetch_add(duration_ns(cascade), Ordering::Relaxed);
     }
 
     pub(crate) fn record_resolve_pass(&self, total_resolve: Duration) {
-        let mut totals = self.totals.lock().expect("style profiling mutex poisoned");
-        totals.resolve_passes = totals.resolve_passes.saturating_add(1);
-        totals.total_resolve_ns = totals
-            .total_resolve_ns
-            .saturating_add(duration_ns(total_resolve));
+        self.resolve_passes.fetch_add(1, Ordering::Relaxed);
+        self.total_resolve_ns
+            .fetch_add(duration_ns(total_resolve), Ordering::Relaxed);
     }
 }
 

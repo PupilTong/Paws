@@ -193,11 +193,13 @@ fn bench_resolve_style_cold_complex_selectors(c: &mut Criterion) {
     });
 }
 
-fn bench_commit_warm_toggle_data_state(c: &mut Criterion) {
+/// Current invalidation marks the document root dirty on attribute changes, so
+/// this still measures a full-tree restyle after toggling one item attribute.
+fn bench_commit_full_restyle_after_data_state_toggle(c: &mut Criterion) {
     let (mut state, target) = setup_committed_runtime_for_toggle();
     let mut active = false;
 
-    c.bench_function("commit_warm_toggle_data_state_120x6", |b| {
+    c.bench_function("commit_full_restyle_after_data_state_toggle_120x6", |b| {
         b.iter(|| {
             active = !active;
             state
@@ -221,6 +223,6 @@ criterion_group!(
     benches,
     bench_commit_cold_complex_selectors,
     bench_resolve_style_cold_complex_selectors,
-    bench_commit_warm_toggle_data_state,
+    bench_commit_full_restyle_after_data_state_toggle,
 );
 criterion_main!(benches);
