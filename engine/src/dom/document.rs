@@ -138,7 +138,47 @@ impl<S: RenderState> Document<S> {
 
     pub(crate) fn mark_root_dirty(&self) {
         if let Some(root) = self.get_node(self.root) {
+            root.set_style_dirty();
             root.set_dirty_descendants();
+        }
+    }
+
+    pub(crate) fn mark_attribute_changed(&self, node_id: taffy::NodeId) {
+        let Some(node) = self.get_node(node_id) else {
+            return;
+        };
+
+        node.mark_dirty_and_ancestors();
+
+        // Attribute/class/id changes can affect selectors on following siblings
+        // (`+` and `~`) as well as descendants of those siblings.
+        let Some(parent_id) = node.parent else {
+            return;
+        };
+        let Some(parent) = self.get_node(parent_id) else {
+            return;
+        };
+        let Some(position) = parent.children.iter().position(|&id| id == node_id) else {
+            return;
+        };
+
+        for sibling_id in parent.children.iter().skip(position + 1).copied() {
+            self.mark_style_subtree_dirty(sibling_id);
+        }
+    }
+
+    fn mark_style_subtree_dirty(&self, node_id: taffy::NodeId) {
+        let mut stack = vec![node_id];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.get_node(id) else {
+                continue;
+            };
+            node.set_style_dirty();
+            node.set_dirty_descendants();
+            stack.extend(node.children.iter().copied());
+            if let Some(shadow_root_id) = node.shadow_root_id {
+                stack.push(shadow_root_id);
+            }
         }
     }
 
@@ -670,9 +710,9 @@ impl<S: RenderState> Document<S> {
 
     /// Ensures computed styles are up-to-date for the document tree.
     ///
-    /// Checks the root's dirty-descendants flag and triggers a full style
-    /// resolution pass if any node is dirty. Layout caches are cleared after
-    /// a restyle because current invalidation is full-tree, not incremental.
+    /// Checks the root's dirty-descendants flag and resolves styles for dirty
+    /// subtrees. Layout caches are still cleared after any restyle because
+    /// layout invalidation is not yet incremental.
     /// This is the lazy resolution entry point used by
     /// [`StylePropertyMapReadOnly`] read operations.
     pub(crate) fn ensure_styles_resolved(&mut self, style_context: &crate::style::StyleContext) {
@@ -690,21 +730,35 @@ impl<S: RenderState> Document<S> {
         }
     }
 
-    /// Resolves CSS styles for all element nodes in the document tree.
+    /// Resolves CSS styles for dirty element nodes and their affected subtrees.
     ///
     /// Uses BFS traversal from the root to ensure parents are styled before
     /// children, which is required for CSS inheritance to work correctly.
     pub fn resolve_style(&mut self, style_context: &crate::style::StyleContext) {
         let resolve_started = crate::style::profiling::start_timer();
         let mut queue = std::collections::VecDeque::new();
-        queue.push_back(self.root);
+        queue.push_back((self.root, false));
 
-        while let Some(id) = queue.pop_front() {
-            if let Some(node) = self.get_node(id) {
-                if node.is_element() {
+        while let Some((id, ancestor_forced)) = queue.pop_front() {
+            let Some(node) = self.get_node(id) else {
+                continue;
+            };
+
+            let node_needs_style = node.needs_style_recalc();
+            let has_dirty_descendants = node.has_dirty_descendants();
+            if !ancestor_forced && !node_needs_style && !has_dirty_descendants {
+                continue;
+            }
+
+            if node.is_element() {
+                let should_restyle = ancestor_forced || node_needs_style;
+                let child_force = should_restyle;
+
+                let computed = if should_restyle {
                     // Resolve the style parent: if the DOM parent is a ShadowRoot,
                     // inherit from the host element (the ShadowRoot's parent) instead.
                     let parent_style = {
+                        let node = self.get_node(id).unwrap();
                         let mut style_parent_id = node.parent;
                         if let Some(pid) = node.parent {
                             if let Some(p) = self.get_node(pid) {
@@ -719,31 +773,37 @@ impl<S: RenderState> Document<S> {
                             .cloned()
                     };
 
-                    let computed = crate::style::compute_style_for_node(
+                    let node = self.get_node(id).unwrap();
+                    Some(crate::style::compute_style_for_node(
                         self,
                         style_context,
                         node,
                         parent_style.as_deref(),
-                    );
-                    // Re-borrow to enqueue children before mutable borrow
-                    let children: Vec<taffy::NodeId> =
-                        self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
-                    for &child_id in &children {
-                        queue.push_back(child_id);
-                    }
+                    ))
+                } else {
+                    None
+                };
 
-                    // Also enter the shadow tree if this element is a shadow host.
-                    // Run slot assignment first so the flat tree is available for layout.
-                    if let Some(shadow_root_id) = self.get_node(id).and_then(|n| n.shadow_root_id) {
-                        self.assign_slots(id);
-                        if let Some(shadow_root) = self.get_node(shadow_root_id) {
-                            let shadow_children: Vec<taffy::NodeId> = shadow_root.children.clone();
-                            for &child_id in &shadow_children {
-                                queue.push_back(child_id);
-                            }
+                // Re-borrow to enqueue children before mutable borrow.
+                let children: Vec<taffy::NodeId> =
+                    self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
+                for &child_id in &children {
+                    queue.push_back((child_id, child_force));
+                }
+
+                // Also enter the shadow tree if this element is a shadow host.
+                // Run slot assignment first so the flat tree is available for layout.
+                if let Some(shadow_root_id) = self.get_node(id).and_then(|n| n.shadow_root_id) {
+                    self.assign_slots(id);
+                    if let Some(shadow_root) = self.get_node(shadow_root_id) {
+                        let shadow_children: Vec<taffy::NodeId> = shadow_root.children.clone();
+                        for &child_id in &shadow_children {
+                            queue.push_back((child_id, child_force));
                         }
                     }
+                }
 
+                if let Some(computed) = computed {
                     // Determine if this element creates a stacking context.
                     // Re-borrow node since we may have mutated during assign_slots.
                     let node = self.get_node(id).unwrap();
@@ -772,13 +832,21 @@ impl<S: RenderState> Document<S> {
                         mut_node.taffy_style = Some(crate::style::to_taffy_style(&computed));
                         mut_node.computed_values = Some(computed);
                         mut_node.creates_stacking_context = is_stacking_context;
+                        mut_node.unset_style_dirty();
                         mut_node.unset_dirty_descendants();
                     }
-                } else if node.is_text_node() {
+                } else if let Some(node) = self.get_node(id) {
+                    node.unset_style_dirty();
+                    node.unset_dirty_descendants();
+                }
+            } else if node.is_text_node() {
+                let should_restyle = ancestor_forced || node_needs_style;
+                if should_restyle {
                     // Text nodes inherit parent styles and get a default
                     // taffy::Style so layout can measure them as leaf nodes.
                     // If the DOM parent is a ShadowRoot, inherit from the host.
                     let parent_cv = {
+                        let node = self.get_node(id).unwrap();
                         let mut style_parent_id = node.parent;
                         if let Some(pid) = node.parent {
                             if let Some(p) = self.get_node(pid) {
@@ -795,20 +863,26 @@ impl<S: RenderState> Document<S> {
                     if let Some(mut_node) = self.get_node_mut(id) {
                         mut_node.taffy_style = Some(taffy::Style::default());
                         mut_node.computed_values = parent_cv;
+                        mut_node.unset_style_dirty();
                         mut_node.unset_dirty_descendants();
                     }
-                } else {
-                    // Non-element, non-text nodes (Document, ShadowRoot):
-                    // enqueue children for traversal.
-                    let children: Vec<taffy::NodeId> =
-                        self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
-                    for &child_id in &children {
-                        queue.push_back(child_id);
-                    }
-                    // Clear dirty flag on non-element nodes too
-                    if let Some(node) = self.get_node(id) {
-                        node.unset_dirty_descendants();
-                    }
+                } else if let Some(node) = self.get_node(id) {
+                    node.unset_style_dirty();
+                    node.unset_dirty_descendants();
+                }
+            } else {
+                // Non-element, non-text nodes (Document, ShadowRoot):
+                // enqueue children for traversal.
+                let child_force = ancestor_forced || node_needs_style;
+                let children: Vec<taffy::NodeId> =
+                    self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
+                for &child_id in &children {
+                    queue.push_back((child_id, child_force));
+                }
+                // Clear dirty flags on non-element nodes too.
+                if let Some(node) = self.get_node(id) {
+                    node.unset_style_dirty();
+                    node.unset_dirty_descendants();
                 }
             }
         }

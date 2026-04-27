@@ -633,13 +633,14 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         name: String,
         value: String,
     ) -> Result<(), HostErrorCode> {
+        let node_id = taffy::NodeId::from(id as u64);
         let node = self
             .doc
-            .get_node_mut(taffy::NodeId::from(id as u64))
+            .get_node_mut(node_id)
             .ok_or(HostErrorCode::InvalidChild)?;
         if node.is_element() {
             node.set_attribute(&name, &value);
-            node.mark_dirty_and_ancestors();
+            self.doc.mark_attribute_changed(node_id);
             Ok(())
         } else {
             Err(HostErrorCode::InvalidChild)
@@ -916,15 +917,16 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
 
     /// Removes the named attribute from the element.
     pub fn remove_attribute(&mut self, id: u32, name: &str) -> Result<(), HostErrorCode> {
+        let node_id = taffy::NodeId::from(id as u64);
         let node = self
             .doc
-            .get_node_mut(taffy::NodeId::from(id as u64))
+            .get_node_mut(node_id)
             .ok_or(HostErrorCode::InvalidChild)?;
         if !node.is_element() {
             return Err(HostErrorCode::InvalidChild);
         }
         node.remove_attribute(name);
-        node.mark_dirty_and_ancestors();
+        self.doc.mark_attribute_changed(node_id);
         Ok(())
     }
 
@@ -3836,6 +3838,70 @@ mod tests {
         state.remove_attribute(div, "class").unwrap();
         state.commit();
         assert_layout_size(&state, div, 10.0, 10.0);
+    }
+
+    #[test]
+    fn test_post_commit_invalidation_attribute_change_updates_descendant_and_sibling_selectors() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let list = state.create_element("div".to_string());
+        state.append_element(0, list).unwrap();
+
+        let first = state.create_element("div".to_string());
+        let second = state.create_element("div".to_string());
+        state.append_element(list, first).unwrap();
+        state.append_element(list, second).unwrap();
+        state
+            .set_attribute(first, "class".to_string(), "item".to_string())
+            .unwrap();
+        state
+            .set_attribute(second, "class".to_string(), "item".to_string())
+            .unwrap();
+
+        let first_badge = state.create_element("span".to_string());
+        let second_badge = state.create_element("span".to_string());
+        state.append_element(first, first_badge).unwrap();
+        state.append_element(second, second_badge).unwrap();
+        state
+            .set_attribute(first_badge, "class".to_string(), "badge".to_string())
+            .unwrap();
+        state
+            .set_attribute(second_badge, "class".to_string(), "badge".to_string())
+            .unwrap();
+
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            .item,
+            .badge {
+                display: block;
+                width: 5px;
+                height: 5px;
+            }
+
+            .item[data-state="active"] .badge {
+                width: 30px;
+            }
+
+            .item[data-state="active"] + .item .badge {
+                height: 40px;
+            }
+        "#
+        ));
+
+        state.commit();
+        assert_layout_size(&state, first_badge, 5.0, 5.0);
+        assert_layout_size(&state, second_badge, 5.0, 5.0);
+
+        state
+            .set_attribute(first, "data-state".to_string(), "active".to_string())
+            .unwrap();
+        state.commit();
+        assert_layout_size(&state, first_badge, 30.0, 5.0);
+        assert_layout_size(&state, second_badge, 5.0, 40.0);
+
+        state.remove_attribute(first, "data-state").unwrap();
+        state.commit();
+        assert_layout_size(&state, first_badge, 5.0, 5.0);
+        assert_layout_size(&state, second_badge, 5.0, 5.0);
     }
 
     #[test]

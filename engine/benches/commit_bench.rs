@@ -193,36 +193,62 @@ fn bench_resolve_style_cold_complex_selectors(c: &mut Criterion) {
     });
 }
 
-/// Current invalidation marks the document root dirty on attribute changes, so
-/// this still measures a full-tree restyle after toggling one item attribute.
-fn bench_commit_full_restyle_after_data_state_toggle(c: &mut Criterion) {
-    let (mut state, target) = setup_committed_runtime_for_toggle();
-    let mut active = false;
+/// Measures a full-tree restyle on an already-mounted tree. This is the warm
+/// equivalent of first-screen style work: the whole document is dirty, but DOM
+/// construction and stylesheet parsing are outside the measured iteration.
+fn bench_commit_full_restyle_after_viewport_change(c: &mut Criterion) {
+    let (mut state, _target) = setup_committed_runtime_for_toggle();
+    let mut wide = true;
 
-    c.bench_function("commit_full_restyle_after_data_state_toggle_120x6", |b| {
+    c.bench_function("commit_full_restyle_after_viewport_change_120x6", |b| {
         b.iter(|| {
-            active = !active;
-            state
-                .set_attribute(
-                    black_box(target),
-                    "data-state".to_string(),
-                    if active {
-                        "active".to_string()
-                    } else {
-                        "inactive".to_string()
-                    },
-                )
-                .unwrap();
+            wide = !wide;
+            let width = if wide { 1280.0 } else { 800.0 };
+            state.set_viewport(taffy::Size {
+                width: taffy::AvailableSpace::Definite(black_box(width)),
+                height: taffy::AvailableSpace::Definite(800.0),
+            });
             state.commit();
             black_box(state.doc.root_element_id());
         })
     });
 }
 
+/// Measures the dirty-subtree path after toggling one item attribute. The
+/// changed item, its descendants, and following sibling subtrees can be
+/// restyled without selector/cascade work for the rest of the document.
+fn bench_commit_incremental_restyle_after_data_state_toggle(c: &mut Criterion) {
+    let (mut state, target) = setup_committed_runtime_for_toggle();
+    let mut active = false;
+
+    c.bench_function(
+        "commit_incremental_restyle_after_data_state_toggle_120x6",
+        |b| {
+            b.iter(|| {
+                active = !active;
+                state
+                    .set_attribute(
+                        black_box(target),
+                        "data-state".to_string(),
+                        if active {
+                            "active".to_string()
+                        } else {
+                            "inactive".to_string()
+                        },
+                    )
+                    .unwrap();
+                state.commit();
+                black_box(state.doc.root_element_id());
+            })
+        },
+    );
+}
+
 criterion_group!(
     benches,
     bench_commit_cold_complex_selectors,
     bench_resolve_style_cold_complex_selectors,
-    bench_commit_full_restyle_after_data_state_toggle,
+    bench_commit_full_restyle_after_viewport_change,
+    bench_commit_incremental_restyle_after_data_state_toggle,
 );
 criterion_main!(benches);
