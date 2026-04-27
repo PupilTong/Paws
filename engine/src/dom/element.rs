@@ -113,6 +113,9 @@ pub struct PawsElement<S: RenderState = ()> {
     /// Dirty descendants flag for Stylo.
     pub(crate) dirty_descendants: AtomicBool,
 
+    /// Whether this node's own style must be recomputed.
+    pub(crate) style_dirty: AtomicBool,
+
     // ── Layout data (persists across passes for CSS Containment) ──
     /// Cached Taffy style, recomputed when `computed_values` change.
     pub(crate) taffy_style: Option<taffy::Style>,
@@ -176,6 +179,7 @@ impl<S: RenderState> PawsElement<S> {
             guard,
             element_state: ElementState::empty(),
             dirty_descendants: AtomicBool::new(true),
+            style_dirty: AtomicBool::new(true),
 
             taffy_style: None,
             layout_cache: taffy::Cache::new(),
@@ -285,6 +289,18 @@ impl<S: RenderState> PawsElement<S> {
         self.dirty_descendants.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn set_style_dirty(&self) {
+        self.style_dirty.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn unset_style_dirty(&self) {
+        self.style_dirty.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn needs_style_recalc(&self) -> bool {
+        self.style_dirty.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn mark_ancestors_dirty(&self) {
         let mut current_id = self.parent;
         while let Some(parent_id) = current_id {
@@ -297,8 +313,7 @@ impl<S: RenderState> PawsElement<S> {
     }
 
     pub(crate) fn mark_dirty_and_ancestors(&self) {
-        // Marking `self` is for future subtree invalidation; today the root
-        // dirty bit is still the only lazy style resolution gate.
+        self.set_style_dirty();
         self.set_dirty_descendants();
         self.mark_ancestors_dirty();
     }
