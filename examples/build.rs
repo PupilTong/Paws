@@ -16,6 +16,7 @@ const EXAMPLES: &[&str] = &[
     "example-commit-full",
     "example-namespace",
     "example-event-dispatch",
+    "example-click-host",
     "example-img-element",
     "example-inline-image",
 ];

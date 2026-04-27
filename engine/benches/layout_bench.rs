@@ -8,7 +8,7 @@ use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Crit
 use taffy::prelude::TaffyMaxContent;
 
 use engine::layout::compute_layout_in_place;
-use engine::{paint_order_children, NodeId, RuntimeState};
+use engine::{hit_test_at_point, paint_order_children, NodeId, RuntimeState};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -328,6 +328,160 @@ fn bench_shadow_slot_paint_order_100(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// 8. Hit-test — flex 50 children, hit the last one (worst-case z-order walk)
+// ---------------------------------------------------------------------------
+fn bench_hit_test_flex_50_hit_last(c: &mut Criterion) {
+    let (mut state, root) = setup_flex_tree(50);
+    compute_layout_in_place(
+        &mut state.doc,
+        NodeId::from(root as u64),
+        taffy::Size::MAX_CONTENT,
+    );
+    // Pull the last child's centre out of the laid-out tree so the bench
+    // doesn't need to know flex sizing rules; the point is whatever the
+    // engine actually placed.
+    let last_child_id = *state
+        .doc
+        .get_node(NodeId::from(root as u64))
+        .unwrap()
+        .children
+        .last()
+        .unwrap();
+    let layout = state.doc.get_node(last_child_id).unwrap().layout();
+    let centre = taffy::Point {
+        x: layout.location.x + layout.size.width / 2.0,
+        y: layout.location.y + layout.size.height / 2.0,
+    };
+
+    c.bench_function("hit_test_flex_50_hit_last", |b| {
+        b.iter(|| {
+            black_box(hit_test_at_point(
+                black_box(&state.doc),
+                black_box(NodeId::from(root as u64)),
+                black_box(centre),
+            ))
+        })
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 9. Hit-test — flex 50, point outside root (early-rejection path)
+// ---------------------------------------------------------------------------
+fn bench_hit_test_flex_50_miss(c: &mut Criterion) {
+    let (mut state, root) = setup_flex_tree(50);
+    compute_layout_in_place(
+        &mut state.doc,
+        NodeId::from(root as u64),
+        taffy::Size::MAX_CONTENT,
+    );
+    let miss = taffy::Point {
+        x: 100_000.0,
+        y: 100_000.0,
+    };
+
+    c.bench_function("hit_test_flex_50_miss", |b| {
+        b.iter(|| {
+            black_box(hit_test_at_point(
+                black_box(&state.doc),
+                black_box(NodeId::from(root as u64)),
+                black_box(miss),
+            ))
+        })
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 10. Hit-test — 50-deep nested chain, point in the innermost leaf
+// ---------------------------------------------------------------------------
+fn bench_hit_test_deep_50_leaf(c: &mut Criterion) {
+    let (mut state, root) = setup_deep_tree(50);
+    compute_layout_in_place(
+        &mut state.doc,
+        NodeId::from(root as u64),
+        taffy::Size::MAX_CONTENT,
+    );
+    // Walk to the innermost descendant.
+    let mut leaf = NodeId::from(root as u64);
+    while let Some(child) = state
+        .doc
+        .get_node(leaf)
+        .and_then(|n| n.children.first())
+        .copied()
+    {
+        leaf = child;
+    }
+    let layout = state.doc.get_node(leaf).unwrap().layout();
+    // Layout location is parent-relative; recompute absolute via the
+    // ancestor chain so the bench feeds in a viewport-space point.
+    let mut absolute = layout.location;
+    let mut walker = state.doc.get_node(leaf).and_then(|n| n.parent);
+    while let Some(parent_id) = walker {
+        if let Some(parent_node) = state.doc.get_node(parent_id) {
+            absolute.x += parent_node.layout().location.x;
+            absolute.y += parent_node.layout().location.y;
+            walker = parent_node.parent;
+        } else {
+            break;
+        }
+    }
+    let centre = taffy::Point {
+        x: absolute.x + layout.size.width / 2.0,
+        y: absolute.y + layout.size.height / 2.0,
+    };
+
+    c.bench_function("hit_test_deep_50_leaf", |b| {
+        b.iter(|| {
+            black_box(hit_test_at_point(
+                black_box(&state.doc),
+                black_box(NodeId::from(root as u64)),
+                black_box(centre),
+            ))
+        })
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 11. Hit-test — shadow-slot fixture, point inside a slotted child
+// ---------------------------------------------------------------------------
+fn bench_hit_test_shadow_slot_100_assigned(c: &mut Criterion) {
+    let (mut state, root, host) = setup_shadow_slot_tree(100);
+    compute_layout_in_place(
+        &mut state.doc,
+        NodeId::from(root as u64),
+        taffy::Size::MAX_CONTENT,
+    );
+    // The first slotted light-DOM child is the first entry in the host's
+    // children list (only light-DOM children live there directly).
+    let first_assigned = *state
+        .doc
+        .get_node(NodeId::from(host as u64))
+        .unwrap()
+        .children
+        .first()
+        .unwrap();
+    let host_layout = state
+        .doc
+        .get_node(NodeId::from(host as u64))
+        .unwrap()
+        .layout();
+    let child_layout = state.doc.get_node(first_assigned).unwrap().layout();
+    let centre = taffy::Point {
+        x: host_layout.location.x + child_layout.location.x + child_layout.size.width / 2.0,
+        y: host_layout.location.y + child_layout.location.y + child_layout.size.height / 2.0,
+    };
+
+    c.bench_function("hit_test_shadow_slot_100_assigned", |b| {
+        b.iter(|| {
+            black_box(hit_test_at_point(
+                black_box(&state.doc),
+                black_box(NodeId::from(root as u64)),
+                black_box(centre),
+            ))
+        })
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Criterion groups & main
 // ---------------------------------------------------------------------------
 criterion_group!(
@@ -339,5 +493,9 @@ criterion_group!(
     bench_mixed_layout,
     bench_shadow_slot_layout_100,
     bench_shadow_slot_paint_order_100,
+    bench_hit_test_flex_50_hit_last,
+    bench_hit_test_flex_50_miss,
+    bench_hit_test_deep_50_leaf,
+    bench_hit_test_shadow_slot_100_assigned,
 );
 criterion_main!(benches);

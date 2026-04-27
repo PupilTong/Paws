@@ -243,7 +243,7 @@ fn register_events_interface<R: EngineRenderer>(
 /// [`PawsGuest::call_invoke_listener`] (via the captured
 /// [`HostData::invoke_listener`]`TypedFunc`) instead of a raw
 /// `wasmtime::Func` fetched from a `Caller`.
-fn dispatch_event_component<R: EngineRenderer>(
+pub(crate) fn dispatch_event_component<R: EngineRenderer>(
     caller: &mut StoreContextMut<'_, HostData<R>>,
     target_id: i32,
     event_type: Atom,
@@ -526,6 +526,59 @@ fn run_component_inner<R: EngineRenderer>(
     wasm_bytes: &[u8],
     with_coverage: bool,
 ) -> WasmCoverageResult<R> {
+    let (mut store, instance) = instantiate_and_run_component(engine, state, wasm_bytes)?;
+
+    if !with_coverage {
+        return Ok((store.into_data().into_state(), None));
+    }
+
+    // Coverage data is recorded into the guest's WASM memory by minicov,
+    // so we must extract it from the same instance that just ran `run`.
+    // `dump-coverage` is part of the `paws-guest` world and the
+    // `paws_main!` macro emits a default empty implementation when the
+    // guest lacks the `coverage` Cargo feature; an empty Vec surfaces
+    // here as `Ok(None)` so callers can skip the lcov step without
+    // branching on length.
+    let result: wasmtime::Result<Option<Vec<u8>>> = (|| {
+        let dump_coverage =
+            instance.get_typed_func::<(), (Vec<u8>,)>(&mut store, "dump-coverage")?;
+        let (bytes,) = dump_coverage.call(&mut store, ())?;
+        if bytes.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(bytes))
+        }
+    })();
+
+    match result {
+        Ok(coverage) => Ok((store.into_data().into_state(), coverage)),
+        Err(error) => Err(Box::new(RunWasmError {
+            state: store.into_data().into_state(),
+            error,
+        })),
+    }
+}
+
+/// Result of [`instantiate_and_run_component`]: a live wasmtime store
+/// holding the component instance plus the typed handle to the
+/// component's `Instance`. Returned as a named alias because clippy's
+/// `type_complexity` rule otherwise flags the bare tuple.
+type ComponentRunHandle<R> =
+    Result<(Store<HostData<R>>, wasmtime::component::Instance), Box<RunWasmError<R>>>;
+
+/// Shared component-instantiation path. Compiles `wasm_bytes`, builds a
+/// fresh [`Store`] holding [`HostData`], instantiates the component
+/// against the standard linker, captures the `invoke-listener` typed
+/// handle on `HostData`, and calls the guest's `run` export.
+///
+/// Returns the live store + the wasmtime `Instance` so the caller can
+/// either drop both (one-shot path) or keep the store alive for further
+/// host-driven dispatches via [`ComponentSession`].
+fn instantiate_and_run_component<R: EngineRenderer>(
+    engine: &WasmEngine,
+    state: RuntimeState<R>,
+    wasm_bytes: &[u8],
+) -> ComponentRunHandle<R> {
     let component = match Component::new(engine, wasm_bytes) {
         Ok(c) => c,
         Err(error) => return Err(Box::new(RunWasmError { state, error })),
@@ -536,12 +589,7 @@ fn run_component_inner<R: EngineRenderer>(
     };
     let mut store = Store::new(engine, HostData::new(state));
 
-    let result = (|| -> wasmtime::Result<Option<Vec<u8>>> {
-        // Instantiate the component directly against the linker so we
-        // can pull typed handles to `invoke-listener` (needed by the
-        // custom dispatch-event wiring for three-phase guest re-entry)
-        // and `run` (the entry point). `PawsGuest::instantiate` would
-        // give us `run` only, so we skip the convenience wrapper.
+    let result = (|| -> wasmtime::Result<wasmtime::component::Instance> {
         let instance = linker.instantiate(&mut store, &component)?;
         let invoke = instance.get_typed_func::<(i32,), ()>(&mut store, "invoke-listener")?;
         let run = instance.get_typed_func::<(), (i32,)>(&mut store, "run")?;
@@ -549,31 +597,123 @@ fn run_component_inner<R: EngineRenderer>(
         store.data_mut().invoke_listener = Some(invoke);
 
         let (_exit_code,) = run.call(&mut store, ())?;
-
-        // Only probe `dump-coverage` when the caller actually wants
-        // profraw bytes. Keeping the lookup out of the hot path avoids
-        // a per-run export-lookup cost for the common case, and stays
-        // tolerant of handcrafted / minimal guests that might not
-        // implement the export even though the WIT world declares it.
-        if with_coverage {
-            let dump_coverage =
-                instance.get_typed_func::<(), (Vec<u8>,)>(&mut store, "dump-coverage")?;
-            let (bytes,) = dump_coverage.call(&mut store, ())?;
-            if bytes.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(bytes))
-            }
-        } else {
-            Ok(None)
-        }
+        Ok(instance)
     })();
 
     match result {
-        Ok(coverage) => Ok((store.into_data().into_state(), coverage)),
+        Ok(instance) => Ok((store, instance)),
         Err(error) => Err(Box::new(RunWasmError {
             state: store.into_data().into_state(),
             error,
         })),
+    }
+}
+
+/// Outcome of a host-driven pointer-event dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchOutcome {
+    /// Hit-test found no element under the point; no listener fired.
+    NoHit,
+    /// Hit-test resolved a target and the dispatch path ran. `target` is
+    /// the slab id that received the event; `default_prevented` reflects
+    /// whether any listener called `preventDefault` on a cancelable event.
+    Dispatched {
+        target: i32,
+        default_prevented: bool,
+    },
+}
+
+/// A live component-model guest paired with its wasmtime [`Store`].
+///
+/// Created by [`ComponentSession::start`] (which compiles, instantiates,
+/// and calls `run` once). After `run` returns the session stays alive so
+/// the host can dispatch further events into the guest — most importantly
+/// pointer events from the renderer, but any
+/// [`dispatch_event`](Self::dispatch_event_at) flow that needs to re-enter
+/// the guest's `invoke-listener` export.
+///
+/// The store is moved into the session and recovered by
+/// [`ComponentSession::into_state`], which mirrors how
+/// [`run_component`] always returns the [`RuntimeState`] even on error.
+pub struct ComponentSession<R: EngineRenderer> {
+    store: Store<HostData<R>>,
+}
+
+impl<R: EngineRenderer> ComponentSession<R> {
+    /// Compiles `wasm_bytes`, instantiates the component, captures the
+    /// `invoke-listener` typed-func handle, and calls the guest's `run`
+    /// export. Returns a session that owns the live store and can
+    /// dispatch further events.
+    ///
+    /// Like [`run_component`], the [`RuntimeState`] is always recovered
+    /// on error and returned inside [`RunWasmError`].
+    pub fn start(
+        engine: &WasmEngine,
+        state: RuntimeState<R>,
+        wasm_bytes: &[u8],
+    ) -> Result<Self, Box<RunWasmError<R>>> {
+        let (store, _instance) = instantiate_and_run_component(engine, state, wasm_bytes)?;
+        Ok(Self { store })
+    }
+
+    /// Hit-tests the point `(x, y)` against the document. If an element
+    /// is hit, dispatches `event_type` to it through the existing W3C
+    /// three-phase path with `bubbles=true, cancelable=true,
+    /// composed=true` (W3C `click` defaults). On miss, returns
+    /// [`DispatchOutcome::NoHit`] without firing anything.
+    ///
+    /// Coordinates are in the same space as `final_layout.location` of
+    /// top-level elements — for the iOS renderer that's CSS-pixel
+    /// viewport space, top-left origin.
+    pub fn dispatch_pointer_event(
+        &mut self,
+        x: f32,
+        y: f32,
+        event_type: &str,
+    ) -> wasmtime::Result<DispatchOutcome> {
+        let root = taffy::NodeId::from(0u64);
+        let point = taffy::Point { x, y };
+        let hit = engine::hit_test_at_point(&self.store.data().state.doc, root, point);
+        let Some(target) = hit else {
+            return Ok(DispatchOutcome::NoHit);
+        };
+
+        let mut caller = self.store.as_context_mut();
+        let target_id = u64::from(target) as i32;
+        let code = dispatch_event_component::<R>(
+            &mut caller,
+            target_id,
+            Atom::from(event_type),
+            true,
+            true,
+            true,
+        )?;
+
+        // `dispatch_event_component` returns 1 when the event was not
+        // canceled, 0 when canceled, negative when an error code was
+        // recorded on `RuntimeState::last_error`.
+        Ok(DispatchOutcome::Dispatched {
+            target: target_id,
+            default_prevented: code == 0,
+        })
+    }
+
+    /// Borrows the underlying [`RuntimeState`] for read-only inspection.
+    /// Useful for tests and renderer code that needs to look up DOM /
+    /// layout state between dispatches without consuming the session.
+    pub fn state(&self) -> &RuntimeState<R> {
+        &self.store.data().state
+    }
+
+    /// Mutable borrow of the underlying [`RuntimeState`].
+    pub fn state_mut(&mut self) -> &mut RuntimeState<R> {
+        &mut self.store.data_mut().state
+    }
+
+    /// Drops the session, recovering the [`RuntimeState`] so the caller
+    /// can release any backend-owned resources (UIKit views, GL buffers,
+    /// …) attached to it.
+    pub fn into_state(self) -> RuntimeState<R> {
+        self.store.into_data().into_state()
     }
 }

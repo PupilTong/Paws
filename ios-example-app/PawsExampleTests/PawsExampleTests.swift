@@ -389,6 +389,123 @@ final class PawsExampleTests: XCTestCase {
         wait(for: [expectation], timeout: 30.0)
     }
 
+    // MARK: - Pointer-event / click dispatch tests
+
+    /// `PawsRendererView` exposes exactly one tap gesture — the one
+    /// installed in init so taps inside the rendered DOM route through
+    /// `paws_renderer_dispatch_click`. A regression here means the
+    /// counter example silently stops responding to taps.
+    func testTapGestureIsAttached() {
+        let view = PawsRendererView(
+            baseURL: "about:blank",
+            frame: CGRect(x: 0, y: 0, width: 300, height: 300)
+        )
+        let recognizers = view.gestureRecognizers ?? []
+        let taps = recognizers.compactMap { $0 as? UITapGestureRecognizer }
+        XCTAssertEqual(
+            taps.count, 1,
+            "PawsRendererView should attach exactly one UITapGestureRecognizer"
+        )
+        XCTAssertEqual(
+            taps.first?.cancelsTouchesInView, false,
+            "tap recognizer should not swallow touches so other gestures still work"
+        )
+    }
+
+    /// `dispatchClick` rejects non-finite coordinates without crashing
+    /// (mirrors the FFI's input validation).
+    func testDispatchClickRejectsNonFiniteCoordinates() {
+        let view = PawsRendererView(
+            baseURL: "about:blank",
+            frame: CGRect(x: 0, y: 0, width: 300, height: 300)
+        )
+        XCTAssertFalse(view.renderer.dispatchClick(at: CGPoint(x: CGFloat.nan, y: 0)))
+        XCTAssertFalse(view.renderer.dispatchClick(at: CGPoint(x: 0, y: CGFloat.infinity)))
+    }
+
+    /// Loads the real `example_yew_counter` wasm, waits for its initial
+    /// commit (counter renders "0"), drives a click via the same
+    /// `dispatchClick` path that `UITapGestureRecognizer` uses, and
+    /// asserts the post-click commit shows "1".
+    ///
+    /// This is the headline regression guard for the host → hit-test →
+    /// guest → render pipeline. The counter was the canonical example
+    /// the user reported as broken; if this test passes, tapping the
+    /// "+" button on the simulator increments the displayed value.
+    func testYewCounterIncrementsOnTap() {
+        guard let url = Bundle.main.url(
+            forResource: "example_yew_counter",
+            withExtension: "wasm",
+            subdirectory: "Examples"
+        ) else {
+            XCTFail("example_yew_counter.wasm not bundled in PawsExample/Examples — Xcode build phase did not run?")
+            return
+        }
+        guard let wasmData = try? Data(contentsOf: url) else {
+            XCTFail("failed to read example_yew_counter.wasm")
+            return
+        }
+
+        let view = PawsRendererView(
+            baseURL: "about:blank",
+            frame: CGRect(x: 0, y: 0, width: 375, height: 667)
+        )
+        let firstCommit = expectation(description: "initial commit (counter shows 0)")
+        let secondCommit = expectation(description: "post-click commit (counter shows 1)")
+        var commitCount = 0
+        view.renderer.executor.onExecute = {
+            commitCount += 1
+            if commitCount == 1 { firstCommit.fulfill() }
+            if commitCount == 2 { secondCommit.fulfill() }
+        }
+
+        view.renderer.postRunWasm(wasmData)
+        wait(for: [firstCommit], timeout: 30.0)
+
+        let initialTexts = collectTextLayerStrings(in: view)
+        XCTAssertTrue(
+            initialTexts.contains("0"),
+            "counter should render '0' on first commit, got: \(initialTexts)"
+        )
+
+        // Yew counter layout: outer div has padding 24px, then a button
+        // with padding 16px 32px and font-size 28px. The button sits in
+        // the top-left corner of the counter div, so a tap at (60, 60)
+        // (well inside the button's content box) lands on the button.
+        view.renderer.dispatchClick(at: CGPoint(x: 60, y: 60))
+        wait(for: [secondCommit], timeout: 30.0)
+
+        let updatedTexts = collectTextLayerStrings(in: view)
+        XCTAssertTrue(
+            updatedTexts.contains("1"),
+            "counter should render '1' after tapping the '+' button, got: \(updatedTexts)"
+        )
+    }
+
+    /// Recursively walks the view + layer tree under `root`, returning
+    /// every `CATextLayer.string` it finds. Used to assert on rendered
+    /// text without depending on the exact subview/sublayer hierarchy
+    /// the renderer happens to produce.
+    private func collectTextLayerStrings(in root: UIView) -> [String] {
+        var collected: [String] = []
+        func walkLayer(_ layer: CALayer) {
+            if let text = layer as? CATextLayer, let value = text.string as? String {
+                collected.append(value)
+            }
+            for sub in layer.sublayers ?? [] {
+                walkLayer(sub)
+            }
+        }
+        func walkView(_ view: UIView) {
+            walkLayer(view.layer)
+            for sub in view.subviews {
+                walkView(sub)
+            }
+        }
+        walkView(root)
+        return collected
+    }
+
     func testScreenshotTextNodeHasContent() {
         let view = PawsRendererView(
             baseURL: "about:blank",
