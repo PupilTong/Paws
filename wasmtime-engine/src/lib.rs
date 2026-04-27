@@ -6,7 +6,8 @@ pub mod host_impl;
 pub mod wasm;
 
 pub use component_linker::{
-    build_component_linker, run_component, run_component_with_coverage, ComponentSession,
+    build_component_linker, run_component, run_component_precompiled,
+    run_component_precompiled_with_coverage, run_component_with_coverage, ComponentSession,
     DispatchOutcome,
 };
 pub use wasm::{build_linker, read_cstr};
@@ -101,6 +102,19 @@ pub fn run_wasm_with_engine<R: EngineRenderer>(
     run_wasm_inner(engine, state, wasm_bytes, func_name, RunMode::Plain).map(|(state, _)| state)
 }
 
+/// Runs a precompiled [`wasmtime::Module`] against a [`RuntimeState`].
+///
+/// This skips [`Module::new`] entirely. The module's own
+/// [`wasmtime::Engine`] is used for the linker and store, so callers can
+/// compile once and instantiate the same artifact repeatedly.
+pub fn run_wasm_module<R: EngineRenderer>(
+    state: RuntimeState<R>,
+    module: &Module,
+    func_name: &str,
+) -> Result<RuntimeState<R>, Box<RunWasmError<R>>> {
+    run_wasm_module_inner(state, module, func_name, RunMode::Plain).map(|(state, _)| state)
+}
+
 /// Like [`run_wasm`] but also extracts LLVM coverage data from the guest.
 ///
 /// If the guest was compiled with the `coverage` feature (minicov), the
@@ -131,6 +145,16 @@ pub fn run_wasm_with_coverage_and_engine<R: EngineRenderer>(
     run_wasm_inner(engine, state, wasm_bytes, func_name, RunMode::WithCoverage)
 }
 
+/// Like [`run_wasm_module`] but also extracts LLVM coverage data from
+/// the guest when the guest exports Paws coverage hooks.
+pub fn run_wasm_module_with_coverage<R: EngineRenderer>(
+    state: RuntimeState<R>,
+    module: &Module,
+    func_name: &str,
+) -> WasmCoverageResult<R> {
+    run_wasm_module_inner(state, module, func_name, RunMode::WithCoverage)
+}
+
 /// Shared implementation for [`run_wasm`] / [`run_wasm_with_coverage`] and
 /// their engine-reusing variants.
 fn run_wasm_inner<R: EngineRenderer>(
@@ -146,11 +170,22 @@ fn run_wasm_inner<R: EngineRenderer>(
             return Err(Box::new(RunWasmError { state, error: e }));
         }
     };
+    run_wasm_module_inner(state, &module, func_name, mode)
+}
+
+/// Shared implementation for already-compiled core WASM modules.
+fn run_wasm_module_inner<R: EngineRenderer>(
+    state: RuntimeState<R>,
+    module: &Module,
+    func_name: &str,
+    mode: RunMode,
+) -> WasmCoverageResult<R> {
+    let engine = module.engine();
     let linker = build_linker(engine);
     let mut store = Store::new(engine, state);
 
     let result = (|| -> wasmtime::Result<(wasmtime::Instance, ())> {
-        let instance = linker.instantiate(&mut store, &module)?;
+        let instance = linker.instantiate(&mut store, module)?;
 
         // WASI reactor modules (cdylib with std) export `_initialize` to
         // set up the C runtime (TLS, constructors, etc.). Call it before
@@ -218,7 +253,7 @@ fn extract_guest_coverage<R: EngineRenderer>(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_linker, create_engine, run_wasm};
+    use super::{build_linker, create_engine, run_wasm, run_wasm_module};
     use engine::{HostErrorCode, RuntimeState};
     use wasmtime::{Engine as WasmEngine, Module, Store};
 
@@ -242,6 +277,28 @@ mod tests {
         let node = state.doc.get_node(engine::NodeId::from(id as u64)).unwrap();
         assert_eq!(node.layout().size.width, 120.0);
         assert_eq!(node.layout().size.height, 80.0);
+    }
+
+    #[test]
+    fn precompiled_module_runs_multiple_states() {
+        let wasm_engine = create_engine();
+        let module = Module::new(
+            &wasm_engine,
+            r#"
+            (module
+                (func (export "run") (result i32)
+                    (i32.const 0)
+                )
+            )
+            "#,
+        )
+        .expect("compile wasm module once");
+
+        for url in ["https://first.example", "https://second.example"] {
+            let state = RuntimeState::new(url.to_string());
+            let state = run_wasm_module(state, &module, "run").expect("precompiled run");
+            assert!(state.doc.root_element_id().is_none());
+        }
     }
 
     #[test]

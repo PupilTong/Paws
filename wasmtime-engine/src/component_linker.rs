@@ -502,6 +502,19 @@ pub fn run_component<R: EngineRenderer>(
     run_component_inner(engine, state, wasm_bytes, false).map(|(state, _)| state)
 }
 
+/// Runs a precompiled WASM [`Component`] against a [`RuntimeState`].
+///
+/// This skips [`Component::new`] entirely. The component's own
+/// [`wasmtime::Engine`] is used to build the linker and store, so callers
+/// can compile once and instantiate the same component repeatedly.
+pub fn run_component_precompiled<R: EngineRenderer>(
+    state: RuntimeState<R>,
+    component: &Component,
+    _func_name: &str,
+) -> Result<RuntimeState<R>, Box<RunWasmError<R>>> {
+    run_component_precompiled_inner(state, component, false).map(|(state, _)| state)
+}
+
 /// Compiles a WASM component, runs its `run` export, and extracts
 /// profraw coverage bytes via the component's `dump-coverage` export.
 ///
@@ -520,14 +533,43 @@ pub fn run_component_with_coverage<R: EngineRenderer>(
     run_component_inner(engine, state, wasm_bytes, true)
 }
 
+/// Like [`run_component_precompiled`] but also extracts profraw coverage
+/// bytes from the component's `dump-coverage` export.
+pub fn run_component_precompiled_with_coverage<R: EngineRenderer>(
+    state: RuntimeState<R>,
+    component: &Component,
+    _func_name: &str,
+) -> WasmCoverageResult<R> {
+    run_component_precompiled_inner(state, component, true)
+}
+
 fn run_component_inner<R: EngineRenderer>(
     engine: &WasmEngine,
     state: RuntimeState<R>,
     wasm_bytes: &[u8],
     with_coverage: bool,
 ) -> WasmCoverageResult<R> {
-    let (mut store, instance) = instantiate_and_run_component(engine, state, wasm_bytes)?;
+    let component = match Component::new(engine, wasm_bytes) {
+        Ok(c) => c,
+        Err(error) => return Err(Box::new(RunWasmError { state, error })),
+    };
+    run_component_precompiled_inner(state, &component, with_coverage)
+}
 
+fn run_component_precompiled_inner<R: EngineRenderer>(
+    state: RuntimeState<R>,
+    component: &Component,
+    with_coverage: bool,
+) -> WasmCoverageResult<R> {
+    let (store, instance) = instantiate_and_run_precompiled_component(state, component)?;
+    finish_component_run(store, instance, with_coverage)
+}
+
+fn finish_component_run<R: EngineRenderer>(
+    mut store: Store<HostData<R>>,
+    instance: wasmtime::component::Instance,
+    with_coverage: bool,
+) -> WasmCoverageResult<R> {
     if !with_coverage {
         return Ok((store.into_data().into_state(), None));
     }
@@ -583,6 +625,14 @@ fn instantiate_and_run_component<R: EngineRenderer>(
         Ok(c) => c,
         Err(error) => return Err(Box::new(RunWasmError { state, error })),
     };
+    instantiate_and_run_precompiled_component(state, &component)
+}
+
+fn instantiate_and_run_precompiled_component<R: EngineRenderer>(
+    state: RuntimeState<R>,
+    component: &Component,
+) -> ComponentRunHandle<R> {
+    let engine = component.engine();
     let linker = match build_component_linker::<R>(engine) {
         Ok(l) => l,
         Err(error) => return Err(Box::new(RunWasmError { state, error })),
@@ -590,7 +640,7 @@ fn instantiate_and_run_component<R: EngineRenderer>(
     let mut store = Store::new(engine, HostData::new(state));
 
     let result = (|| -> wasmtime::Result<wasmtime::component::Instance> {
-        let instance = linker.instantiate(&mut store, &component)?;
+        let instance = linker.instantiate(&mut store, component)?;
         let invoke = instance.get_typed_func::<(i32,), ()>(&mut store, "invoke-listener")?;
         let run = instance.get_typed_func::<(), (i32,)>(&mut store, "run")?;
 
@@ -715,5 +765,43 @@ impl<R: EngineRenderer> ComponentSession<R> {
     /// …) attached to it.
     pub fn into_state(self) -> RuntimeState<R> {
         self.store.into_data().into_state()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{run_component_precompiled, Component};
+    use crate::create_engine;
+    use engine::RuntimeState;
+
+    const NOOP_COMPONENT: &str = r#"
+        (component
+            (core module $m
+                (func (export "run") (result i32)
+                    (i32.const 0)
+                )
+                (func (export "invoke-listener") (param i32))
+            )
+            (core instance $i (instantiate $m))
+            (func (export "run") (result s32)
+                (canon lift (core func $i "run"))
+            )
+            (func (export "invoke-listener") (param "callback-id" s32)
+                (canon lift (core func $i "invoke-listener"))
+            )
+        )
+    "#;
+
+    #[test]
+    fn precompiled_component_runs_multiple_states() {
+        let engine = create_engine();
+        let component = Component::new(&engine, NOOP_COMPONENT).expect("compile component once");
+
+        for url in ["https://first.example", "https://second.example"] {
+            let state = RuntimeState::new(url.to_string());
+            let state =
+                run_component_precompiled(state, &component, "run").expect("precompiled run");
+            assert!(state.doc.root_element_id().is_none());
+        }
     }
 }

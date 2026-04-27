@@ -1,10 +1,11 @@
 //! The [`Runner`] and [`RunnerBuilder`] types.
 
 use engine::{EngineRenderer, RuntimeState};
-use wasmtime::Engine as WasmEngine;
+use fnv::FnvHashMap;
+use wasmtime::{component::Component, Engine as WasmEngine, Module};
 use wasmtime_engine::{
-    create_engine, run_component, run_component_with_coverage, run_wasm_with_coverage_and_engine,
-    run_wasm_with_engine,
+    create_engine, run_component_precompiled, run_component_precompiled_with_coverage,
+    run_wasm_module, run_wasm_module_with_coverage,
 };
 
 use crate::error::RunnerError;
@@ -64,6 +65,8 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
         Runner {
             state: Some(state),
             engine: create_engine(),
+            module_cache: FnvHashMap::default(),
+            component_cache: FnvHashMap::default(),
         }
     }
 }
@@ -79,6 +82,10 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
 /// `run*` call. Creating the engine is expensive (JIT setup); reuse makes
 /// back-to-back runs cheap.
 ///
+/// Compiled core modules and components are cached by exact guest bytes
+/// alongside the engine. Re-running byte-identical guests skips
+/// [`Module::new`] / [`Component::new`] and only pays instantiation cost.
+///
 /// The state is held in an `Option` so it can be temporarily moved out
 /// during a `run_wasm` call (which takes the state by value). The `Option`
 /// is always `Some` between method calls — methods that read the state
@@ -86,6 +93,8 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
 pub struct Runner<R: EngineRenderer = ()> {
     state: Option<RuntimeState<R>>,
     engine: WasmEngine,
+    module_cache: FnvHashMap<Vec<u8>, Module>,
+    component_cache: FnvHashMap<Vec<u8>, Component>,
 }
 
 impl Runner<()> {
@@ -102,8 +111,9 @@ impl<R: EngineRenderer> Runner<R> {
     /// The underlying [`RuntimeState`] is recovered even on failure, so
     /// [`state`](Self::state) / [`state_mut`](Self::state_mut) remain usable.
     pub fn run(&mut self, wasm: &[u8], func: &str) -> Result<(), RunnerError> {
+        let module = self.cached_module(wasm)?;
         let state = self.take_state();
-        match run_wasm_with_engine(&self.engine, state, wasm, func) {
+        match run_wasm_module(state, &module, func) {
             Ok(state) => {
                 self.state = Some(state);
                 Ok(())
@@ -132,8 +142,9 @@ impl<R: EngineRenderer> Runner<R> {
             func, "run",
             "component-model guests only export `run`; got `{func}`",
         );
+        let component = self.cached_component(wasm)?;
         let state = self.take_state();
-        match run_component(&self.engine, state, wasm, func) {
+        match run_component_precompiled(state, &component, func) {
             Ok(state) => {
                 self.state = Some(state);
                 Ok(())
@@ -160,8 +171,9 @@ impl<R: EngineRenderer> Runner<R> {
         wasm: &[u8],
         func: &str,
     ) -> Result<Option<Vec<u8>>, RunnerError> {
+        let module = self.cached_module(wasm)?;
         let state = self.take_state();
-        match run_wasm_with_coverage_and_engine(&self.engine, state, wasm, func) {
+        match run_wasm_module_with_coverage(state, &module, func) {
             Ok((state, profraw)) => {
                 self.state = Some(state);
                 Ok(profraw)
@@ -192,8 +204,9 @@ impl<R: EngineRenderer> Runner<R> {
             func, "run",
             "component-model guests only export `run`; got `{func}`",
         );
+        let component = self.cached_component(wasm)?;
         let state = self.take_state();
-        match run_component_with_coverage(&self.engine, state, wasm, func) {
+        match run_component_precompiled_with_coverage(state, &component, func) {
             Ok((state, profraw)) => {
                 self.state = Some(state);
                 Ok(profraw)
@@ -204,6 +217,34 @@ impl<R: EngineRenderer> Runner<R> {
                 Err(RunnerError { error: boxed.error })
             }
         }
+    }
+
+    /// Returns a cached core module for `wasm`, compiling and storing it
+    /// on first use. Compilation happens before moving out `state`, so a
+    /// bad guest leaves the runner fully usable.
+    fn cached_module(&mut self, wasm: &[u8]) -> Result<Module, RunnerError> {
+        if let Some(module) = self.module_cache.get(wasm) {
+            return Ok(module.clone());
+        }
+
+        let module = Module::new(&self.engine, wasm).map_err(|error| RunnerError { error })?;
+        self.module_cache.insert(wasm.to_vec(), module.clone());
+        Ok(module)
+    }
+
+    /// Returns a cached component for `wasm`, compiling and storing it
+    /// on first use. Compilation happens before moving out `state`, so a
+    /// bad guest leaves the runner fully usable.
+    fn cached_component(&mut self, wasm: &[u8]) -> Result<Component, RunnerError> {
+        if let Some(component) = self.component_cache.get(wasm) {
+            return Ok(component.clone());
+        }
+
+        let component =
+            Component::new(&self.engine, wasm).map_err(|error| RunnerError { error })?;
+        self.component_cache
+            .insert(wasm.to_vec(), component.clone());
+        Ok(component)
     }
 
     /// Moves the `RuntimeState` out of the runner for a by-value wasmtime
@@ -282,6 +323,27 @@ mod tests {
             (func (export "run") (result i32)
                 (drop (call $commit))
                 (i32.const 0)
+            )
+        )
+    "#;
+
+    /// A minimal component with the exports that the component runner
+    /// expects. It has no Paws imports because it only exercises the host
+    /// instantiation and entry-point path.
+    const NOOP_COMPONENT_WAT: &str = r#"
+        (component
+            (core module $m
+                (func (export "run") (result i32)
+                    (i32.const 0)
+                )
+                (func (export "invoke-listener") (param i32))
+            )
+            (core instance $i (instantiate $m))
+            (func (export "run") (result s32)
+                (canon lift (core func $i "run"))
+            )
+            (func (export "invoke-listener") (param "callback-id" s32)
+                (canon lift (core func $i "invoke-listener"))
             )
         )
     "#;
@@ -430,14 +492,34 @@ mod tests {
     }
 
     #[test]
-    fn engine_is_reused_across_runs() {
-        // Two sequential runs on the same Runner shouldn't allocate a new
-        // wasmtime::Engine — this is hard to assert directly, but running
-        // many wasms in succession works and completes without leaks.
+    fn engine_and_core_module_are_reused_across_runs() {
         let mut runner = Runner::builder().build();
         let wat_bytes = wat::parse_str(NOOP_WAT).expect("valid wat");
         for _ in 0..5 {
             runner.run(&wat_bytes, "run").expect("each run succeeds");
         }
+        assert_eq!(runner.module_cache.len(), 1);
+    }
+
+    #[test]
+    fn component_is_cached_across_runs() {
+        let mut runner = Runner::builder().build();
+        let component_bytes = wat::parse_str(NOOP_COMPONENT_WAT).expect("valid component wat");
+        for _ in 0..5 {
+            runner
+                .run_component(&component_bytes, "run")
+                .expect("each component run succeeds");
+        }
+        assert_eq!(runner.component_cache.len(), 1);
+    }
+
+    #[test]
+    fn invalid_core_module_does_not_move_out_state() {
+        let mut runner = Runner::builder().build();
+        let before = runner.viewport();
+
+        let _err = runner.run(b"not wasm", "run").expect_err("invalid wasm");
+        assert_eq!(runner.viewport(), before);
+        assert!(runner.module_cache.is_empty());
     }
 }

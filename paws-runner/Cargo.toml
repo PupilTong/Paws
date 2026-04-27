@@ -9,9 +9,10 @@ path = "src/lib.rs"
 
 [dependencies]
 engine = { path = "../engine" }
+fnv = "1.0.7"
 wasmtime-engine = { path = "../wasmtime-engine" }
 taffy = { version = "0.9.2", default-features = false }
-wasmtime = { version = "43", default-features = false, features = ["runtime", "std"] }
+wasmtime = { version = "43", default-features = false, features = ["component-model", "cranelift", "pulley", "runtime", "std", "wat"] }
 
 [dev-dependencies]
 wat = "1"
