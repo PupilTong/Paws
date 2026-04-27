@@ -155,6 +155,27 @@ public final class PawsRendererInstance {
         precondition(result == 0, "postRunWat failed with error code \(result)")
     }
 
+    /// Posts a host-driven click at `point` (in CSS-pixel /
+    /// PawsRendererView-local coordinate space) to the engine thread.
+    ///
+    /// The engine runs hit-test against the laid-out document, finds
+    /// the deepest element under the point, and dispatches a synthetic
+    /// `click` event through the W3C three-phase pipeline. Listeners
+    /// registered by the guest fire on the engine thread and any DOM
+    /// mutations they make are committed back through the existing op
+    /// pipeline.
+    ///
+    /// Returns `true` if the click was queued, `false` if the engine
+    /// thread is no longer accepting messages (shut down) or
+    /// `postRunWasm` has not been called yet. Non-finite coordinates
+    /// also return `false`.
+    @discardableResult
+    public func dispatchClick(at point: CGPoint) -> Bool {
+        guard point.x.isFinite, point.y.isFinite else { return false }
+        let result = paws_renderer_dispatch_click(handle, Float(point.x), Float(point.y))
+        return result == 0
+    }
+
 }
 
 #endif
