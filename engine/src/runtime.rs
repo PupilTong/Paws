@@ -351,8 +351,13 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
     /// invalidated. The change takes effect on the next `commit()` or lazy
     /// computed-style read.
     pub fn set_viewport(&mut self, viewport: taffy::Size<taffy::AvailableSpace>) -> bool {
+        let layout_viewport_changed = self.viewport != viewport;
         self.viewport = viewport;
-        self.sync_style_viewport()
+        let css_viewport_changed = self.sync_style_viewport();
+        if layout_viewport_changed {
+            self.doc.mark_full_layout_invalidation();
+        }
+        css_viewport_changed
     }
 
     /// Clears accumulated style-profiling counters.
@@ -372,6 +377,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
     fn sync_style_viewport(&mut self) -> bool {
         if self.style_context.set_viewport(self.viewport) {
             self.doc.mark_root_dirty();
+            self.doc.mark_full_layout_invalidation();
             true
         } else {
             false
@@ -503,6 +509,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
         let added_sheet = self.doc.stylesheets.last().unwrap();
         self.style_context.add_stylesheet(added_sheet);
         self.doc.mark_root_dirty();
+        self.doc.mark_full_layout_invalidation();
     }
 
     /// Adds a pre-parsed stylesheet from rkyv-encoded IR bytes.
@@ -1090,6 +1097,7 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
 
         // Mark the shadow root and ancestors dirty for re-resolution
         shadow_root_mut.mark_dirty_and_ancestors();
+        self.doc.mark_full_layout_invalidation();
 
         Ok(())
     }
@@ -3905,7 +3913,7 @@ mod tests {
     }
 
     #[test]
-    fn test_post_commit_invalidation_computed_style_read_clears_layout_cache() {
+    fn test_post_commit_invalidation_lazy_style_read_updates_next_layout() {
         let mut state = RuntimeState::new("https://example.com".to_string());
         let div = state.create_element("div".to_string());
         state.append_element(0, div).unwrap();
@@ -3939,6 +3947,56 @@ mod tests {
 
         state.commit();
         assert_layout_size(&state, div, 90.0, 30.0);
+    }
+
+    #[test]
+    fn test_post_commit_invalidation_descendant_style_change_updates_ancestor_layout() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("div".to_string());
+        state.append_element(0, parent).unwrap();
+        state.append_element(parent, child).unwrap();
+        state
+            .set_attribute(parent, "class".to_string(), "parent".to_string())
+            .unwrap();
+        state
+            .set_attribute(child, "class".to_string(), "child".to_string())
+            .unwrap();
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            .parent {
+                display: block;
+                width: 100px;
+            }
+
+            .child {
+                display: block;
+                width: 20px;
+                height: 10px;
+            }
+
+            .child.tall {
+                height: 60px;
+            }
+        "#
+        ));
+
+        state.commit();
+        assert_layout_size(&state, parent, 100.0, 10.0);
+        assert_layout_size(&state, child, 20.0, 10.0);
+
+        state
+            .set_attribute(child, "class".to_string(), "child tall".to_string())
+            .unwrap();
+        let map = state.computed_style_map(child).unwrap();
+        let height = map
+            .get("height", &mut state.doc, &state.style_context)
+            .expect("computed height after class change");
+        assert_computed_contains(&height, "60");
+
+        state.commit();
+        assert_layout_size(&state, parent, 100.0, 60.0);
+        assert_layout_size(&state, child, 20.0, 60.0);
     }
 
     #[test]
