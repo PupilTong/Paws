@@ -5,7 +5,10 @@ pub mod component_linker;
 pub mod host_impl;
 pub mod wasm;
 
-pub use component_linker::{build_component_linker, run_component, run_component_with_coverage};
+pub use component_linker::{
+    build_component_linker, run_component, run_component_with_coverage, ComponentSession,
+    DispatchOutcome,
+};
 pub use wasm::{build_linker, read_cstr};
 
 use engine::{EngineRenderer, RuntimeState};
@@ -3107,5 +3110,107 @@ mod tests {
             .expect("get run");
         let result = run.call(&mut store, ()).expect("run");
         assert_eq!(result, HostErrorCode::InvalidEventTarget.as_i32());
+    }
+
+    // ── ComponentSession + dispatch_pointer_event integration ────────
+    //
+    // Exercises the live-session flow end-to-end: compile a real
+    // component (`example-click-host`), call `start` (which runs
+    // `run()` once), then drive a click via hit-test from the host
+    // side. Validates that the captured `invoke-listener` typed-func
+    // re-enters the guest correctly *after* `run` has already returned
+    // — the property the iOS thread depends on for pointer-driven
+    // dispatch.
+
+    use crate::ComponentSession;
+    use crate::DispatchOutcome;
+
+    #[test]
+    fn component_session_dispatch_pointer_event_runs_listener() {
+        let engine = create_engine();
+        let wasm_path = paws_examples::example_wasm_path("example_click_host");
+        let wasm_bytes = std::fs::read(wasm_path).expect("read example-click-host wasm");
+
+        let state = RuntimeState::with_definite_viewport(
+            "https://test.paws".to_string(),
+            (),
+            (),
+            375.0,
+            667.0,
+        );
+
+        let mut session = ComponentSession::start(&engine, state, &wasm_bytes)
+            .unwrap_or_else(|e| panic!("ComponentSession::start failed: {}", e.error));
+
+        // The button's id is 2 (id 1 is the wrapper that hosts the
+        // button — see example-click-host). Confirm before the click
+        // that the data-clicked attribute is absent.
+        let button_id = engine::NodeId::from(2u64);
+        assert!(
+            session
+                .state()
+                .doc
+                .get_node(button_id)
+                .and_then(|n| n.attribute("data-clicked"))
+                .is_none(),
+            "data-clicked attribute should not exist before the click"
+        );
+
+        // (50, 30) sits inside the button (10..210 × 10..54).
+        let outcome = session
+            .dispatch_pointer_event(50.0, 30.0, "click")
+            .expect("dispatch_pointer_event");
+
+        match outcome {
+            DispatchOutcome::Dispatched {
+                target,
+                default_prevented,
+            } => {
+                assert_eq!(target, 2, "hit-test should resolve the button (id 2)");
+                assert!(!default_prevented, "no listener calls preventDefault");
+            }
+            DispatchOutcome::NoHit => panic!("expected a hit on the button"),
+        }
+
+        // The on_click handler ran: data-clicked is now "true".
+        let attr = session
+            .state()
+            .doc
+            .get_node(button_id)
+            .expect("button still in tree")
+            .attribute("data-clicked")
+            .map(str::to_string);
+        assert_eq!(
+            attr.as_deref(),
+            Some("true"),
+            "guest listener should have set data-clicked='true'"
+        );
+    }
+
+    #[test]
+    fn component_session_dispatch_pointer_event_no_hit_returns_nohit() {
+        let engine = create_engine();
+        let wasm_path = paws_examples::example_wasm_path("example_click_host");
+        let wasm_bytes = std::fs::read(wasm_path).expect("read example-click-host wasm");
+
+        let state = RuntimeState::with_definite_viewport(
+            "https://test.paws".to_string(),
+            (),
+            (),
+            375.0,
+            667.0,
+        );
+        let mut session = ComponentSession::start(&engine, state, &wasm_bytes)
+            .unwrap_or_else(|e| panic!("ComponentSession::start failed: {}", e.error));
+
+        // Way outside the document — no element should be hit.
+        let outcome = session
+            .dispatch_pointer_event(100_000.0, 100_000.0, "click")
+            .expect("dispatch_pointer_event");
+        assert!(
+            matches!(outcome, DispatchOutcome::NoHit),
+            "expected NoHit, got {:?}",
+            outcome
+        );
     }
 }

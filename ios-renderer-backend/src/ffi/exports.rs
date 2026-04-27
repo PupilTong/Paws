@@ -163,6 +163,39 @@ pub extern "C" fn paws_renderer_post_run_wasm(
     }
 }
 
+/// Posts a click event at viewport-space coordinates `(x, y)` to the
+/// engine thread.
+///
+/// Coordinates are in CSS pixels with a top-left origin — the same space
+/// the engine uses for laid-out element rects. Swift typically passes
+/// `gestureRecognizer.location(in: pawsRendererView)` here.
+///
+/// Internally the engine thread runs hit-test against the laid-out
+/// document, finds the deepest element whose box contains the point,
+/// and re-enters the guest's `invoke-listener` with a synthetic `click`
+/// event going through the W3C three-phase dispatch path.
+///
+/// Returns `0` on success, [`RendererError::InvalidHandle`] for a null
+/// renderer or non-finite coordinates, or [`RendererError::EngineFailed`]
+/// if the engine thread has already exited (or
+/// [`paws_renderer_post_run_wasm`] has not been called yet).
+///
+/// # Safety
+///
+/// `renderer` must be a valid pointer returned by `paws_renderer_create`.
+#[no_mangle]
+pub extern "C" fn paws_renderer_dispatch_click(renderer: *mut PawsRenderer, x: f32, y: f32) -> i32 {
+    let renderer = get_renderer!(renderer);
+    if !x.is_finite() || !y.is_finite() {
+        return RendererError::InvalidHandle.as_i32();
+    }
+    if renderer.engine.post_click(x, y) {
+        0
+    } else {
+        RendererError::EngineFailed.as_i32()
+    }
+}
+
 /// Starts the rendering pipeline using WAT (WebAssembly Text) source.
 ///
 /// Compiles the WAT text to WASM bytes and runs the module. This is a
@@ -718,5 +751,161 @@ mod tests {
             "decoded image bytes should start with the PNG signature, got {:02x?}",
             &blob[..blob.len().min(8)]
         );
+    }
+
+    /// Headline regression guard for the host-driven click pipeline.
+    ///
+    /// Loads `example-click-host`, waits for its initial commit (a button
+    /// with a distinctive blue background), posts a click via
+    /// `paws_renderer_dispatch_click` at a point inside the button's
+    /// laid-out rect, and then waits for the listener's post-click
+    /// commit. After teardown the captured op stream must contain
+    /// **two** `SetBgColor` slots — one for the original button (blue,
+    /// `#0A84FF`), one for the marker span the listener appended (green,
+    /// `#30D158`). Two `SetBgColor` ops is the minimal evidence the
+    /// hit-test resolved the button, the engine re-entered the guest's
+    /// `invoke-listener`, and the commit flowed back through the
+    /// renderer.
+    #[test]
+    fn test_click_dispatches_to_button_via_ffi() {
+        use crate::ops::{OpTag, SLOT_SIZE};
+        use std::sync::{Condvar, Mutex};
+        use std::time::Duration;
+
+        struct ClickHostState {
+            ops: Mutex<Vec<u8>>,
+            commit_count: Mutex<usize>,
+            cond: Condvar,
+        }
+        extern "C" fn collect(
+            ops_ptr: *const u8,
+            ops_len: usize,
+            _strings_ptr: *const u8,
+            _strings_len: usize,
+            ctx: *mut c_void,
+        ) {
+            // SAFETY: ctx outlives the engine thread (kept alive in the
+            // test via Arc until paws_renderer_destroy joins).
+            let state = unsafe { &*(ctx as *const ClickHostState) };
+            if ops_len > 0 {
+                // SAFETY: ops_ptr is valid for ops_len bytes per the
+                // completion contract; we copy before returning.
+                let bytes = unsafe { std::slice::from_raw_parts(ops_ptr, ops_len) };
+                state.ops.lock().unwrap().extend_from_slice(bytes);
+            }
+            *state.commit_count.lock().unwrap() += 1;
+            state.cond.notify_all();
+        }
+
+        let state = std::sync::Arc::new(ClickHostState {
+            ops: Mutex::new(Vec::new()),
+            commit_count: Mutex::new(0),
+            cond: Condvar::new(),
+        });
+        let ctx_ptr = std::sync::Arc::as_ptr(&state) as *mut c_void;
+
+        let wasm_path = paws_examples::example_wasm_path("example_click_host");
+        let wasm_bytes = std::fs::read(wasm_path).unwrap();
+
+        let url = CString::new("https://test.paws").unwrap();
+        let renderer = paws_renderer_create(url.as_ptr(), collect, ctx_ptr);
+        assert!(!renderer.is_null());
+        assert_eq!(paws_renderer_set_viewport(renderer, 375.0, 667.0), 0);
+
+        let func = CString::new("run").unwrap();
+        assert_eq!(
+            paws_renderer_post_run_wasm(
+                renderer,
+                wasm_bytes.as_ptr(),
+                wasm_bytes.len(),
+                func.as_ptr(),
+            ),
+            0
+        );
+
+        // Wait for the initial commit. `run()` calls `commit()` once
+        // before returning; the engine thread will then sit on its
+        // message channel waiting for our click.
+        {
+            let mut count = state.commit_count.lock().unwrap();
+            while *count < 1 {
+                let result = state
+                    .cond
+                    .wait_timeout(count, Duration::from_secs(10))
+                    .unwrap();
+                count = result.0;
+                if result.1.timed_out() {
+                    panic!("timed out waiting for initial commit");
+                }
+            }
+        }
+
+        // Click inside the button's box. Button is at (10, 10), 200×44,
+        // so (50, 30) is well inside.
+        let click_result = paws_renderer_dispatch_click(renderer, 50.0, 30.0);
+        assert_eq!(
+            click_result, 0,
+            "paws_renderer_dispatch_click should succeed"
+        );
+
+        // Wait for the post-click commit (the listener calls commit()
+        // after appending the marker span).
+        {
+            let mut count = state.commit_count.lock().unwrap();
+            while *count < 2 {
+                let result = state
+                    .cond
+                    .wait_timeout(count, Duration::from_secs(10))
+                    .unwrap();
+                count = result.0;
+                if result.1.timed_out() {
+                    panic!("timed out waiting for post-click commit");
+                }
+            }
+        }
+
+        paws_renderer_destroy(renderer);
+
+        let ops = state.ops.lock().unwrap();
+        let bg_color_count = ops
+            .chunks(SLOT_SIZE)
+            .filter(|slot| slot[0] == OpTag::SetBgColor as u8)
+            .count();
+        assert!(
+            bg_color_count >= 2,
+            "expected ≥2 SetBgColor ops (button + marker), got {bg_color_count}; \
+             listener side effect did not reach the renderer"
+        );
+    }
+
+    /// `paws_renderer_dispatch_click` returns `InvalidHandle` on null
+    /// renderer or non-finite coordinates; `EngineFailed` when the
+    /// engine has not been started yet.
+    #[test]
+    fn test_dispatch_click_invalid_inputs() {
+        // Null renderer.
+        assert_eq!(
+            paws_renderer_dispatch_click(std::ptr::null_mut(), 1.0, 2.0),
+            RendererError::InvalidHandle.as_i32()
+        );
+
+        // Non-finite coordinates on a valid renderer.
+        let renderer = create_test_renderer();
+        assert_eq!(
+            paws_renderer_dispatch_click(renderer, f32::NAN, 0.0),
+            RendererError::InvalidHandle.as_i32()
+        );
+        assert_eq!(
+            paws_renderer_dispatch_click(renderer, 0.0, f32::INFINITY),
+            RendererError::InvalidHandle.as_i32()
+        );
+
+        // Engine never started.
+        assert_eq!(
+            paws_renderer_dispatch_click(renderer, 5.0, 5.0),
+            RendererError::EngineFailed.as_i32()
+        );
+
+        paws_renderer_destroy(renderer);
     }
 }

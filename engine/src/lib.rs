@@ -2,12 +2,14 @@
 
 pub mod dom;
 pub mod events;
+pub mod hit_test;
 pub mod io;
 pub mod layout;
 pub mod resources;
 mod runtime;
 mod style;
 
+pub use hit_test::hit_test_at_point;
 pub use io::{
     decode_data_url, EngineIOController, HttpMethod, HttpRequest, HttpResponse, IoError, IoLayer,
     IoResult, UrlScheme, WebSocketHandle, WsFrame,

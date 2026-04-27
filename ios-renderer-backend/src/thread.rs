@@ -3,24 +3,47 @@
 //! [`EngineHandle`] owns a single background thread that mirrors the browser
 //! WebWorker model:
 //!
-//! 1. Swift calls [`EngineHandle::post_run_wasm`] **once** to start the rendering
-//!    pipeline. The thread spawns, creates a fresh [`RuntimeState`], and calls
-//!    into the WASM module.
-//! 2. The WASM module runs **its own internal event loop** — it never returns
-//!    until the engine is stopped. All DOM mutations, commits, and op deliveries
-//!    are driven from inside that loop via host functions.
-//! 3. When [`EngineHandle`] is dropped, the thread is joined (waiting for WASM
-//!    to finish, which happens when WASM's loop exits or the process tears down).
+//! 1. Swift calls [`EngineHandle::post_run_wasm`] **once** to start the
+//!    rendering pipeline. The thread spawns, creates a fresh
+//!    [`RuntimeState`], compiles the guest, and calls `run`.
+//! 2. After `run` returns the thread keeps the wasmtime [`Store`] alive
+//!    inside a [`ComponentSession`] and waits on a control channel for
+//!    further messages — pointer events from the host land here as
+//!    [`EngineMessage::Click`] entries and re-enter the guest's
+//!    `invoke-listener` via
+//!    [`ComponentSession::dispatch_pointer_event`]. This is what powers
+//!    the FFI [`paws_renderer_dispatch_click`].
+//! 3. When [`EngineHandle`] is dropped, an [`EngineMessage::Stop`] is
+//!    posted and the thread is joined; all engine state (Store, DOM,
+//!    ViewTree) drops with it, releasing the associated UIKit sub-tree.
 //!
-//! There is intentionally **no Rust-side event loop**: a single `post_run_wasm`
-//! call is the only entry point. Calling it again on the same handle is a no-op
-//! — a new engine must be created to run a different WASM module.
+//! Core (non-component) WAT modules used by the unit tests skip the
+//! session and run through the legacy one-shot
+//! [`run_wasm_with_engine`](wasmtime_engine::run_wasm_with_engine) path —
+//! they have no `invoke-listener` export to re-enter, so the message
+//! loop simply sits and waits for `Stop`.
 
+use std::sync::mpsc;
 use std::thread;
 
 use engine::{EngineRenderer, RuntimeState};
 
 use crate::renderer::{IosNodeState, ViewTree};
+
+/// Control messages sent from FFI threads to the engine thread.
+///
+/// Pointer events arrive as [`EngineMessage::Click`]; renderer teardown
+/// posts an [`EngineMessage::Stop`] so the thread can exit its message
+/// loop and drop the wasmtime [`Store`] cleanly.
+pub(crate) enum EngineMessage {
+    /// Host-driven click at a viewport-space (CSS-pixel, top-left origin)
+    /// point. The engine thread runs hit-test against the laid-out
+    /// document and dispatches `click` to the resolved element.
+    Click { x: f32, y: f32 },
+    /// Tear-down signal posted by [`EngineHandle::Drop`]. Causes the
+    /// message loop to exit and the session to drop.
+    Stop,
+}
 
 /// Completion callback type.
 ///
@@ -76,6 +99,10 @@ pub(crate) struct EngineHandle {
     /// block elements fill the available width instead of collapsing to
     /// their intrinsic content size.
     viewport: Option<(f32, f32)>,
+    /// Sender half of the engine-thread control channel. `Some` once
+    /// [`post_run_wasm`](Self::post_run_wasm) has been called. Pointer
+    /// events posted via FFI land here.
+    msg_sender: Option<mpsc::Sender<EngineMessage>>,
 }
 
 impl EngineHandle {
@@ -96,6 +123,17 @@ impl EngineHandle {
                 context,
             },
             viewport: None,
+            msg_sender: None,
+        }
+    }
+
+    /// Posts a click message to the engine thread. Returns `true` if the
+    /// message was queued, `false` if the engine has not been started or
+    /// the thread already exited (receiver hung up).
+    pub(crate) fn post_click(&self, x: f32, y: f32) -> bool {
+        match &self.msg_sender {
+            Some(sender) => sender.send(EngineMessage::Click { x, y }).is_ok(),
+            None => false,
         }
     }
 
@@ -150,23 +188,32 @@ impl EngineHandle {
             context: self.callback.context,
         };
         let viewport = self.viewport;
+        let (sender, receiver) = mpsc::channel::<EngineMessage>();
 
         let handle = thread::Builder::new()
             .name("paws-engine".to_string())
-            .spawn(move || run_engine(base_url, wasm_bytes, func_name, cb, viewport))
+            .spawn(move || run_engine(base_url, wasm_bytes, func_name, cb, viewport, receiver))
             .expect("failed to spawn paws-engine thread");
 
         self.handle = Some(handle);
+        self.msg_sender = Some(sender);
         true
     }
 }
 
 impl Drop for EngineHandle {
-    /// Joins the engine thread, waiting for the WASM module to exit.
+    /// Posts [`EngineMessage::Stop`] and joins the engine thread.
     ///
-    /// All engine state (`RuntimeState`, `ViewTree`, `OpBuffer`) drops when the
-    /// thread exits, releasing the associated UIKit sub-tree.
+    /// All engine state (`RuntimeState`, `ViewTree`, `OpBuffer`,
+    /// wasmtime [`Store`]) drops when the thread exits, releasing the
+    /// associated UIKit sub-tree.
     fn drop(&mut self) {
+        if let Some(sender) = self.msg_sender.take() {
+            // If the engine thread already exited (e.g. WAT path with a
+            // failure inside the run), send returns Err; that's fine —
+            // the join below will still wait for the thread to finish.
+            let _ = sender.send(EngineMessage::Stop);
+        }
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -212,17 +259,25 @@ impl EngineRenderer for IosRenderer {
 
 /// Entry point for the background engine thread.
 ///
-/// Creates engine state with an [`IosRenderer`] and runs the WASM module.
-/// The WASM drives its own internal event loop — all commits and op delivery
-/// happen from within via the `__commit` host function, which calls
-/// [`EngineRenderer::on_commit`]. When the WASM loop exits, all engine state
-/// drops and the UIKit sub-tree is released.
+/// Creates engine state with an [`IosRenderer`], compiles + runs the
+/// guest, then enters a small message loop: every
+/// [`EngineMessage::Click`] is hit-tested and dispatched as a `click`
+/// event back into the guest's `invoke-listener`. The WASM module drives
+/// its initial DOM build inside `run`; subsequent mutations happen
+/// inside listener callbacks fired here.
+///
+/// The thread exits when an [`EngineMessage::Stop`] is received (posted
+/// by [`EngineHandle::Drop`]) or when the channel is hung up. All engine
+/// state — including the wasmtime [`Store`] held by the
+/// [`ComponentSession`] — drops at that point, releasing the UIKit
+/// sub-tree.
 fn run_engine(
     base_url: String,
     wasm_bytes: Vec<u8>,
     func_name: String,
     cb: SendCallback,
     viewport: Option<(f32, f32)>,
+    receiver: mpsc::Receiver<EngineMessage>,
 ) {
     let renderer = IosRenderer {
         view_tree: ViewTree::new(),
@@ -240,18 +295,53 @@ fn run_engine(
     // the existing FFI also accepts hand-written core modules (the WAT
     // path used by `paws_renderer_post_run_wat` and the thread unit
     // tests). Dispatch on the wasm header layer byte so both survive:
-    // core (layer 0) → `run_wasm`, component (layer 1) → `run_component`.
+    // core (layer 0) → `run_wasm` (one-shot, no pointer dispatch),
+    // component (layer 1) → `ComponentSession::start` (live, supports
+    // pointer dispatch).
     let engine = wasmtime_engine::create_engine();
-    let result = if is_wasm_component(&wasm_bytes) {
-        wasmtime_engine::run_component(&engine, state, &wasm_bytes, &func_name).map(|_| ())
+
+    if is_wasm_component(&wasm_bytes) {
+        let mut session =
+            match wasmtime_engine::ComponentSession::start(&engine, state, &wasm_bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("paws iOS engine: guest failed to start: {}", e.error);
+                    return;
+                }
+            };
+
+        // Pump messages until the channel closes or a Stop is received.
+        // Each Click runs hit-test → dispatch_event_component, which
+        // re-enters the guest's `invoke-listener`. Any DOM mutation +
+        // commit() inside the listener flows ops through
+        // IosRenderer::on_commit on this same thread.
+        for msg in receiver {
+            match msg {
+                EngineMessage::Click { x, y } => {
+                    if let Err(e) = session.dispatch_pointer_event(x, y, "click") {
+                        eprintln!("paws iOS engine: pointer dispatch failed: {e}");
+                    }
+                }
+                EngineMessage::Stop => break,
+            }
+        }
+        // Session drops here; Store + RuntimeState + UIKit nodes go with it.
     } else {
-        wasmtime_engine::run_wasm_with_engine(&engine, state, &wasm_bytes, &func_name).map(|_| ())
-    };
-    if let Err(e) = result {
-        // Log and drop — the iOS backend has no error channel back to
-        // Swift today. Surfacing the failure in stderr at least makes
-        // simulator runs diagnosable instead of silently empty.
-        eprintln!("paws iOS engine: guest failed to run: {}", e.error);
+        // Core-module path — used only by WAT unit tests. There is no
+        // `invoke-listener` export, so pointer events are silently
+        // ignored. Run the module once, then sit on the channel until
+        // Stop / hang-up so the join contract still holds.
+        if let Err(e) =
+            wasmtime_engine::run_wasm_with_engine(&engine, state, &wasm_bytes, &func_name)
+        {
+            eprintln!("paws iOS engine: guest failed to run: {}", e.error);
+            return;
+        }
+        for msg in receiver {
+            if matches!(msg, EngineMessage::Stop) {
+                break;
+            }
+        }
     }
 }
 
