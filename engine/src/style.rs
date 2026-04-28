@@ -4,6 +4,7 @@ use selectors::matching::{
     MatchingContext, MatchingForInvalidation, MatchingMode, NeedsSelectorFlags, QuirksMode,
     SelectorCaches,
 };
+use smallvec::SmallVec;
 use std::borrow::Cow;
 // The `stylo` crate publishes as `stylo` on crates.io but exposes `style` as its crate name.
 use style as stylo;
@@ -46,6 +47,7 @@ pub(crate) use sheet_cache::StylesheetCache;
 
 const DEFAULT_VIEWPORT_WIDTH: f32 = 800.0;
 const DEFAULT_VIEWPORT_HEIGHT: f32 = 600.0;
+const BLOOM_MEMSET_CLEAR_THRESHOLD: usize = 25;
 
 #[derive(Default)]
 pub(crate) struct StyleMatchingState {
@@ -58,17 +60,19 @@ impl StyleMatchingState {
         &mut self,
         doc: &Document<S>,
         node_id: taffy::NodeId,
+        element_depth: usize,
     ) {
-        self.ancestor_filter.rebuild_for_node(doc, node_id);
+        self.ancestor_filter
+            .insert_parents_recovering(doc, node_id, element_depth);
     }
 }
 
 #[derive(Default)]
 struct AncestorBloomFilter {
     filter: BloomFilter,
-    elements: Vec<PushedAncestor>,
-    pushed_hashes: Vec<u32>,
-    ancestor_path: Vec<taffy::NodeId>,
+    elements: SmallVec<[PushedAncestor; 16]>,
+    pushed_hashes: SmallVec<[u32; 64]>,
+    parents_to_insert: SmallVec<[taffy::NodeId; 16]>,
 }
 
 struct PushedAncestor {
@@ -81,30 +85,91 @@ impl AncestorBloomFilter {
         &self.filter
     }
 
+    fn insert_parents_recovering<S: RenderState>(
+        &mut self,
+        doc: &Document<S>,
+        node_id: taffy::NodeId,
+        element_depth: usize,
+    ) {
+        if self.elements.is_empty() {
+            self.rebuild_for_node(doc, node_id);
+            debug_assert_eq!(self.elements.len(), element_depth);
+            return;
+        }
+
+        let traversal_parent = match traversal_parent_id(doc, node_id) {
+            Some(parent) => parent,
+            None => {
+                self.clear_filter();
+                debug_assert_eq!(element_depth, 0);
+                return;
+            }
+        };
+
+        if self.current_parent() == Some(traversal_parent) {
+            debug_assert_eq!(self.elements.len(), element_depth);
+            return;
+        }
+
+        if element_depth == 0 {
+            self.clear_filter();
+            return;
+        }
+
+        let mut current_depth = self.elements.len() - 1;
+        while current_depth > element_depth - 1 {
+            self.pop()
+                .expect("ancestor bloom should contain pushed elements");
+            current_depth -= 1;
+        }
+
+        let mut common_parent = traversal_parent;
+        let mut common_parent_depth = element_depth - 1;
+        self.parents_to_insert.clear();
+
+        while common_parent_depth > current_depth {
+            self.parents_to_insert.push(common_parent);
+            common_parent = traversal_parent_id(doc, common_parent)
+                .expect("style depth should account for every traversal parent");
+            common_parent_depth -= 1;
+        }
+
+        while self.current_parent() != Some(common_parent) {
+            self.parents_to_insert.push(common_parent);
+            self.pop()
+                .expect("ancestor bloom should find common parent");
+            let Some(parent) = traversal_parent_id(doc, common_parent) else {
+                self.clear_filter();
+                break;
+            };
+            common_parent = parent;
+        }
+
+        for index in (0..self.parents_to_insert.len()).rev() {
+            let parent_id = self.parents_to_insert[index];
+            self.push(doc, parent_id);
+        }
+
+        debug_assert_eq!(self.elements.len(), element_depth);
+    }
+
     fn rebuild_for_node<S: RenderState>(&mut self, doc: &Document<S>, node_id: taffy::NodeId) {
-        self.ancestor_path.clear();
+        self.clear_filter();
+        self.parents_to_insert.clear();
         let mut current = traversal_parent_id(doc, node_id);
         while let Some(parent_id) = current {
-            self.ancestor_path.push(parent_id);
+            self.parents_to_insert.push(parent_id);
             current = traversal_parent_id(doc, parent_id);
         }
-        self.ancestor_path.reverse();
 
-        let common_len = self
-            .elements
-            .iter()
-            .zip(self.ancestor_path.iter())
-            .take_while(|(pushed, path_id)| pushed.id == **path_id)
-            .count();
-
-        while self.elements.len() > common_len {
-            self.pop();
-        }
-
-        for index in common_len..self.ancestor_path.len() {
-            let ancestor_id = self.ancestor_path[index];
+        for index in (0..self.parents_to_insert.len()).rev() {
+            let ancestor_id = self.parents_to_insert[index];
             self.push(doc, ancestor_id);
         }
+    }
+
+    fn current_parent(&self) -> Option<taffy::NodeId> {
+        self.elements.last().map(|ancestor| ancestor.id)
     }
 
     fn push<S: RenderState>(&mut self, doc: &Document<S>, node_id: taffy::NodeId) {
@@ -126,10 +191,8 @@ impl AncestorBloomFilter {
         });
     }
 
-    fn pop(&mut self) {
-        let Some(pushed) = self.elements.pop() else {
-            return;
-        };
+    fn pop(&mut self) -> Option<taffy::NodeId> {
+        let pushed = self.elements.pop()?;
 
         for _ in 0..pushed.num_hashes {
             let hash = self
@@ -137,6 +200,22 @@ impl AncestorBloomFilter {
                 .pop()
                 .expect("ancestor bloom hash stack should match pushed elements");
             self.filter.remove_hash(hash);
+        }
+
+        Some(pushed.id)
+    }
+
+    fn clear_filter(&mut self) {
+        self.elements.clear();
+
+        if self.pushed_hashes.len() > BLOOM_MEMSET_CLEAR_THRESHOLD {
+            self.filter.clear();
+            self.pushed_hashes.clear();
+        } else {
+            for hash in self.pushed_hashes.drain(..) {
+                self.filter.remove_hash(hash);
+            }
+            debug_assert!(self.filter.is_zeroed());
         }
     }
 }
