@@ -1,7 +1,7 @@
 //! The [`Runner`] and [`RunnerBuilder`] types.
 
 use engine::{EngineRenderer, RuntimeState};
-use fnv::FnvHashMap;
+use std::collections::HashMap;
 use wasmtime::{component::Component, Engine as WasmEngine, Module};
 use wasmtime_engine::{
     create_engine, run_component_precompiled, run_component_precompiled_with_coverage,
@@ -65,8 +65,8 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
         Runner {
             state: Some(state),
             engine: create_engine(),
-            module_cache: FnvHashMap::default(),
-            component_cache: FnvHashMap::default(),
+            module_cache: HashMap::new(),
+            component_cache: HashMap::new(),
         }
     }
 }
@@ -93,8 +93,8 @@ impl<R: EngineRenderer> RunnerBuilder<R> {
 pub struct Runner<R: EngineRenderer = ()> {
     state: Option<RuntimeState<R>>,
     engine: WasmEngine,
-    module_cache: FnvHashMap<Vec<u8>, Module>,
-    component_cache: FnvHashMap<Vec<u8>, Component>,
+    module_cache: HashMap<Vec<u8>, Module>,
+    component_cache: HashMap<Vec<u8>, Component>,
 }
 
 impl Runner<()> {
@@ -219,6 +219,16 @@ impl<R: EngineRenderer> Runner<R> {
         }
     }
 
+    /// Drops all cached compiled WASM artifacts.
+    ///
+    /// The runner's DOM/runtime state is unchanged. Long-lived hosts can
+    /// call this after a batch of guest executions to release compiled
+    /// module/component memory.
+    pub fn clear_artifact_cache(&mut self) {
+        self.module_cache.clear();
+        self.component_cache.clear();
+    }
+
     /// Returns a cached core module for `wasm`, compiling and storing it
     /// on first use. Compilation happens before moving out `state`, so a
     /// bad guest leaves the runner fully usable.
@@ -335,6 +345,32 @@ mod tests {
             (core module $m
                 (func (export "run") (result i32)
                     (i32.const 0)
+                )
+                (func (export "invoke-listener") (param i32))
+            )
+            (core instance $i (instantiate $m))
+            (func (export "run") (result s32)
+                (canon lift (core func $i "run"))
+            )
+            (func (export "invoke-listener") (param "callback-id" s32)
+                (canon lift (core func $i "invoke-listener"))
+            )
+        )
+    "#;
+
+    const ALT_NOOP_WAT: &str = r#"
+        (module
+            (func (export "run") (result i32)
+                (i32.const 0)
+            )
+        )
+    "#;
+
+    const ALT_NOOP_COMPONENT_WAT: &str = r#"
+        (component
+            (core module $m
+                (func (export "run") (result i32)
+                    (i32.const 1)
                 )
                 (func (export "invoke-listener") (param i32))
             )
@@ -502,6 +538,33 @@ mod tests {
     }
 
     #[test]
+    fn distinct_core_modules_get_distinct_cache_entries() {
+        let mut runner = Runner::builder().build();
+        let first = wat::parse_str(NOOP_WAT).expect("valid wat");
+        let second = wat::parse_str(ALT_NOOP_WAT).expect("valid wat");
+
+        runner.run(&first, "run").expect("first run succeeds");
+        runner.run(&second, "run").expect("second run succeeds");
+
+        assert_eq!(runner.module_cache.len(), 2);
+    }
+
+    #[test]
+    fn core_module_coverage_uses_cached_artifact() {
+        let mut runner = Runner::builder().build();
+        let wat_bytes = wat::parse_str(NOOP_WAT).expect("valid wat");
+        for _ in 0..2 {
+            assert_eq!(
+                runner
+                    .run_with_coverage(&wat_bytes, "run")
+                    .expect("coverage run succeeds"),
+                None
+            );
+        }
+        assert_eq!(runner.module_cache.len(), 1);
+    }
+
+    #[test]
     fn component_is_cached_across_runs() {
         let mut runner = Runner::builder().build();
         let component_bytes = wat::parse_str(NOOP_COMPONENT_WAT).expect("valid component wat");
@@ -514,6 +577,43 @@ mod tests {
     }
 
     #[test]
+    fn distinct_components_get_distinct_cache_entries() {
+        let mut runner = Runner::builder().build();
+        let first = wat::parse_str(NOOP_COMPONENT_WAT).expect("valid component wat");
+        let second = wat::parse_str(ALT_NOOP_COMPONENT_WAT).expect("valid component wat");
+
+        runner
+            .run_component(&first, "run")
+            .expect("first run succeeds");
+        runner
+            .run_component(&second, "run")
+            .expect("second run succeeds");
+
+        assert_eq!(runner.component_cache.len(), 2);
+    }
+
+    #[test]
+    fn clear_artifact_cache_drops_compiled_artifacts() {
+        let mut runner = Runner::builder().build();
+        let wat_bytes = wat::parse_str(NOOP_WAT).expect("valid wat");
+        let component_bytes = wat::parse_str(NOOP_COMPONENT_WAT).expect("valid component wat");
+
+        runner.run(&wat_bytes, "run").expect("core run succeeds");
+        runner
+            .run_component(&component_bytes, "run")
+            .expect("component run succeeds");
+        assert_eq!(runner.module_cache.len(), 1);
+        assert_eq!(runner.component_cache.len(), 1);
+
+        let viewport = runner.viewport();
+        runner.clear_artifact_cache();
+
+        assert_eq!(runner.viewport(), viewport);
+        assert!(runner.module_cache.is_empty());
+        assert!(runner.component_cache.is_empty());
+    }
+
+    #[test]
     fn invalid_core_module_does_not_move_out_state() {
         let mut runner = Runner::builder().build();
         let before = runner.viewport();
@@ -521,5 +621,17 @@ mod tests {
         let _err = runner.run(b"not wasm", "run").expect_err("invalid wasm");
         assert_eq!(runner.viewport(), before);
         assert!(runner.module_cache.is_empty());
+    }
+
+    #[test]
+    fn invalid_component_does_not_move_out_state() {
+        let mut runner = Runner::builder().build();
+        let before = runner.viewport();
+
+        let _err = runner
+            .run_component(b"not a component", "run")
+            .expect_err("invalid component");
+        assert_eq!(runner.viewport(), before);
+        assert!(runner.component_cache.is_empty());
     }
 }

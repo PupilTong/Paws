@@ -2124,7 +2124,6 @@ name = "paws-runner"
 version = "0.1.0"
 dependencies = [
  "engine",
- "fnv",
  "taffy",
  "wasmtime",
  "wasmtime-engine",
