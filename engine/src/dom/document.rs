@@ -1,6 +1,7 @@
 use crate::dom::element::{NodeFlags, NodeType, PawsElement, ShadowRootMode};
 use crate::layout::text::TextLayoutContext;
 use crate::runtime::RenderState;
+use fnv::FnvHashSet;
 use markup5ever::QualName;
 use slab::Slab;
 use std::borrow::Cow;
@@ -74,6 +75,14 @@ pub struct Document<S: RenderState = ()> {
     /// so the [`EngineRenderer`](crate::EngineRenderer) can emit release ops.
     /// Cleared after each commit.
     pub(crate) removed_render_states: Vec<(taffy::NodeId, S)>,
+
+    /// Nodes with direct layout inputs that changed outside style resolution,
+    /// such as child-list or flat-tree changes.
+    pending_layout_invalidations: FnvHashSet<taffy::NodeId>,
+
+    /// Whether a global style/layout change requires clearing every Taffy
+    /// cache after the next style resolution pass.
+    full_layout_invalidation_pending: bool,
 }
 
 impl<S: RenderState> Document<S> {
@@ -104,6 +113,8 @@ impl<S: RenderState> Document<S> {
             url,
             text_cx: TextLayoutContext::new(),
             removed_render_states: Vec::new(),
+            pending_layout_invalidations: FnvHashSet::default(),
+            full_layout_invalidation_pending: false,
         }
     }
 
@@ -140,6 +151,17 @@ impl<S: RenderState> Document<S> {
         if let Some(root) = self.get_node(self.root) {
             root.set_style_dirty();
             root.set_dirty_descendants();
+        }
+    }
+
+    pub(crate) fn mark_full_layout_invalidation(&mut self) {
+        self.full_layout_invalidation_pending = true;
+        self.pending_layout_invalidations.clear();
+    }
+
+    fn mark_layout_input_changed(&mut self, node_id: taffy::NodeId) {
+        if !self.full_layout_invalidation_pending {
+            self.pending_layout_invalidations.insert(node_id);
         }
     }
 
@@ -260,6 +282,7 @@ impl<S: RenderState> Document<S> {
             .expect("host validated above");
         host_mut.shadow_root_id = Some(shadow_root_id);
         host_mut.mark_dirty_and_ancestors();
+        self.mark_layout_input_changed(host_id);
 
         Ok(shadow_root_id)
     }
@@ -308,6 +331,7 @@ impl<S: RenderState> Document<S> {
             parent.mark_dirty_and_ancestors();
             parent_in_doc = parent.flags.contains(NodeFlags::IS_IN_DOCUMENT);
         }
+        self.mark_layout_input_changed(parent_id);
 
         // Set child's parent
         if let Some(child) = self.get_node_mut(child_id) {
@@ -372,6 +396,7 @@ impl<S: RenderState> Document<S> {
                 if let Some(pos) = parent.children.iter().position(|&id| id == node_id) {
                     parent.children.remove(pos);
                     parent.mark_dirty_and_ancestors();
+                    self.mark_layout_input_changed(parent_id);
                 }
             }
             if let Some(child) = self.get_node_mut(node_id) {
@@ -477,6 +502,7 @@ impl<S: RenderState> Document<S> {
             parent.children.insert(pos, new_child_id);
             parent.mark_dirty_and_ancestors();
         }
+        self.mark_layout_input_changed(parent_id);
 
         // Set new_child's parent
         if let Some(new_child) = self.get_node_mut(new_child_id) {
@@ -567,6 +593,7 @@ impl<S: RenderState> Document<S> {
             parent.mark_dirty_and_ancestors();
             parent_in_doc = parent.flags.contains(NodeFlags::IS_IN_DOCUMENT);
         }
+        self.mark_layout_input_changed(parent_id);
 
         // Set new_child's parent
         if let Some(child) = self.get_node_mut(new_child_id) {
@@ -711,22 +738,66 @@ impl<S: RenderState> Document<S> {
     /// Ensures computed styles are up-to-date for the document tree.
     ///
     /// Checks the root's dirty-descendants flag and resolves styles for dirty
-    /// subtrees. Layout caches are still cleared after any restyle because
-    /// layout invalidation is not yet incremental.
+    /// subtrees. After a restyle, clears only the layout caches for nodes whose
+    /// layout inputs changed and for ancestors that depend on those descendants.
     /// This is the lazy resolution entry point used by
     /// [`StylePropertyMapReadOnly`] read operations.
     pub(crate) fn ensure_styles_resolved(&mut self, style_context: &crate::style::StyleContext) {
-        if let Some(root) = self.get_node(self.root) {
-            if root.has_dirty_descendants() {
-                self.resolve_style(style_context);
-                self.clear_layout_caches();
-            }
+        let needs_style_resolution = self
+            .get_node(self.root)
+            .is_some_and(|root| root.has_dirty_descendants());
+
+        let layout_invalidations = if needs_style_resolution {
+            self.resolve_style(style_context)
+        } else {
+            Vec::new()
+        };
+
+        if needs_style_resolution
+            || self.full_layout_invalidation_pending
+            || !self.pending_layout_invalidations.is_empty()
+        {
+            self.invalidate_layout_caches_after_style_resolution(layout_invalidations);
         }
     }
 
-    fn clear_layout_caches(&mut self) {
+    fn invalidate_layout_caches_after_style_resolution(
+        &mut self,
+        layout_invalidations: Vec<taffy::NodeId>,
+    ) {
+        if std::mem::take(&mut self.full_layout_invalidation_pending) {
+            self.pending_layout_invalidations.clear();
+            self.clear_all_layout_caches();
+            return;
+        }
+
+        let mut invalidations = std::mem::take(&mut self.pending_layout_invalidations);
+        invalidations.extend(layout_invalidations);
+        self.clear_layout_caches_for_nodes(invalidations);
+    }
+
+    fn clear_all_layout_caches(&mut self) {
         for (_, node) in self.nodes.iter_mut() {
             node.layout_cache.clear();
+        }
+    }
+
+    fn clear_layout_caches_for_nodes(&mut self, node_ids: impl IntoIterator<Item = taffy::NodeId>) {
+        let mut visited = FnvHashSet::default();
+        for node_id in node_ids {
+            let mut current_id = Some(node_id);
+            while let Some(id) = current_id {
+                if !visited.insert(id) {
+                    break;
+                }
+                current_id = match self.get_node_mut(id) {
+                    Some(node) => {
+                        node.layout_cache.clear();
+                        node.parent
+                    }
+                    None => break,
+                };
+            }
         }
     }
 
@@ -734,8 +805,16 @@ impl<S: RenderState> Document<S> {
     ///
     /// Uses BFS traversal from the root to ensure parents are styled before
     /// children, which is required for CSS inheritance to work correctly.
-    pub fn resolve_style(&mut self, style_context: &crate::style::StyleContext) {
+    ///
+    /// Returns nodes whose direct layout inputs may have changed during the
+    /// pass. Callers that will run layout against existing Taffy caches should
+    /// clear those nodes and their layout ancestors before computing layout.
+    pub fn resolve_style(
+        &mut self,
+        style_context: &crate::style::StyleContext,
+    ) -> Vec<taffy::NodeId> {
         let resolve_started = crate::style::profiling::start_timer();
+        let mut layout_invalidations = Vec::new();
         let mut queue = std::collections::VecDeque::new();
         queue.push_back((self.root, false));
 
@@ -828,12 +907,20 @@ impl<S: RenderState> Document<S> {
                         is_flex_or_grid_item,
                     );
 
+                    let new_taffy_style = crate::style::to_taffy_style(&computed);
+                    let layout_input_changed = self
+                        .get_node(id)
+                        .is_none_or(|node| node.taffy_style.as_ref() != Some(&new_taffy_style));
+
                     if let Some(mut_node) = self.get_node_mut(id) {
-                        mut_node.taffy_style = Some(crate::style::to_taffy_style(&computed));
+                        mut_node.taffy_style = Some(new_taffy_style);
                         mut_node.computed_values = Some(computed);
                         mut_node.creates_stacking_context = is_stacking_context;
                         mut_node.unset_style_dirty();
                         mut_node.unset_dirty_descendants();
+                    }
+                    if layout_input_changed {
+                        layout_invalidations.push(id);
                     }
                 } else if let Some(node) = self.get_node(id) {
                     node.unset_style_dirty();
@@ -865,6 +952,7 @@ impl<S: RenderState> Document<S> {
                         mut_node.computed_values = parent_cv;
                         mut_node.unset_style_dirty();
                         mut_node.unset_dirty_descendants();
+                        layout_invalidations.push(id);
                     }
                 } else if let Some(node) = self.get_node(id) {
                     node.unset_style_dirty();
@@ -889,6 +977,7 @@ impl<S: RenderState> Document<S> {
         style_context
             .profiler
             .record_resolve_pass(crate::style::profiling::elapsed(resolve_started));
+        layout_invalidations
     }
 
     /// Returns the child list used by layout and rendering.
@@ -938,6 +1027,7 @@ impl<S: RenderState> Document<S> {
             Some(id) => id,
             None => return,
         };
+        let old_flat_children = self.flatten_shadow_children(shadow_root_id);
 
         // Collect all <slot> elements in the shadow tree (DFS, tree order).
         let mut slots = Vec::new();
@@ -1006,6 +1096,10 @@ impl<S: RenderState> Document<S> {
                 }
             }
             // If no matching slot, the child is unslotted (not rendered).
+        }
+
+        if self.flatten_shadow_children(shadow_root_id) != old_flat_children {
+            self.mark_layout_input_changed(host_id);
         }
     }
 }
