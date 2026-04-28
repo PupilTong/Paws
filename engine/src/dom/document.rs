@@ -816,9 +816,10 @@ impl<S: RenderState> Document<S> {
         let resolve_started = crate::style::profiling::start_timer();
         let mut layout_invalidations = Vec::new();
         let mut queue = std::collections::VecDeque::new();
-        queue.push_back((self.root, false));
+        let mut matching_state = crate::style::StyleMatchingState::default();
+        queue.push_back((self.root, false, 0_usize));
 
-        while let Some((id, ancestor_forced)) = queue.pop_front() {
+        while let Some((id, ancestor_forced, style_depth)) = queue.pop_front() {
             let Some(node) = self.get_node(id) else {
                 continue;
             };
@@ -853,11 +854,13 @@ impl<S: RenderState> Document<S> {
                     };
 
                     let node = self.get_node(id).unwrap();
+                    matching_state.prepare_for_node(self, id, style_depth);
                     Some(crate::style::compute_style_for_node(
                         self,
                         style_context,
                         node,
                         parent_style.as_deref(),
+                        &mut matching_state,
                     ))
                 } else {
                     None
@@ -866,8 +869,9 @@ impl<S: RenderState> Document<S> {
                 // Re-borrow to enqueue children before mutable borrow.
                 let children: Vec<taffy::NodeId> =
                     self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
+                let child_style_depth = style_depth + 1;
                 for &child_id in &children {
-                    queue.push_back((child_id, child_force));
+                    queue.push_back((child_id, child_force, child_style_depth));
                 }
 
                 // Also enter the shadow tree if this element is a shadow host.
@@ -877,7 +881,7 @@ impl<S: RenderState> Document<S> {
                     if let Some(shadow_root) = self.get_node(shadow_root_id) {
                         let shadow_children: Vec<taffy::NodeId> = shadow_root.children.clone();
                         for &child_id in &shadow_children {
-                            queue.push_back((child_id, child_force));
+                            queue.push_back((child_id, child_force, child_style_depth));
                         }
                     }
                 }
@@ -965,7 +969,7 @@ impl<S: RenderState> Document<S> {
                 let children: Vec<taffy::NodeId> =
                     self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
                 for &child_id in &children {
-                    queue.push_back((child_id, child_force));
+                    queue.push_back((child_id, child_force, style_depth));
                 }
                 // Clear dirty flags on non-element nodes too.
                 if let Some(node) = self.get_node(id) {

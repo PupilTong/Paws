@@ -8,6 +8,7 @@ use style::{CaseSensitivityExt, LocalName, Namespace};
 use stylo_atoms::Atom;
 
 use selectors::attr::AttrSelectorOperation;
+use selectors::bloom::{BloomFilter, BLOOM_HASH_MASK};
 use selectors::matching::ElementSelectorFlags;
 
 use crate::dom::{NodeType, PawsElement};
@@ -204,8 +205,11 @@ impl<S: RenderState> selectors::Element for &PawsElement<S> {
         false
     }
 
-    fn add_element_unique_hashes(&self, _filter: &mut selectors::bloom::BloomFilter) -> bool {
-        false
+    fn add_element_unique_hashes(&self, filter: &mut BloomFilter) -> bool {
+        style::bloom::each_relevant_element_hash(*self, |hash| {
+            filter.insert_hash(hash & BLOOM_HASH_MASK)
+        });
+        true
     }
 
     fn apply_selector_flags(&self, flags: ElementSelectorFlags) {
