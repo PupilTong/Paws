@@ -816,6 +816,7 @@ impl<S: RenderState> Document<S> {
         let resolve_started = crate::style::profiling::start_timer();
         let mut layout_invalidations = Vec::new();
         let mut queue = std::collections::VecDeque::new();
+        let mut matching_state = crate::style::StyleMatchingState::default();
         queue.push_back((self.root, false));
 
         while let Some((id, ancestor_forced)) = queue.pop_front() {
@@ -853,11 +854,13 @@ impl<S: RenderState> Document<S> {
                     };
 
                     let node = self.get_node(id).unwrap();
+                    matching_state.prepare_for_node(self, id);
                     Some(crate::style::compute_style_for_node(
                         self,
                         style_context,
                         node,
                         parent_style.as_deref(),
+                        &mut matching_state,
                     ))
                 } else {
                     None
