@@ -3913,6 +3913,101 @@ mod tests {
     }
 
     #[test]
+    fn test_deep_descendant_and_child_selectors_match_after_incremental_restyle() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let root = state.create_element("div".to_string());
+        let shell = state.create_element("div".to_string());
+        let tier = state.create_element("div".to_string());
+        let lane = state.create_element("div".to_string());
+        let panel = state.create_element("div".to_string());
+        let target = state.create_element("span".to_string());
+        state.append_element(0, root).unwrap();
+        state.append_element(root, shell).unwrap();
+        state.append_element(shell, tier).unwrap();
+        state.append_element(tier, lane).unwrap();
+        state.append_element(lane, panel).unwrap();
+        state.append_element(panel, target).unwrap();
+        state
+            .set_attribute(root, "class".to_string(), "deep-root".to_string())
+            .unwrap();
+        state
+            .set_attribute(shell, "class".to_string(), "shell".to_string())
+            .unwrap();
+        state
+            .set_attribute(shell, "data-scope".to_string(), "main".to_string())
+            .unwrap();
+        state
+            .set_attribute(tier, "class".to_string(), "tier".to_string())
+            .unwrap();
+        state
+            .set_attribute(tier, "data-tier".to_string(), "gold".to_string())
+            .unwrap();
+        state
+            .set_attribute(lane, "class".to_string(), "lane".to_string())
+            .unwrap();
+        state
+            .set_attribute(panel, "class".to_string(), "panel".to_string())
+            .unwrap();
+        state
+            .set_attribute(target, "class".to_string(), "target".to_string())
+            .unwrap();
+        state
+            .set_attribute(target, "data-state".to_string(), "active".to_string())
+            .unwrap();
+
+        state.add_parsed_stylesheet(view_macros::css!(
+            r#"
+            .deep-root,
+            .shell,
+            .tier,
+            .lane,
+            .panel,
+            .target {
+                display: block;
+            }
+
+            .target {
+                width: 10px;
+                height: 10px;
+            }
+
+            .deep-root .missing-one .missing-two .missing-three .target {
+                width: 90px;
+                height: 90px;
+            }
+
+            .deep-root > .shell[data-scope="main"] .tier[data-tier="gold"] > .lane .panel > .target {
+                width: 33px;
+                height: 12px;
+            }
+
+            .deep-root [data-missing="true"] .tier .lane .panel > .target {
+                width: 91px;
+                height: 91px;
+            }
+
+            .deep-root > .shell[data-scope="main"] .tier[data-tier="gold"] > .lane .panel > .target[data-state="active"] {
+                width: 64px;
+                height: 22px;
+            }
+        "#
+        ));
+
+        state.commit();
+        assert_layout_size(&state, target, 64.0, 22.0);
+
+        state.remove_attribute(target, "data-state").unwrap();
+        state.commit();
+        assert_layout_size(&state, target, 33.0, 12.0);
+
+        state
+            .set_attribute(target, "data-state".to_string(), "active".to_string())
+            .unwrap();
+        state.commit();
+        assert_layout_size(&state, target, 64.0, 22.0);
+    }
+
+    #[test]
     fn test_post_commit_invalidation_lazy_style_read_updates_next_layout() {
         let mut state = RuntimeState::new("https://example.com".to_string());
         let div = state.create_element("div".to_string());
