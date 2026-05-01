@@ -12,6 +12,8 @@ use engine::RuntimeState;
 const CARD_COUNT: usize = 120;
 const ITEMS_PER_CARD: usize = 6;
 const DEEP_CHAIN_COUNT: usize = 96;
+const SHADOW_HOST_COUNT: usize = 24;
+const SHADOW_ASSIGNED_CHILDREN: usize = 16;
 
 fn complex_stylesheet() -> &'static [u8] {
     view_macros::css!(
@@ -412,6 +414,79 @@ fn setup_committed_deep_descendant_runtime_for_toggle() -> (RuntimeState, u32) {
     (state, target)
 }
 
+fn setup_shadow_slot_runtime() -> (RuntimeState, u32) {
+    let mut state = RuntimeState::with_definite_viewport(
+        "https://bench.test".to_string(),
+        (),
+        (),
+        1280.0,
+        800.0,
+    );
+
+    let root = state.create_element("div".to_string());
+    state.append_element(0, root).unwrap();
+    state
+        .set_inline_style(root, "display".to_string(), "block".to_string())
+        .unwrap();
+    state
+        .set_inline_style(root, "width".to_string(), "1200px".to_string())
+        .unwrap();
+
+    for _ in 0..SHADOW_HOST_COUNT {
+        let host = state.create_element("div".to_string());
+        state.append_element(root, host).unwrap();
+        state
+            .set_inline_style(host, "display".to_string(), "flex".to_string())
+            .unwrap();
+        state
+            .set_inline_style(host, "width".to_string(), "800px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(host, "height".to_string(), "32px".to_string())
+            .unwrap();
+
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
+
+        let before = state.create_element("div".to_string());
+        state.append_element(shadow_root, before).unwrap();
+        state
+            .set_inline_style(before, "width".to_string(), "12px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(before, "height".to_string(), "12px".to_string())
+            .unwrap();
+
+        let slot = state.create_element("slot".to_string());
+        state.append_element(shadow_root, slot).unwrap();
+
+        let after = state.create_element("div".to_string());
+        state.append_element(shadow_root, after).unwrap();
+        state
+            .set_inline_style(after, "width".to_string(), "12px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(after, "height".to_string(), "12px".to_string())
+            .unwrap();
+
+        for _ in 0..SHADOW_ASSIGNED_CHILDREN {
+            let child = state.create_element("div".to_string());
+            state.append_element(host, child).unwrap();
+            state
+                .set_inline_style(child, "width".to_string(), "10px".to_string())
+                .unwrap();
+            state
+                .set_inline_style(child, "height".to_string(), "10px".to_string())
+                .unwrap();
+            state
+                .set_inline_style(child, "margin".to_string(), "1px".to_string())
+                .unwrap();
+        }
+    }
+
+    state.commit();
+    (state, root)
+}
+
 fn bench_commit_cold_complex_selectors(c: &mut Criterion) {
     c.bench_function("commit_cold_complex_selectors_120x6", |b| {
         b.iter_batched(
@@ -529,6 +604,34 @@ fn bench_commit_incremental_restyle_after_deep_leaf_toggle(c: &mut Criterion) {
     );
 }
 
+/// Measures repeated commits where shadow hosts are restyled, slot assignment
+/// runs, and the flat-tree children are unchanged. This covers the hot
+/// no-change cache path that should compare against the cached slice without
+/// allocating a replacement flat-tree Vec.
+fn bench_commit_shadow_slot_no_flat_tree_change(c: &mut Criterion) {
+    let (mut state, root) = setup_shadow_slot_runtime();
+    let mut dark = false;
+
+    c.bench_function("commit_shadow_slot_no_flat_tree_change_24x16", |b| {
+        b.iter(|| {
+            dark = !dark;
+            state
+                .set_attribute(
+                    black_box(root),
+                    "data-theme".to_string(),
+                    if dark {
+                        "dark".to_string()
+                    } else {
+                        "light".to_string()
+                    },
+                )
+                .unwrap();
+            state.commit();
+            black_box(state.doc.root_element_id());
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_commit_cold_complex_selectors,
@@ -537,5 +640,6 @@ criterion_group!(
     bench_commit_full_restyle_after_viewport_change,
     bench_commit_incremental_restyle_after_data_state_toggle,
     bench_commit_incremental_restyle_after_deep_leaf_toggle,
+    bench_commit_shadow_slot_no_flat_tree_change,
 );
 criterion_main!(benches);

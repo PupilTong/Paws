@@ -4946,6 +4946,69 @@ mod tests {
     }
 
     #[test]
+    fn test_slot_reassignment_updates_shadow_host_layout() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let host = state.create_element("div".to_string());
+        state.append_element(0, host).unwrap();
+        state
+            .set_inline_style(host, "display".to_string(), "flex".to_string())
+            .unwrap();
+
+        let shadow_root = state.attach_shadow(host, "open").unwrap();
+
+        let right_slot = state.create_element("slot".to_string());
+        state.append_element(shadow_root, right_slot).unwrap();
+        state
+            .set_attribute(right_slot, "name".to_string(), "right".to_string())
+            .unwrap();
+
+        let left_slot = state.create_element("slot".to_string());
+        state.append_element(shadow_root, left_slot).unwrap();
+        state
+            .set_attribute(left_slot, "name".to_string(), "left".to_string())
+            .unwrap();
+
+        let left = state.create_element("div".to_string());
+        state.append_element(host, left).unwrap();
+        state
+            .set_attribute(left, "slot".to_string(), "left".to_string())
+            .unwrap();
+        state
+            .set_inline_style(left, "width".to_string(), "30px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(left, "height".to_string(), "10px".to_string())
+            .unwrap();
+
+        let right = state.create_element("div".to_string());
+        state.append_element(host, right).unwrap();
+        state
+            .set_attribute(right, "slot".to_string(), "right".to_string())
+            .unwrap();
+        state
+            .set_inline_style(right, "width".to_string(), "40px".to_string())
+            .unwrap();
+        state
+            .set_inline_style(right, "height".to_string(), "10px".to_string())
+            .unwrap();
+
+        state.commit();
+
+        let left_id = taffy::NodeId::from(left as u64);
+        let right_id = taffy::NodeId::from(right as u64);
+        assert_eq!(state.doc.node(right_id).layout().location.x, 0.0);
+        assert_eq!(state.doc.node(left_id).layout().location.x, 40.0);
+
+        state
+            .set_attribute(left, "slot".to_string(), "right".to_string())
+            .unwrap();
+        state.commit();
+
+        assert_eq!(state.doc.node(left_id).layout().location.x, 0.0);
+        assert_eq!(state.doc.node(right_id).layout().location.x, 30.0);
+    }
+
+    #[test]
     fn test_slot_fallback_content() {
         let mut state = RuntimeState::new("https://example.com".to_string());
         let host = state.create_element("div".to_string());
