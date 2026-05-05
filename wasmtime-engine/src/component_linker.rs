@@ -140,6 +140,49 @@ pub fn build_component_linker<R: EngineRenderer>(
     Ok(linker)
 }
 
+/// Reusable component-model runtime state for hosts that start many guests.
+///
+/// Building the component linker registers WASI plus every Paws host
+/// interface. That work is independent of any particular guest component, so
+/// long-lived hosts such as the iOS example app should keep one runtime and
+/// compile/instantiate individual components through it.
+pub struct ComponentRuntime<R: EngineRenderer> {
+    engine: WasmEngine,
+    linker: ComponentLinker<HostData<R>>,
+}
+
+impl<R: EngineRenderer> ComponentRuntime<R> {
+    /// Creates a runtime with Paws's platform-specific default wasmtime engine.
+    pub fn new() -> wasmtime::Result<Self> {
+        Self::with_engine(crate::create_engine())
+    }
+
+    /// Creates a runtime around an existing wasmtime engine.
+    pub fn with_engine(engine: WasmEngine) -> wasmtime::Result<Self> {
+        let linker = build_component_linker::<R>(&engine)?;
+        Ok(Self { engine, linker })
+    }
+
+    /// Returns the shared wasmtime engine used by this runtime.
+    pub fn engine(&self) -> &WasmEngine {
+        &self.engine
+    }
+
+    /// Compiles component bytes against this runtime's engine.
+    pub fn compile_component(&self, wasm_bytes: &[u8]) -> wasmtime::Result<Component> {
+        Component::new(&self.engine, wasm_bytes)
+    }
+
+    /// Starts a live component session from an already compiled component.
+    pub fn start_session(
+        &self,
+        state: RuntimeState<R>,
+        component: &Component,
+    ) -> Result<ComponentSession<R>, Box<RunWasmError<R>>> {
+        ComponentSession::start_precompiled(self, state, component)
+    }
+}
+
 /// Hand-rolled equivalent of `paws_host::events::add_to_linker` that
 /// swaps out `dispatch-event` for a store-aware implementation. Every
 /// other function delegates to the `events::Host` trait on
@@ -583,14 +626,24 @@ fn instantiate_and_run_component<R: EngineRenderer>(
         Ok(c) => c,
         Err(error) => return Err(Box::new(RunWasmError { state, error })),
     };
-    let linker = match build_component_linker::<R>(engine) {
-        Ok(l) => l,
+    let runtime = match ComponentRuntime::with_engine(engine.clone()) {
+        Ok(runtime) => runtime,
         Err(error) => return Err(Box::new(RunWasmError { state, error })),
     };
-    let mut store = Store::new(engine, HostData::new(state));
+
+    instantiate_and_run_precompiled_component(&runtime, state, &component)
+}
+
+/// Shared component instantiation path for already compiled components.
+fn instantiate_and_run_precompiled_component<R: EngineRenderer>(
+    runtime: &ComponentRuntime<R>,
+    state: RuntimeState<R>,
+    component: &Component,
+) -> ComponentRunHandle<R> {
+    let mut store = Store::new(runtime.engine(), HostData::new(state));
 
     let result = (|| -> wasmtime::Result<wasmtime::component::Instance> {
-        let instance = linker.instantiate(&mut store, &component)?;
+        let instance = runtime.linker.instantiate(&mut store, component)?;
         let invoke = instance.get_typed_func::<(i32,), ()>(&mut store, "invoke-listener")?;
         let run = instance.get_typed_func::<(), (i32,)>(&mut store, "run")?;
 
@@ -653,6 +706,17 @@ impl<R: EngineRenderer> ComponentSession<R> {
         wasm_bytes: &[u8],
     ) -> Result<Self, Box<RunWasmError<R>>> {
         let (store, _instance) = instantiate_and_run_component(engine, state, wasm_bytes)?;
+        Ok(Self { store })
+    }
+
+    /// Instantiates an already compiled component through a reusable runtime.
+    pub fn start_precompiled(
+        runtime: &ComponentRuntime<R>,
+        state: RuntimeState<R>,
+        component: &Component,
+    ) -> Result<Self, Box<RunWasmError<R>>> {
+        let (store, _instance) =
+            instantiate_and_run_precompiled_component(runtime, state, component)?;
         Ok(Self { store })
     }
 

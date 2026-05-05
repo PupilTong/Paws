@@ -21,7 +21,7 @@
 use std::ffi::{c_char, c_void, CStr};
 
 use crate::error::RendererError;
-use crate::thread::{CompletionFn, EngineHandle};
+use crate::thread::{precompile_wasm_component, CompletionFn, EngineHandle};
 
 /// Extracts a mutable reference to `PawsRenderer` from a raw pointer,
 /// returning the given error code if the pointer is null.
@@ -173,6 +173,27 @@ pub extern "C" fn paws_renderer_post_run_wasm(
         .engine
         .post_run_wasm(wasm_vec, func_str.to_string())
     {
+        0
+    } else {
+        RendererError::EngineFailed.as_i32()
+    }
+}
+
+/// Precompiles and caches a WASM component for future renderer instances.
+///
+/// This is a process-wide warm-up entry point for app shells that know which
+/// guest components are likely to be opened next. Core modules are accepted as
+/// a no-op because the iOS examples are component-model guests; the legacy WAT
+/// path is still compiled synchronously by `paws_renderer_post_run_wat`.
+#[no_mangle]
+pub extern "C" fn paws_renderer_precompile_wasm(wasm_bytes: *const u8, wasm_len: usize) -> i32 {
+    if wasm_bytes.is_null() {
+        return RendererError::InvalidHandle.as_i32();
+    }
+
+    // SAFETY: wasm_bytes is a valid pointer to wasm_len bytes.
+    let wasm_slice = unsafe { std::slice::from_raw_parts(wasm_bytes, wasm_len) };
+    if precompile_wasm_component(wasm_slice) {
         0
     } else {
         RendererError::EngineFailed.as_i32()

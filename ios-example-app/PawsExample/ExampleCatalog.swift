@@ -1,4 +1,5 @@
 import Foundation
+import PawsRenderer
 
 struct ExampleEntry {
     let displayName: String
@@ -148,4 +149,90 @@ enum ExampleCatalog {
             ]
         ),
     ]
+}
+
+enum ExampleWasmCacheError: LocalizedError {
+    case missing(String)
+    case readFailed(String)
+    case precompileFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missing(let resource):
+            return "\(resource).wasm not found in bundle"
+        case .readFailed(let resource):
+            return "Failed to read \(resource).wasm"
+        case .precompileFailed(let resource):
+            return "Failed to precompile \(resource).wasm"
+        }
+    }
+}
+
+final class ExampleWasmCache {
+    static let shared = ExampleWasmCache()
+
+    private let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "dev.paws.example.wasm-cache"
+        queue.qualityOfService = .utility
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+    private var dataByResource: [String: Data] = [:]
+
+    private init() {}
+
+    func prewarm(_ entries: [ExampleEntry]) {
+        for entry in entries {
+            load(entry, priority: .veryLow) { _ in }
+        }
+    }
+
+    func load(
+        _ entry: ExampleEntry,
+        priority: Operation.QueuePriority = .high,
+        completion: @escaping (Result<Data, Error>) -> Void
+    ) {
+        let resource = entry.wasmResourceName
+        let operation = BlockOperation { [self] in
+            if let cached = dataByResource[resource] {
+                DispatchQueue.main.async {
+                    completion(.success(cached))
+                }
+                return
+            }
+
+            let result = loadAndPrecompile(resource: resource)
+
+            if case .success(let data) = result {
+                dataByResource[resource] = data
+            }
+
+            DispatchQueue.main.async {
+                completion(result)
+            }
+        }
+        operation.queuePriority = priority
+        queue.addOperation(operation)
+    }
+
+    private func loadAndPrecompile(resource: String) -> Result<Data, Error> {
+        guard let url = Bundle.main.url(
+            forResource: resource,
+            withExtension: "wasm",
+            subdirectory: "Examples"
+        ) else {
+            return .failure(ExampleWasmCacheError.missing(resource))
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            guard PawsRendererInstance.precompileWasm(data) else {
+                return .failure(ExampleWasmCacheError.precompileFailed(resource))
+            }
+            return .success(data)
+        } catch {
+            return .failure(ExampleWasmCacheError.readFailed(resource))
+        }
+    }
 }

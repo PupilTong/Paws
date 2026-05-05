@@ -143,6 +143,18 @@ public final class PawsRendererInstance {
         precondition(result == 0, "postRunWasm failed with error code \(result)")
     }
 
+    /// Precompiles and caches a WASM component for future renderer instances.
+    @discardableResult
+    public static func precompileWasm(_ wasmData: Data) -> Bool {
+        let result = wasmData.withUnsafeBytes { rawBuffer -> Int32 in
+            guard let basePtr = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                return -1
+            }
+            return paws_renderer_precompile_wasm(basePtr, UInt(wasmData.count))
+        }
+        return result == 0
+    }
+
     /// Convenience: compiles WAT text to WASM and runs it.
     ///
     /// Primarily for testing — production code should use `postRunWasm`.

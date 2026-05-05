@@ -1,6 +1,8 @@
 import UIKit
 
 final class WelcomeViewController: UITableViewController {
+    private var didStartPrewarm = false
+
     init() {
         super.init(style: .insetGrouped)
     }
@@ -17,6 +19,14 @@ final class WelcomeViewController: UITableViewController {
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 64
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !didStartPrewarm else { return }
+        didStartPrewarm = true
+        let entries = ExampleCatalog.sections.flatMap { $0.entries }
+        ExampleWasmCache.shared.prewarm(entries)
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int {

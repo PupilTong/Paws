@@ -23,10 +23,12 @@
 //! they have no `invoke-listener` export to re-enter, so the message
 //! loop simply sits and waits for `Stop`.
 
-use std::sync::mpsc;
+use std::hash::{Hash, Hasher};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 
 use engine::{EngineRenderer, RuntimeState};
+use fnv::{FnvHashMap, FnvHasher};
 
 use crate::renderer::{IosNodeState, ViewTree};
 
@@ -248,6 +250,106 @@ struct IosRenderer {
 // `ViewTree` is a plain data structure with no thread-affine pointers.
 unsafe impl Send for IosRenderer {}
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ComponentCacheKey {
+    len: usize,
+    hash: u64,
+}
+
+struct CachedComponent {
+    bytes: Box<[u8]>,
+    component: wasmtime_engine::Component,
+}
+
+struct IosComponentRuntime {
+    runtime: wasmtime_engine::ComponentRuntime<IosRenderer>,
+    cache: FnvHashMap<ComponentCacheKey, Vec<CachedComponent>>,
+}
+
+impl IosComponentRuntime {
+    fn new() -> Result<Self, wasmtime_engine::WasmError> {
+        Ok(Self {
+            runtime: wasmtime_engine::ComponentRuntime::new()?,
+            cache: FnvHashMap::default(),
+        })
+    }
+
+    fn precompile(
+        &mut self,
+        wasm_bytes: &[u8],
+    ) -> Result<wasmtime_engine::Component, wasmtime_engine::WasmError> {
+        let key = component_cache_key(wasm_bytes);
+        if let Some(entries) = self.cache.get(&key) {
+            if let Some(entry) = entries
+                .iter()
+                .find(|entry| entry.bytes.as_ref() == wasm_bytes)
+            {
+                return Ok(entry.component.clone());
+            }
+        }
+
+        let component = self.runtime.compile_component(wasm_bytes)?;
+        self.cache.entry(key).or_default().push(CachedComponent {
+            bytes: wasm_bytes.into(),
+            component: component.clone(),
+        });
+        Ok(component)
+    }
+
+    fn start_session(
+        &mut self,
+        state: RuntimeState<IosRenderer>,
+        wasm_bytes: &[u8],
+    ) -> Result<
+        wasmtime_engine::ComponentSession<IosRenderer>,
+        Box<wasmtime_engine::RunWasmError<IosRenderer>>,
+    > {
+        let component = match self.precompile(wasm_bytes) {
+            Ok(component) => component,
+            Err(error) => return Err(Box::new(wasmtime_engine::RunWasmError { state, error })),
+        };
+        self.runtime.start_session(state, &component)
+    }
+}
+
+static IOS_COMPONENT_RUNTIME: OnceLock<Mutex<Option<IosComponentRuntime>>> = OnceLock::new();
+
+fn ios_component_runtime() -> &'static Mutex<Option<IosComponentRuntime>> {
+    IOS_COMPONENT_RUNTIME.get_or_init(|| Mutex::new(None))
+}
+
+fn ensure_component_runtime(
+    runtime: &mut Option<IosComponentRuntime>,
+) -> Option<&mut IosComponentRuntime> {
+    if runtime.is_none() {
+        *runtime = IosComponentRuntime::new().ok();
+    }
+    runtime.as_mut()
+}
+
+fn component_cache_key(bytes: &[u8]) -> ComponentCacheKey {
+    let mut hasher = FnvHasher::default();
+    bytes.hash(&mut hasher);
+    ComponentCacheKey {
+        len: bytes.len(),
+        hash: hasher.finish(),
+    }
+}
+
+pub(crate) fn precompile_wasm_component(wasm_bytes: &[u8]) -> bool {
+    if !is_wasm_component(wasm_bytes) {
+        return true;
+    }
+
+    let Ok(mut runtime_slot) = ios_component_runtime().lock() else {
+        return false;
+    };
+    let Some(runtime) = ensure_component_runtime(&mut runtime_slot) else {
+        return false;
+    };
+    runtime.precompile(wasm_bytes).is_ok()
+}
+
 impl EngineRenderer for IosRenderer {
     type NodeState = IosNodeState;
 
@@ -312,17 +414,23 @@ fn run_engine(
     // core (layer 0) → `run_wasm` (one-shot, no pointer dispatch),
     // component (layer 1) → `ComponentSession::start` (live, supports
     // pointer dispatch).
-    let engine = wasmtime_engine::create_engine();
-
     if is_wasm_component(&wasm_bytes) {
-        let mut session =
-            match wasmtime_engine::ComponentSession::start(&engine, state, &wasm_bytes) {
-                Ok(s) => s,
+        let mut session = {
+            let mut runtime_slot = match ios_component_runtime().lock() {
+                Ok(runtime) => runtime,
+                Err(_) => return,
+            };
+            let Some(runtime) = ensure_component_runtime(&mut runtime_slot) else {
+                return;
+            };
+            match runtime.start_session(state, &wasm_bytes) {
+                Ok(session) => session,
                 Err(e) => {
                     eprintln!("paws iOS engine: guest failed to start: {}", e.error);
                     return;
                 }
-            };
+            }
+        };
 
         // Pump messages until the channel closes or a Stop is received.
         // Each Click runs hit-test → dispatch_event_component, which
@@ -345,6 +453,7 @@ fn run_engine(
         // `invoke-listener` export, so pointer events are silently
         // ignored. Run the module once, then sit on the channel until
         // Stop / hang-up so the join contract still holds.
+        let engine = wasmtime_engine::create_engine();
         if let Err(e) =
             wasmtime_engine::run_wasm_with_engine(&engine, state, &wasm_bytes, &func_name)
         {
@@ -368,7 +477,7 @@ fn run_engine(
 /// component-model spec). Short or non-wasm inputs fall through as
 /// "not a component"; wasmtime will then produce a parse error, which
 /// surfaces the same way as before this dispatch existed.
-fn is_wasm_component(bytes: &[u8]) -> bool {
+pub(crate) fn is_wasm_component(bytes: &[u8]) -> bool {
     bytes.len() >= 8 && &bytes[..4] == b"\0asm" && u16::from_le_bytes([bytes[6], bytes[7]]) == 1
 }
 
