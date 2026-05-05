@@ -4,7 +4,6 @@ use crate::runtime::RenderState;
 use fnv::FnvHashSet;
 use markup5ever::QualName;
 use slab::Slab;
-use std::borrow::Cow;
 use style::shared_lock::SharedRwLock;
 
 /// Errors that can occur during DOM tree operations.
@@ -991,22 +990,19 @@ impl<S: RenderState> Document<S> {
     ///
     /// This is structural only; callers still decide whether children are
     /// styled, laid out, or renderable.
-    pub(crate) fn flat_tree_child_ids(&self, parent_id: taffy::NodeId) -> Cow<'_, [taffy::NodeId]> {
+    pub(crate) fn flat_tree_child_ids(&self, parent_id: taffy::NodeId) -> &[taffy::NodeId] {
         let node = self.node(parent_id);
         if let Some(shadow_root_id) = node.shadow_root_id {
-            Cow::Owned(self.flatten_shadow_children(shadow_root_id))
+            &self.node(shadow_root_id).flat_tree_children
         } else {
-            Cow::Borrowed(&node.children)
+            &node.children
         }
     }
 
     /// Builds the flat tree children for a shadow root, replacing `<slot>`
     /// elements with their assigned light DOM children (or the slot's own
     /// children as fallback content).
-    pub(crate) fn flatten_shadow_children(
-        &self,
-        shadow_root_id: taffy::NodeId,
-    ) -> Vec<taffy::NodeId> {
+    fn build_shadow_flat_tree_children(&self, shadow_root_id: taffy::NodeId) -> Vec<taffy::NodeId> {
         let shadow_root = self.node(shadow_root_id);
         let mut result = Vec::with_capacity(shadow_root.children.len());
         for &child_id in &shadow_root.children {
@@ -1024,6 +1020,44 @@ impl<S: RenderState> Document<S> {
         result
     }
 
+    fn shadow_flat_tree_children_match_cache(&self, shadow_root_id: taffy::NodeId) -> bool {
+        let shadow_root = self.node(shadow_root_id);
+        let mut cached = shadow_root.flat_tree_children.iter().copied();
+
+        for &child_id in &shadow_root.children {
+            let child = self.node(child_id);
+            if child.is_slot_element() {
+                let slot_children = if child.assigned_nodes.is_empty() {
+                    &child.children
+                } else {
+                    &child.assigned_nodes
+                };
+                for &flat_child_id in slot_children {
+                    if cached.next() != Some(flat_child_id) {
+                        return false;
+                    }
+                }
+            } else if cached.next() != Some(child_id) {
+                return false;
+            }
+        }
+
+        cached.next().is_none()
+    }
+
+    /// Rebuilds and stores the cached flat-tree child list for a shadow root.
+    ///
+    /// Returns whether the list changed.
+    fn rebuild_shadow_flat_tree_children(&mut self, shadow_root_id: taffy::NodeId) -> bool {
+        if self.shadow_flat_tree_children_match_cache(shadow_root_id) {
+            return false;
+        }
+
+        let new_flat_children = self.build_shadow_flat_tree_children(shadow_root_id);
+        self.node_mut(shadow_root_id).flat_tree_children = new_flat_children;
+        true
+    }
+
     /// Assigns light DOM children of a shadow host to `<slot>` elements
     /// in its shadow tree (named slot assignment algorithm per WHATWG DOM spec).
     pub(crate) fn assign_slots(&mut self, host_id: taffy::NodeId) {
@@ -1031,7 +1065,6 @@ impl<S: RenderState> Document<S> {
             Some(id) => id,
             None => return,
         };
-        let old_flat_children = self.flatten_shadow_children(shadow_root_id);
 
         // Collect all <slot> elements in the shadow tree (DFS, tree order).
         let mut slots = Vec::new();
@@ -1102,7 +1135,7 @@ impl<S: RenderState> Document<S> {
             // If no matching slot, the child is unslotted (not rendered).
         }
 
-        if self.flatten_shadow_children(shadow_root_id) != old_flat_children {
+        if self.rebuild_shadow_flat_tree_children(shadow_root_id) {
             self.mark_layout_input_changed(host_id);
         }
     }

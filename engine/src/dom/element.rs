@@ -83,6 +83,9 @@ pub struct PawsElement<S: RenderState = ()> {
     /// Stylo's `TShadowRoot::style_data()` returns a reference to this.
     pub(crate) shadow_cascade_data: Option<Box<style::stylist::CascadeData>>,
 
+    /// For ShadowRoot nodes: cached flat-tree children used by layout and painting.
+    pub(crate) flat_tree_children: Vec<taffy::NodeId>,
+
     /// For `<slot>` elements: the IDs of light DOM nodes assigned to this slot.
     /// Populated during slot assignment in [`Document::assign_slots`].
     pub(crate) assigned_nodes: Vec<taffy::NodeId>,
@@ -169,6 +172,7 @@ impl<S: RenderState> PawsElement<S> {
             shadow_root_id: None,
             shadow_mode: None,
             shadow_cascade_data: None,
+            flat_tree_children: Vec::new(),
             assigned_nodes: Vec::new(),
             assigned_slot_id: None,
             text_content: None,

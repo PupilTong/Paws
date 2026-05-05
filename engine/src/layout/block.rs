@@ -55,22 +55,20 @@ pub fn compute_layout_in_place<S: RenderState>(
 
 /// Iterator over a node's children for Taffy layout traversal.
 ///
-/// Uses a slice iterator for regular nodes (zero allocation) and an
-/// owned vec iterator for shadow hosts (flat tree with slot replacement).
-pub enum ChildIter<'a> {
-    /// Zero-allocation slice iterator for regular DOM nodes.
-    Slice(std::slice::Iter<'a, NodeId>),
-    /// Owned iterator for shadow host flat tree children.
-    Owned(std::vec::IntoIter<NodeId>),
+/// Uses borrowed slices for both regular DOM children and cached shadow-host
+/// flat-tree children.
+pub struct ChildIter<'a>(std::slice::Iter<'a, NodeId>);
+
+impl<'a> ChildIter<'a> {
+    fn new(children: &'a [NodeId]) -> Self {
+        Self(children.iter())
+    }
 }
 
 impl Iterator for ChildIter<'_> {
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            ChildIter::Slice(iter) => iter.next().copied(),
-            ChildIter::Owned(iter) => iter.next(),
-        }
+        self.0.next().copied()
     }
 }
 
@@ -80,39 +78,21 @@ impl<S: RenderState> taffy::TraversePartialTree for Document<S> {
     type ChildIter<'a> = ChildIter<'a>;
 
     fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_> {
-        let node = self.node(parent_node_id);
-        if let Some(shadow_root_id) = node.shadow_root_id {
-            // Shadow host: build flat tree children from the shadow root,
-            // replacing <slot> elements with their assigned light DOM children.
-            let flat = self.flatten_shadow_children(shadow_root_id);
-            ChildIter::Owned(flat.into_iter())
-        } else {
-            ChildIter::Slice(node.children.iter())
-        }
+        ChildIter::new(self.flat_tree_child_ids(parent_node_id))
     }
 
     fn child_count(&self, parent_node_id: NodeId) -> usize {
-        let node = self.node(parent_node_id);
-        if let Some(shadow_root_id) = node.shadow_root_id {
-            self.flatten_shadow_children(shadow_root_id).len()
-        } else {
-            node.children.len()
-        }
+        self.flat_tree_child_ids(parent_node_id).len()
     }
 
     fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId {
-        let node = self.node(parent_node_id);
-        if let Some(shadow_root_id) = node.shadow_root_id {
-            let flat = self.flatten_shadow_children(shadow_root_id);
-            debug_assert!(
-                child_index < flat.len(),
-                "child_index {child_index} out of bounds for flat tree len {}",
-                flat.len()
-            );
-            flat[child_index]
-        } else {
-            node.children[child_index]
-        }
+        let children = self.flat_tree_child_ids(parent_node_id);
+        debug_assert!(
+            child_index < children.len(),
+            "child_index {child_index} out of bounds for flat tree len {}",
+            children.len()
+        );
+        children[child_index]
     }
 }
 
