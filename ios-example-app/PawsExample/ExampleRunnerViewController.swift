@@ -9,7 +9,8 @@ final class ExampleRunnerViewController: UIViewController {
     private let entry: ExampleEntry
     private var rendererView: PawsRendererView?
     private let statusLabel = UILabel()
-    private var hasRunWasm = false
+    private var wasmData: Data?
+    private var hasPostedWasm = false
 
     init(entry: ExampleEntry) {
         self.entry = entry
@@ -53,38 +54,39 @@ final class ExampleRunnerViewController: UIViewController {
             host.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -16),
             host.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -16),
         ])
+
+        loadWasm()
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        guard !hasRunWasm else { return }
-        hasRunWasm = true
-        runWasm()
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        postWasmIfReady()
     }
 
-    private func runWasm() {
-        let resource = entry.wasmResourceName
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let url = Bundle.main.url(
-                forResource: resource,
-                withExtension: "wasm",
-                subdirectory: "Examples"
-            ) else {
-                DispatchQueue.main.async {
-                    self?.showError("\(resource).wasm not found in bundle")
-                }
-                return
-            }
-            guard let data = try? Data(contentsOf: url) else {
-                DispatchQueue.main.async {
-                    self?.showError("Failed to read \(resource).wasm")
-                }
-                return
-            }
-            DispatchQueue.main.async {
-                self?.rendererView?.renderer.postRunWasm(data, functionName: WasmEntryPoint.run)
+    private func loadWasm() {
+        ExampleWasmCache.shared.load(entry) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let data):
+                wasmData = data
+                postWasmIfReady()
+            case .failure(let error):
+                showError(error.localizedDescription)
             }
         }
+    }
+
+    private func postWasmIfReady() {
+        guard !hasPostedWasm,
+              let wasmData,
+              let rendererView,
+              rendererView.bounds.width > 0,
+              rendererView.bounds.height > 0 else {
+            return
+        }
+
+        hasPostedWasm = true
+        rendererView.renderer.postRunWasm(wasmData, functionName: WasmEntryPoint.run)
     }
 
     private func showError(_ message: String) {

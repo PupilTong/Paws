@@ -6,12 +6,14 @@ pub mod host_impl;
 pub mod wasm;
 
 pub use component_linker::{
-    build_component_linker, run_component, run_component_with_coverage, ComponentSession,
-    DispatchOutcome,
+    build_component_linker, run_component, run_component_with_coverage, ComponentRuntime,
+    ComponentSession, DispatchOutcome,
 };
 pub use wasm::{build_linker, read_cstr};
 
 use engine::{EngineRenderer, RuntimeState};
+pub use wasmtime::component::Component;
+pub use wasmtime::Error as WasmError;
 use wasmtime::{AsContextMut, Engine as WasmEngine, Module, Store};
 
 /// Create a [`wasmtime::Engine`] configured for the current platform.
@@ -3122,8 +3124,7 @@ mod tests {
     // — the property the iOS thread depends on for pointer-driven
     // dispatch.
 
-    use crate::ComponentSession;
-    use crate::DispatchOutcome;
+    use crate::{ComponentRuntime, ComponentSession, DispatchOutcome};
 
     #[test]
     fn component_session_dispatch_pointer_event_runs_listener() {
@@ -3185,6 +3186,37 @@ mod tests {
             Some("true"),
             "guest listener should have set data-clicked='true'"
         );
+    }
+
+    #[test]
+    fn component_runtime_starts_multiple_sessions_from_precompiled_component() {
+        let runtime = ComponentRuntime::<()>::new().expect("component runtime");
+        let wasm_path = paws_examples::example_wasm_path("example_click_host");
+        let wasm_bytes = std::fs::read(wasm_path).expect("read example-click-host wasm");
+        let component = runtime
+            .compile_component(&wasm_bytes)
+            .expect("compile component once");
+
+        for _ in 0..2 {
+            let state = RuntimeState::with_definite_viewport(
+                "https://test.paws".to_string(),
+                (),
+                (),
+                375.0,
+                667.0,
+            );
+            let session = runtime
+                .start_session(state, &component)
+                .unwrap_or_else(|e| panic!("precompiled session failed: {}", e.error));
+            assert!(
+                session
+                    .state()
+                    .doc
+                    .get_node(engine::NodeId::from(2u64))
+                    .is_some(),
+                "button node should exist after run"
+            );
+        }
     }
 
     #[test]

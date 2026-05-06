@@ -1,4 +1,5 @@
 import Foundation
+import PawsRenderer
 
 struct ExampleEntry {
     let displayName: String
@@ -148,4 +149,116 @@ enum ExampleCatalog {
             ]
         ),
     ]
+}
+
+enum ExampleWasmCacheError: LocalizedError {
+    case missing(String)
+    case readFailed(String)
+    case precompileFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missing(let resource):
+            return "\(resource).wasm not found in bundle"
+        case .readFailed(let resource):
+            return "Failed to read \(resource).wasm"
+        case .precompileFailed(let resource):
+            return "Failed to precompile \(resource).wasm"
+        }
+    }
+}
+
+final class ExampleWasmCache {
+    static let shared = ExampleWasmCache()
+
+    private let stateQueue = DispatchQueue(label: "dev.paws.example.wasm-cache.state")
+    private let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "dev.paws.example.wasm-cache"
+        queue.qualityOfService = .utility
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+    private var dataByResource: [String: Data] = [:]
+    private var completionsByResource: [String: [(Result<Data, Error>) -> Void]] = [:]
+    private var operationsByResource: [String: Operation] = [:]
+
+    private init() {}
+
+    func prewarm(_ entries: [ExampleEntry]) {
+        for entry in entries {
+            preload(entry, priority: .veryLow)
+        }
+    }
+
+    func preload(_ entry: ExampleEntry, priority: Operation.QueuePriority = .high) {
+        load(entry, priority: priority) { _ in }
+    }
+
+    func load(
+        _ entry: ExampleEntry,
+        priority: Operation.QueuePriority = .high,
+        completion: @escaping (Result<Data, Error>) -> Void
+    ) {
+        let resource = entry.wasmResourceName
+        stateQueue.async { [self] in
+            if let cached = dataByResource[resource] {
+                DispatchQueue.main.async {
+                    completion(.success(cached))
+                }
+                return
+            }
+
+            completionsByResource[resource, default: []].append(completion)
+
+            if let existing = operationsByResource[resource] {
+                if existing.queuePriority.rawValue < priority.rawValue {
+                    existing.queuePriority = priority
+                }
+                return
+            }
+
+            let operation = BlockOperation { [self] in
+                finish(resource: resource, result: loadAndPrecompile(resource: resource))
+            }
+            operation.queuePriority = priority
+            operationsByResource[resource] = operation
+            queue.addOperation(operation)
+        }
+    }
+
+    private func finish(resource: String, result: Result<Data, Error>) {
+        let completions = stateQueue.sync { [self] in
+            if case .success(let data) = result {
+                dataByResource[resource] = data
+            }
+
+            operationsByResource.removeValue(forKey: resource)
+            return completionsByResource.removeValue(forKey: resource) ?? []
+        }
+
+        DispatchQueue.main.async {
+            completions.forEach { $0(result) }
+        }
+    }
+
+    private func loadAndPrecompile(resource: String) -> Result<Data, Error> {
+        guard let url = Bundle.main.url(
+            forResource: resource,
+            withExtension: "wasm",
+            subdirectory: "Examples"
+        ) else {
+            return .failure(ExampleWasmCacheError.missing(resource))
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            guard PawsRendererInstance.precompileWasm(data) else {
+                return .failure(ExampleWasmCacheError.precompileFailed(resource))
+            }
+            return .success(data)
+        } catch {
+            return .failure(ExampleWasmCacheError.readFailed(resource))
+        }
+    }
 }

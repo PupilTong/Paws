@@ -10,6 +10,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 engine = { path = "../engine" }
 wasmtime-engine = { path = "../wasmtime-engine" }
+fnv = "1.0.7"
 stylo = "0.13"
 wat = "1"
 

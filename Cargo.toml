@@ -78,3 +78,9 @@ chrono = "0.4"
 thiserror = "2.0"
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 reqwest = "0.13"
+
+[profile.ios-dev]
+inherits = "dev"
+opt-level = 2
+debug = 1
+incremental = true
