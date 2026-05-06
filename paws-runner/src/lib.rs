@@ -2,8 +2,10 @@
 //!
 //! [`Runner`] wraps [`engine::RuntimeState`] with a builder-style API and
 //! viewport configuration, then drives [`wasmtime_engine::run_wasm`] under
-//! the hood. Tests and tools use this crate to avoid reinventing the
-//! "load wasm → run → inspect DOM" flow.
+//! the hood. It reuses one `wasmtime::Engine` and caches compiled artifacts
+//! by exact guest bytes so repeated runs skip wasmtime compilation. Tests and
+//! tools use this crate to avoid reinventing the "load wasm → run → inspect
+//! DOM" flow.
 //!
 //! Commit is guest-owned: the runner never calls commit on the host side.
 //! A Paws WASM guest that wants its layout computed must call the
