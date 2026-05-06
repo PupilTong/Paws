@@ -18,10 +18,9 @@
 // silently swallowing that error in the guest wrapper. The WIT schema
 // is where that bug is fixed.
 //
-// This file is the schema-only deliverable. The code migration that
-// consumes it happens in a follow-up PR; until then the schema is not
-// referenced by any Cargo build, it is only validated by
-// `wasm-tools component wit wit/paws.wit`.
+// This file is the source of truth for the component ABI. It is consumed
+// directly by `rust-wasm-binding` and `wasmtime-engine` during Cargo builds;
+// validate schema-only changes with `wasm-tools component wit wit/paws.wit`.
 
 package paws:host@0.1.0;
 

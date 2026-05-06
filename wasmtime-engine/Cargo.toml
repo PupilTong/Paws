@@ -49,3 +49,7 @@ paws-examples = { path = "../examples" }
 [[bench]]
 name = "engine_bench"
 harness = false
+
+[[bench]]
+name = "component_engine_bench"
+harness = false

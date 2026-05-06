@@ -426,7 +426,7 @@ fn run_engine(
             match runtime.start_session(state, &wasm_bytes) {
                 Ok(session) => session,
                 Err(e) => {
-                    eprintln!("paws iOS engine: guest failed to start: {}", e.error);
+                    log::error!("paws iOS engine: guest failed to start: {}", e.error);
                     return;
                 }
             }
@@ -441,7 +441,7 @@ fn run_engine(
             match msg {
                 EngineMessage::Click { x, y } => {
                     if let Err(e) = session.dispatch_pointer_event(x, y, "click") {
-                        eprintln!("paws iOS engine: pointer dispatch failed: {e}");
+                        log::warn!("paws iOS engine: pointer dispatch failed: {e}");
                     }
                 }
                 EngineMessage::Stop => break,
@@ -457,7 +457,7 @@ fn run_engine(
         if let Err(e) =
             wasmtime_engine::run_wasm_with_engine(&engine, state, &wasm_bytes, &func_name)
         {
-            eprintln!("paws iOS engine: guest failed to run: {}", e.error);
+            log::error!("paws iOS engine: guest failed to run: {}", e.error);
             return;
         }
         for msg in receiver {
