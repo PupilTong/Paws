@@ -66,6 +66,7 @@ final class WelcomeViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         let entry = ExampleCatalog.sections[indexPath.section].entries[indexPath.row]
+        ExampleWasmCache.shared.preload(entry, priority: .veryHigh)
         let runner = ExampleRunnerViewController(entry: entry)
         navigationController?.pushViewController(runner, animated: true)
     }

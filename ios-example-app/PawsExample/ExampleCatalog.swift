@@ -171,6 +171,7 @@ enum ExampleWasmCacheError: LocalizedError {
 final class ExampleWasmCache {
     static let shared = ExampleWasmCache()
 
+    private let stateQueue = DispatchQueue(label: "dev.paws.example.wasm-cache.state")
     private let queue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "dev.paws.example.wasm-cache"
@@ -179,13 +180,19 @@ final class ExampleWasmCache {
         return queue
     }()
     private var dataByResource: [String: Data] = [:]
+    private var completionsByResource: [String: [(Result<Data, Error>) -> Void]] = [:]
+    private var operationsByResource: [String: Operation] = [:]
 
     private init() {}
 
     func prewarm(_ entries: [ExampleEntry]) {
         for entry in entries {
-            load(entry, priority: .veryLow) { _ in }
+            preload(entry, priority: .veryLow)
         }
+    }
+
+    func preload(_ entry: ExampleEntry, priority: Operation.QueuePriority = .high) {
+        load(entry, priority: priority) { _ in }
     }
 
     func load(
@@ -194,7 +201,7 @@ final class ExampleWasmCache {
         completion: @escaping (Result<Data, Error>) -> Void
     ) {
         let resource = entry.wasmResourceName
-        let operation = BlockOperation { [self] in
+        stateQueue.async { [self] in
             if let cached = dataByResource[resource] {
                 DispatchQueue.main.async {
                     completion(.success(cached))
@@ -202,18 +209,37 @@ final class ExampleWasmCache {
                 return
             }
 
-            let result = loadAndPrecompile(resource: resource)
+            completionsByResource[resource, default: []].append(completion)
 
+            if let existing = operationsByResource[resource] {
+                if existing.queuePriority.rawValue < priority.rawValue {
+                    existing.queuePriority = priority
+                }
+                return
+            }
+
+            let operation = BlockOperation { [self] in
+                finish(resource: resource, result: loadAndPrecompile(resource: resource))
+            }
+            operation.queuePriority = priority
+            operationsByResource[resource] = operation
+            queue.addOperation(operation)
+        }
+    }
+
+    private func finish(resource: String, result: Result<Data, Error>) {
+        let completions = stateQueue.sync { [self] in
             if case .success(let data) = result {
                 dataByResource[resource] = data
             }
 
-            DispatchQueue.main.async {
-                completion(result)
-            }
+            operationsByResource.removeValue(forKey: resource)
+            return completionsByResource.removeValue(forKey: resource) ?? []
         }
-        operation.queuePriority = priority
-        queue.addOperation(operation)
+
+        DispatchQueue.main.async {
+            completions.forEach { $0(result) }
+        }
     }
 
     private func loadAndPrecompile(resource: String) -> Result<Data, Error> {
