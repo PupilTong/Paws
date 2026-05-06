@@ -1,11 +1,11 @@
 use crate::runtime::RenderState;
 use atomic_refcell::AtomicRefCell;
 use bitflags::bitflags;
+use fnv::{FnvHashMap, FnvHashSet};
 use markup5ever::QualName;
 use selectors::matching::ElementSelectorFlags;
 use slab::Slab;
 use std::cell::UnsafeCell;
-use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use style::data::ElementDataWrapper;
 use style::properties::PropertyDeclarationBlock;
@@ -71,8 +71,8 @@ pub struct PawsElement<S: RenderState = ()> {
     // Element data
     pub(crate) name: Option<QualName>,
     pub(crate) id_attr: Option<Atom>,
-    pub(crate) attrs: HashMap<Atom, String>,
-    pub(crate) classes: HashSet<Atom>,
+    pub(crate) attrs: FnvHashMap<Atom, String>,
+    pub(crate) classes: FnvHashSet<Atom>,
     pub(crate) style_attribute: Option<Arc<Locked<PropertyDeclarationBlock>>>,
     pub(crate) shadow_root_id: Option<taffy::NodeId>,
 
@@ -166,8 +166,8 @@ impl<S: RenderState> PawsElement<S> {
 
             name: None,
             id_attr: None,
-            attrs: HashMap::new(),
-            classes: HashSet::new(),
+            attrs: FnvHashMap::default(),
+            classes: FnvHashSet::default(),
             style_attribute: None,
             shadow_root_id: None,
             shadow_mode: None,
