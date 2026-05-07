@@ -166,8 +166,8 @@ impl<S: RenderState> PawsElement<S> {
 
             name: None,
             id_attr: None,
-            attrs: HashMap::new(),
-            classes: HashSet::new(),
+            attrs: HashMap::default(),
+            classes: HashSet::default(),
             style_attribute: None,
             shadow_root_id: None,
             shadow_mode: None,

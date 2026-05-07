@@ -4,7 +4,7 @@ use crate::runtime::RenderState;
 use fnv::FnvHashSet;
 use markup5ever::QualName;
 use slab::Slab;
-use style::shared_lock::SharedRwLock;
+use style::shared_lock::{SharedRwLock, StylesheetGuards};
 
 /// Errors that can occur during DOM tree operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -816,61 +816,56 @@ impl<S: RenderState> Document<S> {
         let mut layout_invalidations = Vec::new();
         let mut queue = std::collections::VecDeque::new();
         let mut matching_state = crate::style::StyleMatchingState::default();
+        let style_guard = style_context.lock.read();
+        let stylesheet_guards = StylesheetGuards::same(&style_guard);
         queue.push_back((self.root, false, 0_usize));
 
         while let Some((id, ancestor_forced, style_depth)) = queue.pop_front() {
-            let Some(node) = self.get_node(id) else {
+            let Some((node_needs_style, has_dirty_descendants, is_element, is_text_node)) =
+                self.get_node(id).map(|node| {
+                    (
+                        node.needs_style_recalc(),
+                        node.has_dirty_descendants(),
+                        node.is_element(),
+                        node.is_text_node(),
+                    )
+                })
+            else {
                 continue;
             };
 
-            let node_needs_style = node.needs_style_recalc();
-            let has_dirty_descendants = node.has_dirty_descendants();
             if !ancestor_forced && !node_needs_style && !has_dirty_descendants {
                 continue;
             }
 
-            if node.is_element() {
+            if is_element {
                 let should_restyle = ancestor_forced || node_needs_style;
                 let child_force = should_restyle;
 
                 let computed = if should_restyle {
-                    // Resolve the style parent: if the DOM parent is a ShadowRoot,
-                    // inherit from the host element (the ShadowRoot's parent) instead.
-                    let parent_style = {
-                        let node = self.get_node(id).unwrap();
-                        let mut style_parent_id = node.parent;
-                        if let Some(pid) = node.parent {
-                            if let Some(p) = self.get_node(pid) {
-                                if p.node_type == NodeType::ShadowRoot {
-                                    style_parent_id = p.parent; // host element
-                                }
-                            }
-                        }
-                        style_parent_id
-                            .and_then(|pid| self.get_node(pid))
-                            .and_then(|p| p.computed_values.as_ref())
-                            .cloned()
-                    };
-
                     let node = self.get_node(id).unwrap();
+                    let parent_style = self
+                        .style_parent_id(id)
+                        .and_then(|pid| self.get_node(pid))
+                        .and_then(|p| p.computed_values.as_deref());
                     matching_state.prepare_for_node(self, id, style_depth);
                     Some(crate::style::compute_style_for_node(
-                        self,
                         style_context,
                         node,
-                        parent_style.as_deref(),
+                        parent_style,
                         &mut matching_state,
+                        &stylesheet_guards,
                     ))
                 } else {
                     None
                 };
 
                 // Re-borrow to enqueue children before mutable borrow.
-                let children: Vec<taffy::NodeId> =
-                    self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
                 let child_style_depth = style_depth + 1;
-                for &child_id in &children {
-                    queue.push_back((child_id, child_force, child_style_depth));
+                if let Some(node) = self.get_node(id) {
+                    for &child_id in &node.children {
+                        queue.push_back((child_id, child_force, child_style_depth));
+                    }
                 }
 
                 // Also enter the shadow tree if this element is a shadow host.
@@ -878,8 +873,7 @@ impl<S: RenderState> Document<S> {
                 if let Some(shadow_root_id) = self.get_node(id).and_then(|n| n.shadow_root_id) {
                     self.assign_slots(id);
                     if let Some(shadow_root) = self.get_node(shadow_root_id) {
-                        let shadow_children: Vec<taffy::NodeId> = shadow_root.children.clone();
-                        for &child_id in &shadow_children {
+                        for &child_id in &shadow_root.children {
                             queue.push_back((child_id, child_force, child_style_depth));
                         }
                     }
@@ -929,27 +923,17 @@ impl<S: RenderState> Document<S> {
                     node.unset_style_dirty();
                     node.unset_dirty_descendants();
                 }
-            } else if node.is_text_node() {
+            } else if is_text_node {
                 let should_restyle = ancestor_forced || node_needs_style;
                 if should_restyle {
                     // Text nodes inherit parent styles and get a default
                     // taffy::Style so layout can measure them as leaf nodes.
                     // If the DOM parent is a ShadowRoot, inherit from the host.
-                    let parent_cv = {
-                        let node = self.get_node(id).unwrap();
-                        let mut style_parent_id = node.parent;
-                        if let Some(pid) = node.parent {
-                            if let Some(p) = self.get_node(pid) {
-                                if p.node_type == NodeType::ShadowRoot {
-                                    style_parent_id = p.parent;
-                                }
-                            }
-                        }
-                        style_parent_id
-                            .and_then(|pid| self.get_node(pid))
-                            .and_then(|p| p.computed_values.as_ref())
-                            .cloned()
-                    };
+                    let parent_cv = self
+                        .style_parent_id(id)
+                        .and_then(|pid| self.get_node(pid))
+                        .and_then(|p| p.computed_values.as_ref())
+                        .cloned();
                     if let Some(mut_node) = self.get_node_mut(id) {
                         mut_node.taffy_style = Some(taffy::Style::default());
                         mut_node.computed_values = parent_cv;
@@ -965,10 +949,10 @@ impl<S: RenderState> Document<S> {
                 // Non-element, non-text nodes (Document, ShadowRoot):
                 // enqueue children for traversal.
                 let child_force = ancestor_forced || node_needs_style;
-                let children: Vec<taffy::NodeId> =
-                    self.get_node(id).map_or(Vec::new(), |n| n.children.clone());
-                for &child_id in &children {
-                    queue.push_back((child_id, child_force, style_depth));
+                if let Some(node) = self.get_node(id) {
+                    for &child_id in &node.children {
+                        queue.push_back((child_id, child_force, style_depth));
+                    }
                 }
                 // Clear dirty flags on non-element nodes too.
                 if let Some(node) = self.get_node(id) {
@@ -981,6 +965,17 @@ impl<S: RenderState> Document<S> {
             .profiler
             .record_resolve_pass(crate::style::profiling::elapsed(resolve_started));
         layout_invalidations
+    }
+
+    fn style_parent_id(&self, node_id: taffy::NodeId) -> Option<taffy::NodeId> {
+        let node = self.get_node(node_id)?;
+        let parent_id = node.parent?;
+        let parent = self.get_node(parent_id)?;
+        if parent.node_type == NodeType::ShadowRoot {
+            parent.parent
+        } else {
+            Some(parent_id)
+        }
     }
 
     /// Returns the child list used by layout and rendering.

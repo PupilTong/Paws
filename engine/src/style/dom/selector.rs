@@ -124,10 +124,8 @@ impl<S: RenderState> selectors::Element for &PawsElement<S> {
         local_name: &LocalName,
         msg: &AttrSelectorOperation<&AtomString>,
     ) -> bool {
-        match self.get_attr(local_name, &Namespace::default()) {
-            Some(val) => msg.eval_str(&val),
-            None => false,
-        }
+        let key = Atom::from(local_name.0.as_ref());
+        self.attrs.get(&key).is_some_and(|val| msg.eval_str(val))
     }
 
     fn match_non_ts_pseudo_class(
@@ -190,6 +188,13 @@ impl<S: RenderState> selectors::Element for &PawsElement<S> {
         name: &<Self::Impl as selectors::SelectorImpl>::Identifier,
         case_sensitivity: selectors::attr::CaseSensitivity,
     ) -> bool {
+        if matches!(
+            case_sensitivity,
+            selectors::attr::CaseSensitivity::CaseSensitive
+        ) {
+            return self.classes.contains(name);
+        }
+
         for c in &self.classes {
             if case_sensitivity.eq_atom(c, name) {
                 return true;

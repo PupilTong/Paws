@@ -357,18 +357,22 @@ pub(crate) fn update_inline_style<S: RenderState>(
     element.style_attribute = Some(Arc::new(lock.wrap(block)));
 }
 
-pub(crate) fn compute_style_for_node<S: RenderState>(
-    _doc: &crate::dom::Document<S>,
+pub(crate) fn compute_style_for_node<'a, S: RenderState>(
     style_context: &StyleContext,
     node: &PawsElement<S>,
     parent_style: Option<&ComputedValues>,
     matching_state: &mut StyleMatchingState,
+    guards: &StylesheetGuards<'a>,
 ) -> Arc<ComputedValues> {
-    let lock = &style_context.lock;
-    let guard = lock.read();
-    let guards = StylesheetGuards::same(&guard);
-    let default_parent = ComputedValues::initial_values_with_font_override(Font::initial_values());
-    let effective_parent = parent_style.unwrap_or(&default_parent);
+    let default_parent;
+    let effective_parent = match parent_style {
+        Some(parent_style) => parent_style,
+        None => {
+            default_parent =
+                ComputedValues::initial_values_with_font_override(Font::initial_values());
+            &default_parent
+        }
+    };
 
     let selector_matching_started = profiling::start_timer();
 
@@ -404,7 +408,7 @@ pub(crate) fn compute_style_for_node<S: RenderState>(
         match_results
             .into_iter()
             .map(|block| (block.source.clone(), block.cascade_priority)),
-        &guards,
+        guards,
     );
     let rule_tree_insertion = profiling::elapsed(rule_tree_started);
 
@@ -415,7 +419,7 @@ pub(crate) fn compute_style_for_node<S: RenderState>(
         &style_context.stylist,
         None, // Pseudo
         &rule_node,
-        &guards,
+        guards,
         Some(effective_parent), // parent_style
         Some(effective_parent), // layout_parent_style
         FirstLineReparenting::No,
