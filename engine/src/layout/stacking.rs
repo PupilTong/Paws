@@ -7,6 +7,7 @@
 //! paint order.
 
 use crate::runtime::RenderState;
+use std::cmp::Ordering;
 use style::properties::ComputedValues;
 
 use crate::dom::document::Document;
@@ -170,6 +171,22 @@ fn paint_layer<S: RenderState>(node: &PawsElement<S>) -> i8 {
     3
 }
 
+/// Compares two children using the same paint-order key as
+/// [`paint_order_children`].
+pub(crate) fn compare_paint_order<S: RenderState>(
+    parent: &PawsElement<S>,
+    a: &PawsElement<S>,
+    b: &PawsElement<S>,
+) -> Ordering {
+    if parent.creates_stacking_context {
+        paint_layer(a)
+            .cmp(&paint_layer(b))
+            .then_with(|| a.z_index().unwrap_or(0).cmp(&b.z_index().unwrap_or(0)))
+    } else {
+        a.z_index().unwrap_or(0).cmp(&b.z_index().unwrap_or(0))
+    }
+}
+
 /// Returns a node's flat-tree children sorted by CSS2.1 Appendix E paint order.
 ///
 /// If the node creates a stacking context, children are sorted by
@@ -198,22 +215,12 @@ pub fn paint_order_children<S: RenderState>(
         return children;
     }
 
-    if node.creates_stacking_context {
-        // Full CSS2.1 Appendix E paint-order sort (stable for DOM-order tiebreak).
-        children.sort_by(|&a, &b| {
-            let node_a = doc.get_node(a).unwrap();
-            let node_b = doc.get_node(b).unwrap();
-            paint_layer(node_a).cmp(&paint_layer(node_b)).then_with(|| {
-                node_a
-                    .z_index()
-                    .unwrap_or(0)
-                    .cmp(&node_b.z_index().unwrap_or(0))
-            })
-        });
-    } else {
-        // Non-SC node: simple z-index sort (preserves previous behavior).
-        children.sort_by_key(|&cid| doc.get_node(cid).and_then(|n| n.z_index()).unwrap_or(0));
-    }
+    // Stable for DOM-order tiebreaks.
+    children.sort_by(|&a, &b| {
+        let node_a = doc.get_node(a).unwrap();
+        let node_b = doc.get_node(b).unwrap();
+        compare_paint_order(node, node_a, node_b)
+    });
 
     children
 }

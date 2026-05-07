@@ -17,7 +17,7 @@
 use taffy::{NodeId, Point};
 
 use crate::dom::Document;
-use crate::layout::paint_order_children;
+use crate::layout::stacking::compare_paint_order;
 use crate::runtime::RenderState;
 
 /// Returns the deepest hit-testable element at `point`, or `None` if no
@@ -64,12 +64,41 @@ fn hit_test_node<S: RenderState>(
         y: point.y - location.y,
     };
 
-    // Front-to-back: descendants painted later (on top) win over earlier
-    // ones at the same point.
-    let children = paint_order_children(doc, node_id);
-    for &child_id in children.iter().rev() {
-        if let Some(hit) = hit_test_node(doc, child_id, local_point) {
-            return Some(hit);
+    if flat_tree_children_are_in_paint_order(doc, node_id, node) {
+        let children = doc.flat_tree_child_ids(node_id);
+        for &child_id in children.iter().rev() {
+            if doc
+                .get_node(child_id)
+                .is_none_or(|child| !child.has_style())
+            {
+                continue;
+            }
+            if let Some(hit) = hit_test_node(doc, child_id, local_point) {
+                return Some(hit);
+            }
+        }
+    } else {
+        let mut children: Vec<NodeId> = doc
+            .flat_tree_child_ids(node_id)
+            .iter()
+            .copied()
+            .filter(|&child_id| {
+                doc.get_node(child_id)
+                    .is_some_and(|child| child.has_style())
+            })
+            .collect();
+
+        // Stable for DOM-order tiebreaks, matching paint_order_children().
+        children.sort_by(|&a, &b| {
+            let node_a = doc.get_node(a).unwrap();
+            let node_b = doc.get_node(b).unwrap();
+            compare_paint_order(node, node_a, node_b)
+        });
+
+        for &child_id in children.iter().rev() {
+            if let Some(hit) = hit_test_node(doc, child_id, local_point) {
+                return Some(hit);
+            }
         }
     }
 
@@ -87,6 +116,36 @@ fn hit_test_node<S: RenderState>(
     }
 
     Some(node_id)
+}
+
+fn flat_tree_children_are_in_paint_order<S: RenderState>(
+    doc: &Document<S>,
+    node_id: NodeId,
+    parent: &crate::dom::PawsElement<S>,
+) -> bool {
+    let mut previous_styled_child = None;
+
+    for &child_id in doc.flat_tree_child_ids(node_id) {
+        let Some(child) = doc.get_node(child_id) else {
+            continue;
+        };
+        if !child.has_style() {
+            continue;
+        }
+
+        if let Some(previous_id) = previous_styled_child {
+            let previous = doc
+                .get_node(previous_id)
+                .expect("previous styled child came from flat_tree_child_ids");
+            if compare_paint_order(parent, previous, child).is_gt() {
+                return false;
+            }
+        }
+
+        previous_styled_child = Some(child_id);
+    }
+
+    true
 }
 
 #[cfg(test)]
