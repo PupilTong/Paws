@@ -56,3 +56,7 @@ harness = false
 [[bench]]
 name = "commit_bench"
 harness = false
+
+[[bench]]
+name = "dom_bench"
+harness = false

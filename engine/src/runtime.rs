@@ -693,32 +693,14 @@ impl<R: EngineRenderer, I: EngineIOController> RuntimeState<R, I> {
 
     /// Batch-appends multiple children to a parent with transactional pre-validation.
     pub fn append_elements(&mut self, parent: u32, children: &[u32]) -> Result<(), HostErrorCode> {
-        // Pre-validate: check for duplicates
-        let mut seen = fnv::FnvHashSet::default();
-        for &child in children {
-            if !seen.insert(child) {
-                return Err(HostErrorCode::InvalidChild);
-            }
-        }
-
-        // Pre-validate: check each child
-        for &child in children {
-            let child_id = taffy::NodeId::from(child as u64);
-            if self.doc.get_node(child_id).is_none() {
-                return Err(HostErrorCode::InvalidChild);
-            }
-            let old_parent = self.doc.get_node(child_id).unwrap().parent;
-            if old_parent.is_some() && old_parent != Some(taffy::NodeId::from(parent as u64)) {
-                return Err(HostErrorCode::ChildAlreadyHasParent);
-            }
-            if parent == child {
-                return Err(HostErrorCode::CycleDetected);
-            }
-        }
-        for &child in children {
-            self.append_element(parent, child)?;
-        }
-        Ok(())
+        let parent_id = taffy::NodeId::from(parent as u64);
+        let child_ids: Vec<_> = children
+            .iter()
+            .map(|&child| taffy::NodeId::from(child as u64))
+            .collect();
+        self.doc
+            .append_children(parent_id, &child_ids)
+            .map_err(dom_error_to_host)
     }
 
     /// Removes a child from its parent without deleting the child node.
@@ -1116,6 +1098,8 @@ fn dom_error_to_host(e: DomError) -> HostErrorCode {
 
 #[cfg(test)]
 mod tests {
+    use crate::dom::NodeFlags;
+
     use super::*;
 
     fn assert_layout_size(state: &RuntimeState, id: u32, width: f32, height: f32) {
@@ -1480,6 +1464,113 @@ mod tests {
             .get_node(taffy::NodeId::from(parent as u64))
             .unwrap();
         assert!(p.children.is_empty());
+    }
+
+    #[test]
+    fn test_append_elements_appends_children_in_order_and_connects_subtree() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let first = state.create_element("span".to_string());
+        let second = state.create_element("p".to_string());
+        let grandchild = state.create_element("em".to_string());
+
+        state.append_element(0, parent).unwrap();
+        state.append_element(first, grandchild).unwrap();
+        state.append_elements(parent, &[first, second]).unwrap();
+
+        let parent_node = state
+            .doc
+            .get_node(taffy::NodeId::from(parent as u64))
+            .unwrap();
+        assert_eq!(
+            parent_node.children,
+            vec![
+                taffy::NodeId::from(first as u64),
+                taffy::NodeId::from(second as u64)
+            ]
+        );
+
+        for node in [first, second, grandchild] {
+            let node = state
+                .doc
+                .get_node(taffy::NodeId::from(node as u64))
+                .unwrap();
+            assert!(node.flags.contains(NodeFlags::IS_IN_DOCUMENT));
+        }
+    }
+
+    #[test]
+    fn test_append_elements_reappends_existing_children_in_requested_order() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let first = state.create_element("span".to_string());
+        let second = state.create_element("p".to_string());
+        let third = state.create_element("em".to_string());
+        let fourth = state.create_element("strong".to_string());
+
+        state.append_element(0, parent).unwrap();
+        for child in [first, second, third, fourth] {
+            state.append_element(parent, child).unwrap();
+        }
+
+        state.append_elements(parent, &[third, second]).unwrap();
+
+        let parent_node = state
+            .doc
+            .get_node(taffy::NodeId::from(parent as u64))
+            .unwrap();
+        assert_eq!(
+            parent_node.children,
+            vec![
+                taffy::NodeId::from(first as u64),
+                taffy::NodeId::from(fourth as u64),
+                taffy::NodeId::from(third as u64),
+                taffy::NodeId::from(second as u64),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_append_elements_rejects_invalid_parent_without_partial_apply() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let child = state.create_element("span".to_string());
+
+        assert_eq!(
+            state.append_elements(999, &[child]),
+            Err(HostErrorCode::InvalidParent)
+        );
+
+        let child_node = state
+            .doc
+            .get_node(taffy::NodeId::from(child as u64))
+            .unwrap();
+        assert_eq!(child_node.parent, None);
+    }
+
+    #[test]
+    fn test_append_elements_rejects_cycle_without_partial_apply() {
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let parent = state.create_element("div".to_string());
+        let child = state.create_element("span".to_string());
+
+        state.append_element(0, parent).unwrap();
+        state.append_element(parent, child).unwrap();
+
+        assert_eq!(
+            state.append_elements(child, &[parent]),
+            Err(HostErrorCode::CycleDetected)
+        );
+
+        let parent_node = state
+            .doc
+            .get_node(taffy::NodeId::from(parent as u64))
+            .unwrap();
+        let child_node = state
+            .doc
+            .get_node(taffy::NodeId::from(child as u64))
+            .unwrap();
+        assert_eq!(parent_node.parent, Some(taffy::NodeId::from(0_u64)));
+        assert_eq!(child_node.parent, Some(taffy::NodeId::from(parent as u64)));
     }
 
     // ─── IR → Stylo pipeline integration tests ─────────────────────
