@@ -345,6 +345,75 @@ impl<S: RenderState> Document<S> {
         Ok(())
     }
 
+    /// Appends multiple child nodes to a parent with transactional validation.
+    pub(crate) fn append_children(
+        &mut self,
+        parent_id: taffy::NodeId,
+        child_ids: &[taffy::NodeId],
+    ) -> Result<(), DomError> {
+        if !self.nodes.contains(u64::from(parent_id) as usize) {
+            return Err(DomError::InvalidParent);
+        }
+        if child_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut child_set = FnvHashSet::default();
+        for &child_id in child_ids {
+            if !child_set.insert(child_id) {
+                return Err(DomError::InvalidChild);
+            }
+            if !self.nodes.contains(u64::from(child_id) as usize) {
+                return Err(DomError::InvalidChild);
+            }
+        }
+
+        let mut ancestor = Some(parent_id);
+        while let Some(current_id) = ancestor {
+            if child_set.contains(&current_id) {
+                return Err(DomError::CycleDetected);
+            }
+            ancestor = self.get_node(current_id).and_then(|node| node.parent);
+        }
+
+        let mut has_same_parent_child = false;
+        for &child_id in child_ids {
+            let old_parent = self.get_node(child_id).unwrap().parent;
+            if old_parent == Some(parent_id) {
+                has_same_parent_child = true;
+            } else if old_parent.is_some() {
+                return Err(DomError::ChildAlreadyHasParent);
+            }
+        }
+
+        let parent_in_doc = {
+            let parent = self
+                .get_node_mut(parent_id)
+                .expect("parent validated before batch append");
+            if has_same_parent_child {
+                parent.children.retain(|id| !child_set.contains(id));
+            }
+            parent.children.reserve(child_ids.len());
+            parent.children.extend_from_slice(child_ids);
+            parent.mark_dirty_and_ancestors();
+            parent.flags.contains(NodeFlags::IS_IN_DOCUMENT)
+        };
+        self.mark_layout_input_changed(parent_id);
+
+        for &child_id in child_ids {
+            let child = self
+                .get_node_mut(child_id)
+                .expect("child validated before batch append");
+            child.parent = Some(parent_id);
+        }
+
+        if parent_in_doc {
+            self.propagate_in_document_flags(child_ids);
+        }
+
+        Ok(())
+    }
+
     /// Recursively iterates over a node and its descendants in DFS order.
     /// Also traverses into any attached shadow roots.
     fn traverse_nodes_dfs_mut(
@@ -380,7 +449,22 @@ impl<S: RenderState> Document<S> {
 
     /// Recursively sets the IS_IN_DOCUMENT flag on a node and all its descendants.
     fn propagate_in_document_flag(&mut self, node_id: taffy::NodeId) {
-        self.traverse_nodes_dfs_mut(node_id, |node| node.flags.insert(NodeFlags::IS_IN_DOCUMENT));
+        self.propagate_in_document_flags(std::slice::from_ref(&node_id));
+    }
+
+    /// Recursively sets the IS_IN_DOCUMENT flag on multiple subtree roots.
+    fn propagate_in_document_flags(&mut self, node_ids: &[taffy::NodeId]) {
+        let mut stack = Vec::with_capacity(node_ids.len());
+        stack.extend_from_slice(node_ids);
+        while let Some(id) = stack.pop() {
+            if let Some(node) = self.get_node_mut(id) {
+                stack.extend(node.children.iter().copied());
+                if let Some(shadow_root_id) = node.shadow_root_id {
+                    stack.push(shadow_root_id);
+                }
+                node.flags.insert(NodeFlags::IS_IN_DOCUMENT);
+            }
+        }
     }
 
     /// Recursively clears the IS_IN_DOCUMENT flag on a node and all its descendants.
