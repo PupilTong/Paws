@@ -17,7 +17,7 @@
 use taffy::{NodeId, Point};
 
 use crate::dom::Document;
-use crate::layout::paint_order_children;
+use crate::layout::stacking::compare_paint_order;
 use crate::runtime::RenderState;
 
 /// Returns the deepest hit-testable element at `point`, or `None` if no
@@ -64,12 +64,41 @@ fn hit_test_node<S: RenderState>(
         y: point.y - location.y,
     };
 
-    // Front-to-back: descendants painted later (on top) win over earlier
-    // ones at the same point.
-    let children = paint_order_children(doc, node_id);
-    for &child_id in children.iter().rev() {
-        if let Some(hit) = hit_test_node(doc, child_id, local_point) {
-            return Some(hit);
+    if flat_tree_children_are_in_paint_order(doc, node_id, node) {
+        let children = doc.flat_tree_child_ids(node_id);
+        for &child_id in children.iter().rev() {
+            if doc
+                .get_node(child_id)
+                .is_none_or(|child| !child.has_style())
+            {
+                continue;
+            }
+            if let Some(hit) = hit_test_node(doc, child_id, local_point) {
+                return Some(hit);
+            }
+        }
+    } else {
+        let mut children: Vec<NodeId> = doc
+            .flat_tree_child_ids(node_id)
+            .iter()
+            .copied()
+            .filter(|&child_id| {
+                doc.get_node(child_id)
+                    .is_some_and(|child| child.has_style())
+            })
+            .collect();
+
+        // Stable for DOM-order tiebreaks, matching paint_order_children().
+        children.sort_by(|&a, &b| {
+            let node_a = doc.get_node(a).unwrap();
+            let node_b = doc.get_node(b).unwrap();
+            compare_paint_order(node, node_a, node_b)
+        });
+
+        for &child_id in children.iter().rev() {
+            if let Some(hit) = hit_test_node(doc, child_id, local_point) {
+                return Some(hit);
+            }
         }
     }
 
@@ -87,6 +116,36 @@ fn hit_test_node<S: RenderState>(
     }
 
     Some(node_id)
+}
+
+fn flat_tree_children_are_in_paint_order<S: RenderState>(
+    doc: &Document<S>,
+    node_id: NodeId,
+    parent: &crate::dom::PawsElement<S>,
+) -> bool {
+    let mut previous_styled_child = None;
+
+    for &child_id in doc.flat_tree_child_ids(node_id) {
+        let Some(child) = doc.get_node(child_id) else {
+            continue;
+        };
+        if !child.has_style() {
+            continue;
+        }
+
+        if let Some(previous_id) = previous_styled_child {
+            let previous = doc
+                .get_node(previous_id)
+                .expect("previous styled child came from flat_tree_child_ids");
+            if compare_paint_order(parent, previous, child).is_gt() {
+                return false;
+            }
+        }
+
+        previous_styled_child = Some(child_id);
+    }
+
+    true
 }
 
 #[cfg(test)]
@@ -252,6 +311,51 @@ mod tests {
             Some(NodeId::from(top as u64))
         );
         // Confirm the bottom node is still in the document; it just lost the hit.
+        assert!(state.doc.get_node(NodeId::from(bottom as u64)).is_some());
+    }
+
+    /// If DOM order is not paint order, hit-test still respects z-index.
+    #[test]
+    fn reverse_dom_z_order_still_hits_topmost() {
+        let mut state = RuntimeState::new("https://test.example".into());
+        let root = state.create_element("div".into());
+        state.append_element(0, root).unwrap();
+        state
+            .set_inline_style(root, "position".into(), "relative".into())
+            .unwrap();
+        state
+            .set_inline_style(root, "z-index".into(), "0".into())
+            .unwrap();
+        state
+            .set_inline_style(root, "width".into(), "200px".into())
+            .unwrap();
+        state
+            .set_inline_style(root, "height".into(), "200px".into())
+            .unwrap();
+
+        let common = [
+            ("position", "absolute"),
+            ("left", "0px"),
+            ("top", "0px"),
+            ("width", "100px"),
+            ("height", "100px"),
+        ];
+        let top = add_styled_child(&mut state, root, &common);
+        let bottom = add_styled_child(&mut state, root, &common);
+        // DOM order is top, bottom, but paint order is bottom, top.
+        state
+            .set_inline_style(top, "z-index".into(), "2".into())
+            .unwrap();
+        state
+            .set_inline_style(bottom, "z-index".into(), "1".into())
+            .unwrap();
+        build_layout(&mut state, root);
+
+        let root_id = NodeId::from(root as u64);
+        assert_eq!(
+            hit_test_at_point(&state.doc, root_id, pt(50.0, 50.0)),
+            Some(NodeId::from(top as u64))
+        );
         assert!(state.doc.get_node(NodeId::from(bottom as u64)).is_some());
     }
 
