@@ -314,6 +314,51 @@ mod tests {
         assert!(state.doc.get_node(NodeId::from(bottom as u64)).is_some());
     }
 
+    /// If DOM order is not paint order, hit-test still respects z-index.
+    #[test]
+    fn reverse_dom_z_order_still_hits_topmost() {
+        let mut state = RuntimeState::new("https://test.example".into());
+        let root = state.create_element("div".into());
+        state.append_element(0, root).unwrap();
+        state
+            .set_inline_style(root, "position".into(), "relative".into())
+            .unwrap();
+        state
+            .set_inline_style(root, "z-index".into(), "0".into())
+            .unwrap();
+        state
+            .set_inline_style(root, "width".into(), "200px".into())
+            .unwrap();
+        state
+            .set_inline_style(root, "height".into(), "200px".into())
+            .unwrap();
+
+        let common = [
+            ("position", "absolute"),
+            ("left", "0px"),
+            ("top", "0px"),
+            ("width", "100px"),
+            ("height", "100px"),
+        ];
+        let top = add_styled_child(&mut state, root, &common);
+        let bottom = add_styled_child(&mut state, root, &common);
+        // DOM order is top, bottom, but paint order is bottom, top.
+        state
+            .set_inline_style(top, "z-index".into(), "2".into())
+            .unwrap();
+        state
+            .set_inline_style(bottom, "z-index".into(), "1".into())
+            .unwrap();
+        build_layout(&mut state, root);
+
+        let root_id = NodeId::from(root as u64);
+        assert_eq!(
+            hit_test_at_point(&state.doc, root_id, pt(50.0, 50.0)),
+            Some(NodeId::from(top as u64))
+        );
+        assert!(state.doc.get_node(NodeId::from(bottom as u64)).is_some());
+    }
+
     /// Negative z-index siblings paint behind the parent's content; a sibling
     /// with z-index 0 (positioned) hits before a negative-z sibling.
     #[test]
