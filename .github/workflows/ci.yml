@@ -58,6 +58,14 @@ jobs:
             -p paws-examples \
             -- -D warnings
 
+      - name: Test
+        # Mirrors the contract documented in agents.md. The host coverage
+        # step below also exercises unit/integration tests under
+        # `-Cinstrument-coverage`, but `cargo llvm-cov --workspace` skips
+        # doctests by default — running `cargo test --all` here keeps
+        # doctests in the CI signal too.
+        run: cargo test --all --no-fail-fast
+
       - name: Generate host code coverage
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
