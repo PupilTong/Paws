@@ -1,0 +1,19 @@
+[package]
+name = "dom-nodes-document-create-element"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rust-wasm-binding = { path = "../../../rust-wasm-binding", default-features = false }
+yew = { path = "../../../yew/packages/yew", features = ["csr"] }
+
+# Standalone single-crate workspace so cargo does not climb upward and
+# discover the Paws root workspace. The `yew` and `rust-wasm-binding`
+# path-deps still resolve their own `*.workspace = true` entries
+# through the Paws root workspace, which is fine because cargo treats
+# *transitive* path deps independently from the *consumer's* workspace
+# discovery.
+[workspace]

@@ -103,6 +103,17 @@ component boundary.
 	- Engine code merged and packaged with Android/iOS apps.
 	- Provides style computation, layout, and rendering.
 
+## WPT Alignment
+
+Paws uses the [W3C Web Platform Tests (WPT)](https://github.com/web-platform-tests/wpt) as its spec-conformance reference. **There is no JavaScript engine in Paws and there will not be one** — WPT tests are not executed verbatim. Instead each relevant test is translated into a Rust test that exercises the engine through the Paws Yew fork.
+
+- The upstream WPT corpus is cloned to [`wpt-reference/`](wpt-reference/) (gitignored, read-only). Read it to understand the expected behavior of a test before translating.
+- Alignment status is tracked in [`wpt-alignment.md`](wpt-alignment.md). When you translate, start, or skip a test, update the relevant per-spec table and the status-summary counts.
+- **Yew flavor only.** Translated tests mount fixtures as Yew components (`html! { ... }`) and exercise Paws through the same API surface developers write against. Do **not** add a parallel direct-`rust_wasm_binding` flavor — the Yew variant is the one that proves the developer-experience promise.
+- **Every PR description must include the WPT alignment status block.** Copy the current "Status summary" table from `wpt-alignment.md`, plus the per-spec rows touched by the PR. PRs that do not change WPT alignment still copy the summary table — that keeps the number visible on every change.
+
+If a test cannot be translated yet because Paws is missing an engine capability, mark it `skipped` and record the missing capability in the `Reason / notes` column. That line becomes the TODO for whoever picks up that capability later.
+
 ## CI Expectations
 
 - `cargo fmt --check`

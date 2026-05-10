@@ -1,0 +1,26 @@
+[package]
+name = "paws-wpt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Each crate under `paws-wpt/fixtures/` is its own standalone wasm32-wasip2
+# guest (excluded from the Paws workspace, see the root Cargo.toml). They
+# are compiled by build.rs at build time of this crate; without these
+# `auto*` flags cargo could try to register them as targets of paws-wpt.
+# `autotests` is left at its default so cargo discovers integration tests
+# under `tests/`.
+autobins = false
+autoexamples = false
+autobenches = false
+
+[lib]
+path = "src/lib.rs"
+
+# Host-side dependencies — only used by the integration tests under
+# `tests/`. The library itself has no runtime deps; it just exposes the
+# testharness vocabulary plus a build-script-generated lookup table for
+# fixture wasm paths.
+[dev-dependencies]
+engine = { path = "../engine" }
+paws-runner = { path = "../paws-runner" }
