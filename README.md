@@ -201,7 +201,7 @@ If you'd rather not memorize any of this, see the prompt section above.
 Three assistants are wired into this repo and they all read from the
 same playbook:
 
-- **Claude** reads [`CLAUDE.md`](../CLAUDE.md) and [`agents.md`](agents.md)
+- **Claude** reads [CLAUDE.md](CLAUDE.md) and [agents.md](agents.md)
 - **Gemini (Google Antigravity)** reads `.agent/workflows/` and [`agents.md`](agents.md)
 - **GitHub Copilot** reads [`agents.md`](agents.md)
 
