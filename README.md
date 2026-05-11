@@ -54,10 +54,7 @@ for — there is no embedded WebView anywhere.
   <img src="docs/screenshots/ios/example-inline-image.png"     alt="Compile-time inline PNG via createObjectURL" width="180">
 </p>
 
-> Captured on an iPhone Air simulator running iOS 26.4. The
-> `PAWS_AUTO_OPEN_EXAMPLE=<resource>` env var pushes any example
-> directly, so screenshots are reproducible with a single
-> `xcrun simctl launch --env …` invocation.
+> Captured on an iPhone Air simulator running iOS 26.4.
 
 ---
 
