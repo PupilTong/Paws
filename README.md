@@ -38,6 +38,29 @@ the browser DOM. React-ish ergonomics, native rendering.
 
 ---
 
+## See It Running
+
+The bundled [iOS example app](ios-example-app) runs every guest in
+[`examples/`](examples) against the live UIKit renderer. The catalog
+on the left is a normal `UITableView`; each detail screen is a Paws
+guest. The pixels you see are painted by `UIView`s the engine asked
+for — there is no embedded WebView anywhere.
+
+<p align="center">
+  <img src="docs/screenshots/ios/example-catalog.png"          alt="Example catalog screen"                  width="180">
+  <img src="docs/screenshots/ios/example-basic-element.png"    alt="Basic element: a styled blue div"        width="180">
+  <img src="docs/screenshots/ios/example-nested-elements.png"  alt="Nested elements with batch append"       width="180">
+  <img src="docs/screenshots/ios/example-yew-counter.png"      alt="Yew counter component on Paws"           width="180">
+  <img src="docs/screenshots/ios/example-inline-image.png"     alt="Compile-time inline PNG via createObjectURL" width="180">
+</p>
+
+> Captured on an iPhone Air simulator running iOS 26.4. The
+> `PAWS_AUTO_OPEN_EXAMPLE=<resource>` env var pushes any example
+> directly, so screenshots are reproducible with a single
+> `xcrun simctl launch --env …` invocation.
+
+---
+
 ## The Architecture
 
 ```
