@@ -9,9 +9,18 @@
 //! conversion is an infallible enum-to-enum map — no string matching,
 //! no runtime validation.
 //!
-//! For the **Raw** fallback (untyped / forward-compat tokens) the legacy
-//! string-matching converters in [`helpers`], [`keyword`], and [`numeric`]
-//! are used.
+//! For the **Raw** fallback (untyped / forward-compat tokens) two paths
+//! run in sequence:
+//!
+//! 1. The bespoke string-matching converters in [`helpers`], [`keyword`],
+//!    and [`numeric`] handle the per-property longhands they recognise.
+//! 2. If the bespoke path returns `None`, [`stylo_parse_raw_into_block`]
+//!    reconstructs CSS-source text from the archived tokens and hands the
+//!    declaration to Stylo's full property parser. This catches every
+//!    shorthand (`overflow: hidden scroll`, `margin: 10px 20px`,
+//!    `border: 1px solid red`, `font: 16px Arial`, …) plus every longhand
+//!    the bespoke path lists as "not yet supported" (color, font-*,
+//!    text-*, align-*, grid-*, opacity, border-*-color, …).
 //!
 //! # Sub-modules
 //!
@@ -36,7 +45,7 @@ use paws_style_ir::{ArchivedCssPropertyName, ArchivedCssToken, ArchivedPropertyV
 use helpers::{
     gap_ir_to_stylo, inset_ir_to_stylo, ir_to_border_style, ir_to_border_width, ir_to_gap,
     ir_to_inset, ir_to_margin, ir_to_max_size, ir_to_nn_lp, ir_to_size, margin_ir_to_stylo,
-    max_size_ir_to_stylo, size_ir_to_stylo,
+    max_size_ir_to_stylo, size_ir_to_stylo, tokens_to_css_string,
 };
 use keyword::{
     border_style_ir_to_stylo, box_sizing_ir_to_stylo, clear_ir_to_stylo, convert_box_sizing,
@@ -100,6 +109,20 @@ fn convert_style_rule(
         };
         if let Some(prop_decl) = convert_declaration(&decl.name, &decl.value) {
             block.push(prop_decl, importance);
+        } else if let ArchivedPropertyValueIR::Raw(ref tokens) = decl.value {
+            // Generic fallback: Raw values that the bespoke converters did
+            // not recognise (notably shorthands like `overflow: hidden`, plus
+            // every longhand currently typed as `None` — color, font-*,
+            // align-*, grid-*, opacity, border-*-color, etc.) are handed
+            // back to Stylo's full property parser. For shorthands this
+            // expands into multiple longhand `PropertyDeclaration`s.
+            stylo_parse_raw_into_block(
+                decl.name.as_str(),
+                tokens.as_slice(),
+                importance,
+                &mut block,
+                url_data,
+            );
         }
     }
 
@@ -493,5 +516,74 @@ fn convert_raw_declaration(
 
         // ── Catch-all ────────────────────────────────────────────
         ArchivedCssPropertyName::Other(_) | ArchivedCssPropertyName::Custom(_) => None,
+    }
+}
+
+// ─── Generic Stylo Raw fallback ──────────────────────────────────────
+
+/// Parses a Raw declaration via Stylo's full property parser and pushes
+/// the resulting `PropertyDeclaration`(s) into `block`.
+///
+/// Used when [`convert_declaration`] returns `None` for a Raw value — this
+/// covers shorthands (e.g. `overflow: hidden scroll`, `margin: 10px 20px`,
+/// `border: 1px solid red`, `font: 16px Arial`) plus every longhand that
+/// the bespoke Raw converters list as "not yet supported" (color,
+/// background-color, font-*, text-*, align-*, justify-*, grid-*, opacity,
+/// border-*-color, border-*-radius, etc.).
+///
+/// For shorthands Stylo expands the source string into multiple longhand
+/// declarations; `block.extend(source_declarations.drain(), importance)`
+/// merges them at the given importance.
+///
+/// Silent on parse failure: invalid CSS is dropped exactly like Stylo's
+/// inline-style path at [`crate::style::update_inline_style`]. No error
+/// reporter is wired up here because compile-time `css!()` callers can't
+/// react to a runtime parse error.
+fn stylo_parse_raw_into_block(
+    name_str: &str,
+    tokens: &[ArchivedCssToken],
+    importance: Importance,
+    block: &mut PropertyDeclarationBlock,
+    url_data: &UrlExtraData,
+) {
+    use ::style::context::QuirksMode;
+    use ::style::parser::ParserContext;
+    use ::style::properties::{parse_one_declaration_into, PropertyId, SourcePropertyDeclaration};
+    use ::style::stylesheets::{CssRuleType, Origin};
+    use ::stylo_traits::ParsingMode;
+
+    let parser_ctx = ParserContext::new(
+        Origin::Author,
+        url_data,
+        Some(CssRuleType::Style),
+        ParsingMode::DEFAULT,
+        QuirksMode::NoQuirks,
+        Default::default(),
+        None,
+        None,
+    );
+
+    let property_id = match PropertyId::parse(name_str, &parser_ctx) {
+        Ok(id) => id,
+        Err(_) => return, // unknown property name — Stylo can't help here either
+    };
+
+    let value_str = tokens_to_css_string(tokens);
+    let mut source_declarations = SourcePropertyDeclaration::default();
+    if parse_one_declaration_into(
+        &mut source_declarations,
+        property_id,
+        value_str.as_str(),
+        Origin::Author,
+        url_data,
+        None,
+        ParsingMode::DEFAULT,
+        QuirksMode::NoQuirks,
+        CssRuleType::Style,
+    )
+    .is_ok()
+    {
+        // Shorthand declarations expand to 2+ longhands here.
+        block.extend(source_declarations.drain(), importance);
     }
 }

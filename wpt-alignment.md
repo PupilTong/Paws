@@ -26,7 +26,7 @@ Current pinned snapshot: [`e04cee8384c069f6bb7dd54f920ef9395a5e22f5`](https://gi
 
 | Status | Count |
 | --- | --- |
-| Translated (Yew flavor passing) | 1 |
+| Translated (Yew flavor passing) | 2 |
 | In progress | 0 |
 | Skipped (with reason) | 0 |
 | Not started | n/a |
@@ -75,6 +75,12 @@ Each section corresponds to a top-level WPT directory. Add a row under the relev
 | WPT path | Paws Rust test | Status | Reason / notes |
 | --- | --- | --- | --- |
 | _none yet_ | | | |
+
+### css/css-overflow/
+
+| WPT path | Paws Rust test | Status | Reason / notes |
+| --- | --- | --- | --- |
+| `parsing/overflow-shorthand.html` + `parsing/overflow-computed.html` | `paws-wpt :: css_overflow :: overflow_shorthand_expands_to_longhands` | translated | Yew-flavor slice: covers single-value, two-value axis order, and `clip`-preserved cases via `css!()`-compiled stylesheets (the IR pipeline, distinct from the inline-style path). Engine-level tests at `engine/src/runtime.rs :: test_ir_overflow_shorthand_*` exhaustively cover the keyword cross-product through the same plumbing. CSS-wide keywords on the shorthand (`overflow: inherit | initial | unset | revert`) and the legacy `overlay` value are out of scope — pre-existing IR-layer gap (`PropertyValueIR::CssWide` falls through without expansion). |
 
 ### shadow-dom/
 

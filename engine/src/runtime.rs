@@ -2436,6 +2436,149 @@ mod tests {
         assert_keyword(&val, "clip");
     }
 
+    // ── Overflow shorthand (generic Stylo Raw fallback) ──────────
+    //
+    // These tests exercise the new `stylo_parse_raw_into_block` path. The
+    // `overflow` shorthand has no typed IR variant; it lands as
+    // `PropertyValueIR::Raw(tokens)` and the bespoke `convert_raw_declaration`
+    // returns `None` for it. With the generic fallback, Stylo's parser
+    // expands the shorthand into longhand `overflow-x` / `overflow-y`
+    // declarations.
+
+    #[test]
+    fn test_ir_overflow_shorthand_single() {
+        let css = view_macros::css!(r#"div { overflow: hidden; }"#);
+        assert_keyword(&ir_pipeline_get(css, "overflow-x"), "hidden");
+        assert_keyword(&ir_pipeline_get(css, "overflow-y"), "hidden");
+    }
+
+    #[test]
+    fn test_ir_overflow_shorthand_two_values() {
+        // Per CSS Overflow 3: first value → overflow-x, second → overflow-y.
+        let css = view_macros::css!(r#"div { overflow: hidden scroll; }"#);
+        assert_keyword(&ir_pipeline_get(css, "overflow-x"), "hidden");
+        assert_keyword(&ir_pipeline_get(css, "overflow-y"), "scroll");
+    }
+
+    #[test]
+    fn test_ir_overflow_shorthand_axis_order() {
+        // Confirms first→x, second→y. Avoids `visible` on either side so
+        // the spec's "visible coerces to auto when the other axis is
+        // non-visible" rule doesn't muddy the comparison.
+        let css = view_macros::css!(r#"div { overflow: scroll hidden; }"#);
+        assert_keyword(&ir_pipeline_get(css, "overflow-x"), "scroll");
+        assert_keyword(&ir_pipeline_get(css, "overflow-y"), "hidden");
+    }
+
+    #[test]
+    fn test_ir_overflow_shorthand_clip_preserved() {
+        // clip must survive the shorthand path distinctly from hidden.
+        let css = view_macros::css!(r#"div { overflow: clip; }"#);
+        assert_keyword(&ir_pipeline_get(css, "overflow-x"), "clip");
+        assert_keyword(&ir_pipeline_get(css, "overflow-y"), "clip");
+    }
+
+    #[test]
+    fn test_ir_overflow_shorthand_all_variants() {
+        // css!() requires literals; enumerate.
+        assert_keyword(
+            &ir_pipeline_get(
+                view_macros::css!(r#"div { overflow: visible; }"#),
+                "overflow-y",
+            ),
+            "visible",
+        );
+        assert_keyword(
+            &ir_pipeline_get(
+                view_macros::css!(r#"div { overflow: hidden; }"#),
+                "overflow-y",
+            ),
+            "hidden",
+        );
+        assert_keyword(
+            &ir_pipeline_get(
+                view_macros::css!(r#"div { overflow: scroll; }"#),
+                "overflow-y",
+            ),
+            "scroll",
+        );
+        assert_keyword(
+            &ir_pipeline_get(
+                view_macros::css!(r#"div { overflow: auto; }"#),
+                "overflow-y",
+            ),
+            "auto",
+        );
+        assert_keyword(
+            &ir_pipeline_get(
+                view_macros::css!(r#"div { overflow: clip; }"#),
+                "overflow-y",
+            ),
+            "clip",
+        );
+    }
+
+    #[test]
+    fn test_ir_overflow_shorthand_invalid_drops_atomically() {
+        // Stylo rejects unknown keywords; both axes stay at the initial
+        // `visible` value — no half-applied state.
+        let css = view_macros::css!(r#"div { overflow: hidden notakeyword; }"#);
+        let mut state = RuntimeState::new("https://example.com".to_string());
+        let div = state.create_element("div".to_string());
+        state.append_element(0, div).unwrap();
+        state.add_parsed_stylesheet(css);
+        let map = state.computed_style_map(div).unwrap();
+        assert_keyword(
+            &map.get("overflow-x", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "visible",
+        );
+        assert_keyword(
+            &map.get("overflow-y", &mut state.doc, &state.style_context)
+                .unwrap(),
+            "visible",
+        );
+    }
+
+    // ── Other shorthand + longhand coverage the fallback unlocks ────
+
+    #[test]
+    fn test_ir_margin_shorthand_four_values() {
+        let css = view_macros::css!(r#"div { margin: 10px 20px 30px 40px; }"#);
+        assert_computed_contains(&ir_pipeline_get(css, "margin-top"), "10");
+        assert_computed_contains(&ir_pipeline_get(css, "margin-right"), "20");
+        assert_computed_contains(&ir_pipeline_get(css, "margin-bottom"), "30");
+        assert_computed_contains(&ir_pipeline_get(css, "margin-left"), "40");
+    }
+
+    #[test]
+    fn test_ir_padding_shorthand_two_values() {
+        // Two-value padding: vertical=10, horizontal=20.
+        let css = view_macros::css!(r#"div { padding: 10px 20px; }"#);
+        assert_computed_contains(&ir_pipeline_get(css, "padding-top"), "10");
+        assert_computed_contains(&ir_pipeline_get(css, "padding-right"), "20");
+        assert_computed_contains(&ir_pipeline_get(css, "padding-bottom"), "10");
+        assert_computed_contains(&ir_pipeline_get(css, "padding-left"), "20");
+    }
+
+    #[test]
+    fn test_ir_background_color_longhand_now_applies() {
+        // Previously dropped — `convert_raw_declaration` returned `None`
+        // for `BackgroundColor`. The Stylo fallback handles it now.
+        let css = view_macros::css!(r#"div { background-color: blue; }"#);
+        let val = ir_pipeline_get(css, "background-color");
+        // Stylo serialises named colors as `rgb(0, 0, 255)`.
+        assert_computed_contains(&val, "0, 0, 255");
+    }
+
+    #[test]
+    fn test_ir_opacity_longhand_now_applies() {
+        // Opacity previously dropped — Stylo fallback handles it.
+        let css = view_macros::css!(r#"div { opacity: 0.5; }"#);
+        let val = ir_pipeline_get(css, "opacity");
+        assert_computed_contains(&val, "0.5");
+    }
+
     // ── Object-fit variants ─────────────────────────────────────
 
     #[test]

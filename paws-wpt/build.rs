@@ -16,7 +16,10 @@ use std::{env, fs};
 /// Each entry is the directory name under `paws-wpt/fixtures/`. The
 /// directory must contain a standalone wasm32-wasip2 cdylib crate
 /// whose package name matches the directory name.
-const FIXTURES: &[&str] = &["dom-nodes-document-create-element"];
+const FIXTURES: &[&str] = &[
+    "dom-nodes-document-create-element",
+    "css-overflow-overflow-shorthand",
+];
 
 const WASM_TARGET: &str = "wasm32-wasip2";
 
