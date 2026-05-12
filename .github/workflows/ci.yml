@@ -59,7 +59,12 @@ jobs:
             -- -D warnings
 
       - name: Generate host code coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+        # `--doctests` includes doctests in both the test run and the
+        # coverage report. This subsumes the documented `cargo test --all`
+        # contract from agents.md (unit + integration + doctests), so we
+        # don't need a separate test step. Doctest coverage requires
+        # nightly Rust, which Paws already pins in rust-toolchain.toml.
+        run: cargo llvm-cov --all-features --workspace --doctests --lcov --output-path lcov.info
 
       # -----------------------------------------------------------------
       # WASM guest coverage (minicov + llvm-tools-preview).
