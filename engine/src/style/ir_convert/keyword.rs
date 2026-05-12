@@ -6,7 +6,7 @@
 //! **Raw fallback path**: string-matching converters for
 //! `PropertyValueIR::Raw` tokens.
 
-use ::style::properties::PropertyDeclaration;
+use ::style::properties::{Importance, PropertyDeclaration, PropertyDeclarationBlock};
 use ::style::values::specified::Display;
 use paws_style_ir::{
     ArchivedBorderStyleIR, ArchivedBoxSizingIR, ArchivedClearIR, ArchivedCssToken,
@@ -289,16 +289,93 @@ pub(super) fn convert_overflow_y(values: &[ArchivedCssToken]) -> Option<Property
 fn ir_to_overflow(
     values: &[ArchivedCssToken],
 ) -> Option<::style::values::specified::box_::Overflow> {
+    match values {
+        [ArchivedCssToken::Ident(ref kw)] => parse_overflow_keyword(kw.as_str()),
+        _ => None,
+    }
+}
+
+/// Direct token → Stylo specified `Overflow` value table.
+///
+/// Shared by [`ir_to_overflow`] (longhand) and the `overflow` shorthand
+/// expander below. No string round-trip: the archived `Ident` slice's
+/// `as_str()` is matched directly against the spec keyword set per CSS
+/// Overflow 3 §2.1.
+fn parse_overflow_keyword(s: &str) -> Option<::style::values::specified::box_::Overflow> {
     use ::style::values::specified::box_::Overflow;
-    let overflow = match ir_keyword(values)? {
-        "visible" => Overflow::Visible,
-        "hidden" => Overflow::Hidden,
-        "scroll" => Overflow::Scroll,
-        "auto" => Overflow::Auto,
-        "clip" => Overflow::Clip,
-        _ => return None,
+    match s {
+        "visible" => Some(Overflow::Visible),
+        "hidden" => Some(Overflow::Hidden),
+        "scroll" => Some(Overflow::Scroll),
+        "auto" => Some(Overflow::Auto),
+        "clip" => Some(Overflow::Clip),
+        _ => None,
+    }
+}
+
+/// Expands the `overflow` shorthand directly from archived tokens and
+/// pushes two longhand `PropertyDeclaration`s into `block`.
+///
+/// Grammar per CSS Overflow 3 §2.1
+/// (<https://drafts.csswg.org/css-overflow/#overflow-properties>):
+///
+/// ```text
+/// overflow = <visible | hidden | clip | scroll | auto>{1,2}
+/// ```
+///
+/// One value applies to both axes; two values are `overflow-x overflow-y`
+/// in source order. Invalid input (unknown keyword, zero or three+
+/// values, non-`Ident` token) drops the entire declaration — no axis is
+/// half-applied. This is a **direct** token → typed-value conversion:
+/// no string is built, no Stylo parser is invoked.
+pub(super) fn convert_overflow_shorthand_into_block(
+    tokens: &[ArchivedCssToken],
+    importance: Importance,
+    block: &mut PropertyDeclarationBlock,
+) {
+    let (overflow_x, overflow_y) = match parse_overflow_shorthand_tokens(tokens) {
+        Some(pair) => pair,
+        None => return,
     };
-    Some(overflow)
+    block.push(PropertyDeclaration::OverflowX(overflow_x), importance);
+    block.push(PropertyDeclaration::OverflowY(overflow_y), importance);
+}
+
+/// Walks the token slice for the `overflow` shorthand. Returns the
+/// `(overflow-x, overflow-y)` pair when 1 or 2 valid keyword tokens are
+/// present; otherwise `None` (drops the declaration atomically).
+fn parse_overflow_shorthand_tokens(
+    tokens: &[ArchivedCssToken],
+) -> Option<(
+    ::style::values::specified::box_::Overflow,
+    ::style::values::specified::box_::Overflow,
+)> {
+    let mut values: [Option<::style::values::specified::box_::Overflow>; 2] = [None, None];
+    let mut count = 0usize;
+    for tok in tokens {
+        match tok {
+            // The macro's `parse_tokens` uses `cssparser::next()` which
+            // already drops insignificant whitespace; the explicit arm
+            // here guards against future tokenizer changes.
+            ArchivedCssToken::Whitespace => continue,
+            ArchivedCssToken::Ident(ref s) => {
+                if count >= 2 {
+                    return None; // too many values
+                }
+                values[count] = Some(parse_overflow_keyword(s.as_str())?);
+                count += 1;
+            }
+            _ => return None, // numbers / functions / delims / etc. all invalidate
+        }
+    }
+    match count {
+        1 => {
+            let v = values[0].unwrap();
+            Some((v, v))
+        }
+        2 => Some((values[0].unwrap(), values[1].unwrap())),
+        _ => None, // zero idents
+    }
 }
 
 /// Converts an `object-fit` keyword (Raw fallback).

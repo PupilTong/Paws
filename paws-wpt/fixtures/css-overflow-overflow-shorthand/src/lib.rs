@@ -82,8 +82,10 @@ rust_wasm_binding::paws_main! {
         // Install three compile-time-parsed stylesheets that route through
         // the IR pipeline. The `overflow` shorthand has no typed IR
         // variant, so each declaration lands as `PropertyValueIR::Raw` and
-        // exercises the engine's generic Stylo-backed fallback at
-        // `engine/src/style/ir_convert/mod.rs :: stylo_parse_raw_into_block`.
+        // exercises the engine's direct token → typed-value shorthand
+        // expander at `engine/src/style/ir_convert/keyword.rs ::
+        // convert_overflow_shorthand_into_block`. No string round-trip,
+        // no Stylo parser invocation on this path.
         rust_wasm_binding::apply_css(rust_wasm_binding::css!(
             r#".single { overflow: hidden; }"#
         ));
