@@ -5,6 +5,7 @@ members = [
     "engine-ua-stylesheet",
     "wasmtime-engine",
     "paws-runner",
+    "paws-wpt",
     "rust-wasm-binding", "paws-style-ir", "view-macros",
     "ios-renderer-backend",
     "examples",
@@ -27,6 +28,7 @@ exclude = [
     "examples/yew/example-yew-ub-deref",
     "examples/yew/example-yew-use-state-counter",
     "examples/yew/example-yew-use-state-eq",
+    "paws-wpt/fixtures/dom-nodes-document-create-element",
 ]
 
 [workspace.package]
