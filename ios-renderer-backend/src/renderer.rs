@@ -270,7 +270,15 @@ impl ViewTree {
                         self.ops.push_bg_color(nid, r, g, b, a);
                     }
                 }
-                if prev.clips != clips && matches!(kind, ViewKind::View | ViewKind::ScrollView) {
+                if prev.clips != clips
+                    && matches!(
+                        kind,
+                        ViewKind::View | ViewKind::ScrollView | ViewKind::Layer
+                    )
+                {
+                    // CALayer-backed nodes honour `overflow: hidden | clip`
+                    // via `layer.masksToBounds`; the Swift handler picks
+                    // the right knob based on the underlying object.
                     self.ops.push_clips(nid, clips);
                 }
                 if prev.content_size != content_size {
@@ -337,6 +345,15 @@ fn emit_full_node(
             ops.push_bg_color(node_id, r, g, b, a);
         }
         if matches!(state.kind, ViewKind::View | ViewKind::ScrollView) {
+            ops.push_clips(node_id, state.clips);
+        } else if state.kind == ViewKind::Layer && state.clips {
+            // For ViewKind::Layer the Swift handler maps the op onto
+            // `CALayer.masksToBounds`. Skip the op when `clips == false`:
+            // `masksToBounds` defaults to `false` on a freshly created
+            // CALayer, so emitting `set false` would just be wasted
+            // bandwidth on the op buffer. The dirty-check path in the
+            // caller still emits a clip op when a Layer transitions
+            // between clip states across frames.
             ops.push_clips(node_id, state.clips);
         }
         if let Some((cw, ch)) = state.content_size {
@@ -583,6 +600,132 @@ mod tests {
         let tags = collect_tags(&tree);
         assert!(tags.contains(&(OpTag::DeclareView as u8)));
         assert!(tags.contains(&(OpTag::DeclareLayer as u8)));
+    }
+
+    #[test]
+    fn test_layer_kind_emits_clip_op_for_overflow_hidden() {
+        // A non-root, non-scroll child element with `overflow: hidden`
+        // is rendered as `ViewKind::Layer`. Before this change the
+        // dirty-check / emit path filtered out `Layer`, so the clip op
+        // was never emitted and `CALayer.masksToBounds` stayed at its
+        // default (false). Now the op fires and Swift dispatches it to
+        // `masksToBounds`.
+        let mut doc = setup_styled_doc(|state| {
+            let parent = state.create_element("div".to_string());
+            state.append_element(0, parent).unwrap();
+            state
+                .set_inline_style(parent, "display".into(), "flex".into())
+                .unwrap();
+            let child = state.create_element("div".to_string());
+            state.append_element(parent, child).unwrap();
+            state
+                .set_inline_style(child, "width".into(), "20px".into())
+                .unwrap();
+            state
+                .set_inline_style(child, "height".into(), "20px".into())
+                .unwrap();
+            state
+                .set_inline_style(child, "overflow".into(), "hidden".into())
+                .unwrap();
+        });
+
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
+
+        let tags = collect_tags(&tree);
+        // Layer kind is exercised (so the child is genuinely Layer-backed),
+        // and a clip op is emitted for it.
+        assert!(
+            tags.contains(&(OpTag::DeclareLayer as u8)),
+            "child with overflow:hidden but no scroll/auto should be Layer-kind"
+        );
+        assert!(
+            tags.contains(&(OpTag::SetClipsToBounds as u8)),
+            "Layer-kind nodes with overflow:hidden|clip must emit SetClipsToBounds \
+             so Swift can set masksToBounds on the CALayer"
+        );
+    }
+
+    #[test]
+    fn test_layer_kind_emits_clip_op_for_overflow_clip() {
+        // `overflow: clip` shares the same clipping branch as `hidden`
+        // (see `has_clip_overflow`); confirm Layer-kind respects it too.
+        let mut doc = setup_styled_doc(|state| {
+            let parent = state.create_element("div".to_string());
+            state.append_element(0, parent).unwrap();
+            state
+                .set_inline_style(parent, "display".into(), "flex".into())
+                .unwrap();
+            let child = state.create_element("div".to_string());
+            state.append_element(parent, child).unwrap();
+            state
+                .set_inline_style(child, "width".into(), "20px".into())
+                .unwrap();
+            state
+                .set_inline_style(child, "height".into(), "20px".into())
+                .unwrap();
+            state
+                .set_inline_style(child, "overflow".into(), "clip".into())
+                .unwrap();
+        });
+
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
+
+        let tags = collect_tags(&tree);
+        assert!(tags.contains(&(OpTag::DeclareLayer as u8)));
+        assert!(
+            tags.contains(&(OpTag::SetClipsToBounds as u8)),
+            "Layer-kind nodes with overflow:clip must emit SetClipsToBounds"
+        );
+    }
+
+    #[test]
+    fn test_layer_kind_overflow_visible_does_not_emit_clip_op() {
+        // Inverse check: a Layer-kind child with `overflow: visible` (the
+        // default) must NOT emit a clip op. Guards against a future
+        // refactor accidentally always-emitting clips for Layer kind.
+        let mut doc = setup_styled_doc(|state| {
+            let parent = state.create_element("div".to_string());
+            state.append_element(0, parent).unwrap();
+            state
+                .set_inline_style(parent, "display".into(), "flex".into())
+                .unwrap();
+            let child = state.create_element("div".to_string());
+            state.append_element(parent, child).unwrap();
+            state
+                .set_inline_style(child, "width".into(), "20px".into())
+                .unwrap();
+            state
+                .set_inline_style(child, "height".into(), "20px".into())
+                .unwrap();
+            // No overflow set — defaults to `visible`.
+        });
+
+        let mut tree = ViewTree::new();
+        let root = doc.root_element_id();
+        tree.process(&mut doc, &engine::NoopResourceResolver, root);
+
+        let tags = collect_tags(&tree);
+        assert!(
+            tags.contains(&(OpTag::DeclareLayer as u8)),
+            "child without overflow should still be Layer-kind"
+        );
+        // The root View still emits its own SetClipsToBounds(false) per
+        // `emit_full_node`; find one targeting the child Layer specifically.
+        // Easier proxy: count clip ops — root produces exactly one, so the
+        // total should be 1 (the root) not 2 (root + child).
+        let clip_op_count = tags
+            .iter()
+            .filter(|&&t| t == OpTag::SetClipsToBounds as u8)
+            .count();
+        assert_eq!(
+            clip_op_count, 1,
+            "Layer-kind child with overflow:visible must not emit its own clip op \
+             (only the root View's clip op should be present)"
+        );
     }
 
     #[test]
