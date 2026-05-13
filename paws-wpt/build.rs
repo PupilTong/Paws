@@ -19,6 +19,7 @@ use std::{env, fs};
 const FIXTURES: &[&str] = &[
     "dom-nodes-document-create-element",
     "css-overflow-layer-clipping",
+    "css-overflow-overflow-longhand-computed",
 ];
 
 const WASM_TARGET: &str = "wasm32-wasip2";

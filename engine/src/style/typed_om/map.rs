@@ -48,10 +48,15 @@ impl StylePropertyMapReadOnly {
     /// Triggers style resolution if the tree is dirty.
     /// Returns `None` if the property name is invalid or the element
     /// no longer exists.
-    pub fn get(
+    ///
+    /// Generic over `S: RenderState` so callers using a non-default
+    /// render state (e.g. `IosNodeState` for renderer-driven WPT
+    /// integration tests) can read computed values from the same
+    /// element handle without round-tripping through `Document<()>`.
+    pub fn get<S: RenderState>(
         &self,
         property: &str,
-        doc: &mut Document,
+        doc: &mut Document<S>,
         ctx: &StyleContext,
     ) -> Option<CSSStyleValue> {
         let longhand_id = resolve_longhand(property)?;
@@ -66,10 +71,10 @@ impl StylePropertyMapReadOnly {
     /// Triggers style resolution if the tree is dirty.
     /// TODO: support the real get_all, test it by using multiple background-image
     /// See https://developer.mozilla.org/en-US/docs/Web/API/StylePropertyMapReadOnly/getAll
-    pub fn get_all(
+    pub fn get_all<S: RenderState>(
         &self,
         property: &str,
-        doc: &mut Document,
+        doc: &mut Document<S>,
         ctx: &StyleContext,
     ) -> Vec<CSSStyleValue> {
         match self.get(property, doc, ctx) {
