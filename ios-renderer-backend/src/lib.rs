@@ -18,6 +18,65 @@ mod ops;
 mod renderer;
 mod thread;
 
+/// Test-only surface exposed for WPT-style end-to-end verification.
+///
+/// These re-exports let `paws-wpt` host-side tests drive the iOS
+/// renderer's op-emission pipeline against a fully WASM-executed
+/// fixture: the test runs the guest wasm under `paws_runner` with a
+/// `Document<IosNodeState>`, then calls into `process_into_op_tags` to
+/// run the ViewTree and inspect the emitted op tags. This is the
+/// renderer-side equivalent of the engine-side `RuntimeState`
+/// inspection in `paws-wpt :: dom_nodes`.
+///
+/// The wrapper is intentionally minimal — it returns only the flat op
+/// tag sequence, not the raw byte slots. Tests assert on
+/// presence/absence of specific tags (e.g. `SetClipsToBounds` for
+/// Layer-kind clipping), which is the spec-level surface CSS Overflow
+/// 3 §2.1 ultimately mandates ("clip descendants to the box's bounds")
+/// without leaking the internal 32-byte op format.
+pub mod test_support {
+    use crate::ops::OpTag;
+    use crate::renderer::ViewTree;
+    use engine::dom::Document;
+    use engine::{NodeId, ResourceResolver};
+
+    /// Re-export of `IosNodeState` so `paws_runner::Runner::builder()
+    /// .renderer(...)` callers can specify the iOS render state type
+    /// without depending on the internal module path.
+    pub use crate::renderer::IosNodeState;
+
+    /// Runs the iOS renderer's `ViewTree::process` against `doc` and
+    /// returns the sequence of op tag bytes that would be sent to the
+    /// Swift side. The op tag byte values are the
+    /// [`crate::ops::OpTag`] discriminants; tests compare against
+    /// `OpTag::SetClipsToBounds as u8` etc.
+    ///
+    /// Skips the real iOS C callback (this is host-side test code).
+    pub fn process_into_op_tags(
+        doc: &mut Document<IosNodeState>,
+        resources: &dyn ResourceResolver,
+        root: Option<NodeId>,
+    ) -> Vec<u8> {
+        let mut tree = ViewTree::new();
+        tree.process(doc, resources, root);
+        let ops = tree.ops();
+        (0..ops.op_count()).filter_map(|i| ops.tag_at(i)).collect()
+    }
+
+    /// `OpTag` byte for `SetClipsToBounds`, exposed for assertion
+    /// against the slice returned by [`process_into_op_tags`].
+    pub const OP_TAG_SET_CLIPS_TO_BOUNDS: u8 = OpTag::SetClipsToBounds as u8;
+
+    /// `OpTag` byte for `DeclareLayer` — confirms a node is rendered
+    /// as a `ViewKind::Layer` (CALayer-backed).
+    pub const OP_TAG_DECLARE_LAYER: u8 = OpTag::DeclareLayer as u8;
+
+    /// `OpTag` byte for `DeclareScrollView`. Useful to assert a node
+    /// did NOT end up as a scroll container when the test expects
+    /// Layer kind.
+    pub const OP_TAG_DECLARE_SCROLL_VIEW: u8 = OpTag::DeclareScrollView as u8;
+}
+
 /// Shared test utilities used by `thread::tests` and `ffi::exports::tests`.
 #[cfg(test)]
 pub(crate) mod test_util {

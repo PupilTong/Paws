@@ -24,3 +24,8 @@ path = "src/lib.rs"
 [dev-dependencies]
 engine = { path = "../engine" }
 paws-runner = { path = "../paws-runner" }
+# Used by `tests/css_overflow.rs` to drive the iOS renderer's
+# op-emission pipeline end-to-end against a wasm-executed fixture and
+# inspect the emitted op-tag stream (via `ios_renderer_backend::
+# test_support`).
+ios-renderer-backend = { path = "../ios-renderer-backend" }

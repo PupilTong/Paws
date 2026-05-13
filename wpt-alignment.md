@@ -26,7 +26,7 @@ Current pinned snapshot: [`e04cee8384c069f6bb7dd54f920ef9395a5e22f5`](https://gi
 
 | Status | Count |
 | --- | --- |
-| Translated (Yew flavor passing) | 1 |
+| Translated (Yew flavor passing) | 2 |
 | In progress | 0 |
 | Skipped (with reason) | 0 |
 | Not started | n/a |
@@ -75,6 +75,12 @@ Each section corresponds to a top-level WPT directory. Add a row under the relev
 | WPT path | Paws Rust test | Status | Reason / notes |
 | --- | --- | --- | --- |
 | _none yet_ | | | |
+
+### css/css-overflow/
+
+| WPT path | Paws Rust test | Status | Reason / notes |
+| --- | --- | --- | --- |
+| `overflow-clip-rendering-001.html` + `overflow-hidden-rendering-001.html` (and siblings) | `paws-wpt :: css_overflow :: overflow_hidden_and_clip_emit_layer_mask_ops` | translated | Renderer-side translation of the upstream reftests (Paws has no reftest framework). The Yew fixture mounts three classed children under a flex parent — `overflow: hidden`, `overflow: clip`, and the default `visible` — and the host runner drives the iOS renderer's `ViewTree::process` to assert the emitted op stream: `SetClipsToBounds` for both clipped Layer-kind children, no clip op for the visible one. This is the engine-side contract the upstream reftests' visual clipping depends on (Swift's `OP_SET_CLIPS` handler maps the op onto `CALayer.masksToBounds`). Longhand `overflow-x` / `overflow-y` declarations are used because the shorthand `overflow` is deferred to a future PR. |
 
 ### shadow-dom/
 
