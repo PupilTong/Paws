@@ -165,7 +165,11 @@ impl OpBuffer {
     }
 
     /// Returns the number of ops in the buffer.
-    #[cfg(test)]
+    ///
+    /// Cheap inspector used by both unit tests and the `test_support`
+    /// module that drives the iOS renderer from WPT-style integration
+    /// tests. Always compiled — the cost is a single divide on a `Vec`
+    /// length and the surface is `pub(crate)`.
     pub(crate) fn op_count(&self) -> usize {
         self.data.len() / SLOT_SIZE
     }
@@ -365,8 +369,12 @@ impl OpBuffer {
 
     // ── Test helpers ───────────────────────────────────────────────
 
-    /// Reads an op tag at the given slot index (for testing/debugging).
-    #[cfg(test)]
+    /// Reads an op tag at the given slot index.
+    ///
+    /// Used by unit tests and the `test_support` module that drives
+    /// the iOS renderer from WPT-style integration tests to inspect
+    /// the emitted op stream without re-decoding the binary slot
+    /// format. Always compiled, `pub(crate)`-scoped.
     pub(crate) fn tag_at(&self, index: usize) -> Option<u8> {
         let offset = index * SLOT_SIZE;
         self.data.get(offset).copied()

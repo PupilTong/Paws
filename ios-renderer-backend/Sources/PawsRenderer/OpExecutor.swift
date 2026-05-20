@@ -156,7 +156,20 @@ public final class OpExecutor {
             case OP_SET_CLIPS:
                 let nodeId = readU64(base + 1)
                 let clips = base[9] != 0
-                (viewMap[nodeId]?.obj as? UIView)?.clipsToBounds = clips
+                if let entry = viewMap[nodeId] {
+                    // UIView (View / ScrollView) → `clipsToBounds`.
+                    // CALayer (Layer kind) → `masksToBounds`. The two
+                    // properties are independent on UIKit (a UIView's
+                    // `clipsToBounds` is not the same toggle as its
+                    // backing layer's `masksToBounds`), so the op must
+                    // dispatch on the actual object type stored in the
+                    // map rather than just calling one.
+                    if let view = entry.obj as? UIView {
+                        view.clipsToBounds = clips
+                    } else if let layer = entry.obj as? CALayer {
+                        layer.masksToBounds = clips
+                    }
+                }
 
             case OP_SET_CONTENT_SIZE:
                 let nodeId = readU64(base + 1)
