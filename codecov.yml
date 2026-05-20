@@ -19,6 +19,12 @@ coverage:
 
 ignore:
   - "examples/**"
+  # paws-wpt fixtures are WASM guest crates compiled standalone by
+  # `paws-wpt/build.rs`. They live outside the cargo workspace (their
+  # `[workspace]` table is empty), so `cargo llvm-cov --workspace`
+  # never instruments or reports them. Listed explicitly so any
+  # future stray records get dropped.
+  - "paws-wpt/fixtures/**"
   # rust-wasm-binding guest coverage is captured via minicov instrumentation
   # and reported separately under the `guest` flag (see scripts/wasm-coverage.sh).
 
@@ -36,6 +42,13 @@ flags:
       - wasmtime-engine/
       - view-macros/
       - paws-style-ir/
+      # Engine-adjacent host crates that this repo's PRs commonly
+      # touch. Without these listed, lcov records for them are still
+      # uploaded but don't roll up under the `host` flag, so the
+      # per-flag % stays artificially low when those crates grow.
+      - paws-runner/
+      - ios-renderer-backend/
+      - paws-wpt/
       - yew/
     carryforward: true
   guest:
